@@ -1,0 +1,17 @@
+/node_modules/
+/oh_modules/
+/.idea/
+/.hvigor/
+**/build/
+/local.properties
+/build-profile.json5
+*.p12
+*.p7b
+*.cer
+*.csr
+*.jks
+*.keystore
+*.hap
+*.hsp
+*.app
+*.log
