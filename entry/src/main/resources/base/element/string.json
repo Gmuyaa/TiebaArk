@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "TiebaArk 主模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "贴吧Ark 主入口"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "贴吧Ark"
+    },
+    {
+      "name": "permission_internet_reason",
+      "value": "用于浏览贴吧内容"
+    }
+  ]
+}

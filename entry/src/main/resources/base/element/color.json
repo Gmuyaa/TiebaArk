@@ -1,0 +1,272 @@
+{
+  "color": [
+    {
+      "name": "detail_comment_nickname",
+      "value": "#646B75"
+    },
+    {
+      "name": "detail_author_badge_text",
+      "value": "#466A94"
+    },
+    {
+      "name": "detail_author_badge_background",
+      "value": "#EDF3FA"
+    },
+    {
+      "name": "detail_comment_body",
+      "value": "#202124"
+    },
+    {
+      "name": "detail_comment_meta",
+      "value": "#858B94"
+    },
+    {
+      "name": "detail_comment_action",
+      "value": "#747B85"
+    },
+    {
+      "name": "detail_sub_reply_body",
+      "value": "#303238"
+    },
+    {
+      "name": "detail_sub_reply_name",
+      "value": "#466A94"
+    },
+    {
+      "name": "detail_sub_reply_background",
+      "value": "#F5F6F8"
+    },
+    {
+      "name": "detail_bottom_float_shadow",
+      "value": "#28000000"
+    },
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "detail_page_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "detail_content_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "detail_secondary_background",
+      "value": "#F1F2F4"
+    },
+    {
+      "name": "detail_text_primary",
+      "value": "#1F1F1F"
+    },
+    {
+      "name": "detail_text_secondary",
+      "value": "#66686B"
+    },
+    {
+      "name": "detail_text_tertiary",
+      "value": "#96989C"
+    },
+    {
+      "name": "detail_divider",
+      "value": "#E5E6E8"
+    },
+    {
+      "name": "detail_accent",
+      "value": "#0A59F7"
+    },
+    {
+      "name": "detail_accent_background",
+      "value": "#EAF1FF"
+    },
+    {
+      "name": "detail_icon",
+      "value": "#000000"
+    },
+    {
+      "name": "detail_error",
+      "value": "#C93838"
+    },
+    {
+      "name": "detail_overlay",
+      "value": "#99000000"
+    },
+    {
+      "name": "detail_bottom_bar_background",
+      "value": "#F2FFFFFF"
+    },
+    {
+      "name": "app_bg",
+      "value": "#F5F5F7"
+    },
+    {
+      "name": "app_card",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "app_surface_muted",
+      "value": "#F1F1F3"
+    },
+    {
+      "name": "app_divider",
+      "value": "#F0F0F0"
+    },
+    {
+      "name": "app_text_main",
+      "value": "#222222"
+    },
+    {
+      "name": "app_text_sub",
+      "value": "#999999"
+    },
+    {
+      "name": "app_text_muted",
+      "value": "#B7B7BC"
+    },
+    {
+      "name": "app_icon",
+      "value": "#000000"
+    },
+    {
+      "name": "app_accent",
+      "value": "#0A59F7"
+    },
+    {
+      "name": "app_accent_light",
+      "value": "#EAF1FF"
+    },
+    {
+      "name": "app_accent_dark",
+      "value": "#0A4BC7"
+    },
+    {
+      "name": "app_nav_fade",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "app_nav_fade_clear",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "app_tab_pill_text",
+      "value": "#1A0000"
+    },
+    {
+      "name": "app_tab_underline_text",
+      "value": "#66666B"
+    },
+    {
+      "name": "app_link_hint",
+      "value": "#75757A"
+    },
+    {
+      "name": "app_search_hint",
+      "value": "#8A8A8E"
+    },
+    {
+      "name": "app_meta_text",
+      "value": "#606065"
+    },
+    {
+      "name": "app_bar_tab_text",
+      "value": "#4C4C50"
+    },
+    {
+      "name": "app_text_row",
+      "value": "#333333"
+    },
+    {
+      "name": "app_text_caption",
+      "value": "#BBBBBB"
+    },
+    {
+      "name": "app_arrow_row",
+      "value": "#CCCCCC"
+    },
+    {
+      "name": "app_arrow_list",
+      "value": "#C8C8CC"
+    },
+    {
+      "name": "app_value_text",
+      "value": "#767676"
+    },
+    {
+      "name": "app_chevron_tint",
+      "value": "#BABABA"
+    },
+    {
+      "name": "app_danger_text",
+      "value": "#C7161C"
+    },
+    {
+      "name": "app_popup_line",
+      "value": "#CBCBCB"
+    },
+    {
+      "name": "app_note_text",
+      "value": "#666666"
+    },
+    {
+      "name": "app_avatar_bg",
+      "value": "#F1F1F3"
+    },
+    {
+      "name": "app_emoji_panel_text",
+      "value": "#99000000"
+    },
+    {
+      "name": "app_emoji_panel_sub_text",
+      "value": "#66000000"
+    },
+    {
+      "name": "app_forum_tab_bg",
+      "value": "#F5F7FA"
+    },
+    {
+      "name": "app_bottom_mask",
+      "value": "#33F5F5F7"
+    },
+    {
+      "name": "app_msg_badge_red_bg",
+      "value": "#FFE9EC"
+    },
+    {
+      "name": "app_msg_badge_red_fg",
+      "value": "#FF5E77"
+    },
+    {
+      "name": "app_msg_badge_orange_bg",
+      "value": "#FFF1E0"
+    },
+    {
+      "name": "app_msg_badge_orange_fg",
+      "value": "#FFA044"
+    },
+    {
+      "name": "app_msg_badge_green_bg",
+      "value": "#E3F7EC"
+    },
+    {
+      "name": "app_msg_badge_green_fg",
+      "value": "#4CCB8F"
+    },
+    {
+      "name": "app_msg_badge_blue_bg",
+      "value": "#E5EEFF"
+    },
+    {
+      "name": "app_msg_badge_blue_fg",
+      "value": "#4E7BFF"
+    },
+    {
+      "name": "app_status_bar_content",
+      "value": "#1B1B1B"
+    },
+    {
+      "name": "detail_float_shadow",
+      "value": "#14000000"
+    }
+  ]
+}

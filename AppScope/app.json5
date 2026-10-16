@@ -1,0 +1,12 @@
+{
+  "app": {
+    "bundleName": "com.Gm.TiebalArk",
+    "vendor": "example",
+    "versionCode": 2610040,
+    "versionName": "1.0.41",
+    "buildVersion": "1",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name",
+    "configuration": "$profile:configuration"
+  }
+}
