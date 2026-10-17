@@ -10,6 +10,9 @@ export class ThreadCardLayout {
   static readonly BODY_SIZE: number = 16;
   static readonly META_SIZE: number = 12;
   static readonly LINE_HEIGHT: number = 24;
-  static readonly METRIC_ICON_SIZE: number = 14;
-  static readonly METRIC_GAP: number = 16;
+  static readonly METRIC_ICON_SIZE: number = 14 * 1.2;
+  static readonly METRIC_TEXT_SIZE: number = ThreadCardLayout.META_SIZE * 1.2;
+  static readonly METRIC_ITEM_GAP: number = 4 * 1.2;
+  /** 卡片外距 8vp + 内距 4vp，与首页频道行的 12vp 边界一致。 */
+  static readonly METRIC_SIDE_PADDING: number = 4;
 }

@@ -137,8 +137,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.60';
-export const SETTINGS_VERSION_CODE: string = '2610059';
+export const SETTINGS_APP_VERSION: string = '1.0.66';
+export const SETTINGS_VERSION_CODE: string = '2610065';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -219,7 +219,7 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
       return [
         paneEntry('material_mode', '弹层与玻璃厚度', state.materialLabel.trim(), SettingsPane.MATERIAL),
         paneEntry('hds_material_level', '导航与胶囊材质', state.hdsMaterialLabel ?? '精美', SettingsPane.HDS_MATERIAL),
-        paneEntry('action_bar_style', '帖子详情操作栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
+        paneEntry('action_bar_style', '帖子页底栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
         paneEntry('home_top_nav_style', '首页顶栏样式', state.topNavLabel.trim(), SettingsPane.TOP_NAV),
         switchEntry('hide_status_bar', '隐藏状态栏', state.hideStatusBar),
         switchEntry('hide_top_navigation', '隐藏顶部导航栏', state.hideTopNavigation),
@@ -307,7 +307,7 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.HDS_MATERIAL:
       return '导航与胶囊材质';
     case SettingsPane.ACTION_BAR:
-      return '帖子详情操作栏样式';
+      return '帖子页底栏样式';
     case SettingsPane.TOP_NAV:
       return '首页顶栏样式';
     case SettingsPane.FORUM_DEFAULT_TAB:

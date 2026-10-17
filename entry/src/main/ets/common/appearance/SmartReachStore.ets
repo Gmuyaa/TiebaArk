@@ -1,7 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 
-/** 本机统一握姿开关及吧页刷新按钮位置，与账号无关。默认开；坏值回落默认。
+/** 本机统一握姿开关及各悬浮按钮的独立位置，与账号无关。默认开；坏值回落默认。
  * 仅存开关和归一化坐标，不保存握姿传感器数据。关闭仍可拖拽。
  * 同步读取防首屏跳位；写入排队防快速操作倒序，失败明确报告会话内生效。
  */
@@ -10,6 +10,8 @@ export class SmartReachStore {
   @Trace enabled: boolean = true;
   @Trace xRatio: number = -1;
   @Trace yRatio: number = -1;
+  @Trace threadXRatio: number = -1;
+  @Trace threadYRatio: number = -1;
   @Trace foreground: boolean = true;
   @Trace status: string = '等待进入吧页';
   private loaded: boolean = false;
@@ -26,6 +28,10 @@ export class SmartReachStore {
       const y = store.getSync('refresh_y', -1);
       this.xRatio = typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1 ? x : -1;
       this.yRatio = typeof y === 'number' && Number.isFinite(y) && y >= 0 && y <= 1 ? y : -1;
+      const threadX = store.getSync('thread_action_x', -1);
+      const threadY = store.getSync('thread_action_y', -1);
+      this.threadXRatio = typeof threadX === 'number' && Number.isFinite(threadX) && threadX >= 0 && threadX <= 1 ? threadX : -1;
+      this.threadYRatio = typeof threadY === 'number' && Number.isFinite(threadY) && threadY >= 0 && threadY <= 1 ? threadY : -1;
     } catch (_) { this.status = '偏好读取失败，本次使用默认位置'; }
   }
 
@@ -40,15 +46,25 @@ export class SmartReachStore {
     await this.save(context);
   }
 
+  async setThreadPosition(x: number, y: number, context: common.UIAbilityContext): Promise<void> {
+    this.threadXRatio = Math.max(0, Math.min(1, x));
+    this.threadYRatio = Math.max(0, Math.min(1, y));
+    await this.save(context);
+  }
+
   private async save(context: common.UIAbilityContext): Promise<void> {
     const enabled = this.enabled;
     const x = this.xRatio;
     const y = this.yRatio;
+    const threadX = this.threadXRatio;
+    const threadY = this.threadYRatio;
     const operation = this.writes.then(async (): Promise<void> => {
       const store = await preferences.getPreferences(context, 'tieba_smart_reach_prefs');
       await store.put('enabled', enabled);
       await store.put('refresh_x', x);
       await store.put('refresh_y', y);
+      await store.put('thread_action_x', threadX);
+      await store.put('thread_action_y', threadY);
       await store.flush();
     });
     this.writes = operation.catch(() => {});

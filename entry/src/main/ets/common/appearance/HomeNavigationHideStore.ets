@@ -16,7 +16,7 @@ export enum HomeNavigationPart {
 
 @ObservedV2
 export class HomeNavigationHideStore {
-  @Trace hideStatusBar: boolean = true;
+  @Trace hideStatusBar: boolean = false;
   @Trace hideTopNavigation: boolean = true;
   @Trace hideBottomNavigation: boolean = true;
   private loaded: boolean = false;
@@ -28,7 +28,7 @@ export class HomeNavigationHideStore {
     this.loaded = true;
     try {
       const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
-      this.hideStatusBar = (await store.get(STATUS_KEY, true)) === true;
+      this.hideStatusBar = (await store.get(STATUS_KEY, false)) === true;
       this.hideTopNavigation = (await store.get(TOP_KEY, true)) === true;
       this.hideBottomNavigation = (await store.get(BOTTOM_KEY, true)) === true;
     } catch (e) {

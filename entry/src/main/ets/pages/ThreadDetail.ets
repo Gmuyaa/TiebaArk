@@ -26,7 +26,7 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-import { LengthMetrics, promptAction, window } from '@kit.ArkUI';
+import { FrameCallback, LengthMetrics, promptAction, window } from '@kit.ArkUI';
 
 import { HdsNavDestination, HdsTabs, ScrollEffectType } from '@kit.UIDesignKit';
 import {
@@ -49,6 +49,9 @@ import { AgreeObjType } from '../net/TiebaParams';
 import { ImageViewer } from '../components/ImageViewer';
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassMoreButton } from '../components/GlassMoreButton';
+import { ThreadPopupButton } from '../components/ThreadPopupButton';
+import { GlassCircleButton } from '../components/GlassCircleButton';
+import { THREAD_ACTION_BUTTON_SIZE } from '../model/SmartReach';
 import { PostImageGallery } from '../components/PostImageGallery';
 import { ReplyItem } from '../components/ReplyItem';
 import { AvatarComponent } from '../components/AvatarComponent';
@@ -58,8 +61,8 @@ import { SubReplyDetailSheet } from '../components/SubReplyDetailSheet';
 import { DetailTheme as AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { materialManager } from '../common/material/MaterialManager';
-import { CapsuleEdge, MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
-// 底部操作栏样式：设置页「外观」可切，`@Trace` 下一帧生效（见 common/appearance/）
+import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+// 底部操作栏样式：设置页「鸿蒙特性设置」可切，`@Trace` 下一帧生效。
 import { ThreadActionBarStyle } from '../common/appearance/ThreadActionBarStyle';
 import { threadActionBarStore } from '../common/appearance/ThreadActionBarStore';
 import { NavigationService, ThreadDetailParams } from '../navigation/AppNavigation';
@@ -72,24 +75,7 @@ import { NavigationService, ThreadDetailParams } from '../navigation/AppNavigati
  */
 const BODY_EMOJI_SIZE: number = 21;
 
-function capsuleEdgeWidth(): number | EdgeWidths {
-  const edge: CapsuleEdge | undefined =
-    materialManager.capsuleEdgeOf(MaterialSlot.BOTTOM_FLOATING_BAR);
-  return edge === undefined ? 0 : { top: 0, right: 0, bottom: edge.width, left: 0 };
-}
-
-/** 单边 `border` 的占位色：只画下沿时其余三边必须给**全透明**（不能省，也不能给 undefined） */
-const NO_EDGE_COLOR: string = 'rgba(0, 0, 0, 0)';
-
-/** 见 `capsuleEdgeWidth` */
-function capsuleEdgeColor(): ResourceColor | EdgeColors {
-  const edge: CapsuleEdge | undefined =
-    materialManager.capsuleEdgeOf(MaterialSlot.BOTTOM_FLOATING_BAR);
-  return edge === undefined ? NO_EDGE_COLOR
-    : { top: NO_EDGE_COLOR, right: NO_EDGE_COLOR, bottom: edge.color, left: NO_EDGE_COLOR };
-}
-
-/** 帖子详情操作栏支持分离式、弹出式与经典玻璃。样式由统一偏好控制，系统材质与自绘路径分开，切换时复用点赞、收藏和回复状态。 */
+/** 帖子页底栏支持分离式与弹出式，切换时复用点赞、收藏和回复状态。 */
 
 /** 胶囊内容高（vp）= 首页底栏内容高 `AppTheme.BAR_CONTENT_H` */
 const ACTION_PILL_HEIGHT: number = 52;
@@ -188,8 +174,17 @@ const REPLY_MAX_LENGTH: number = 500;
  * 选项确实被系统接受并生效，但只到"弱玻璃"（无折射 / 高光 / 边缘光学）。
  */
 
+class ThreadCommentsFrame extends FrameCallback {
+  private ready: () => void;
+  constructor(ready: () => void) { super(); this.ready = ready; }
+  onIdle(_timeLeft: number): void { this.ready(); }
+}
+
 @ComponentV2
 export struct ThreadDetailPage {
+  private commentsJumpPending: boolean = false;
+  private commentsFramePending: boolean = false;
+  private commentsActive: boolean = false;
   @Local pullRefreshDragging: boolean = false;
 
   @Param routeParams: ThreadDetailParams | undefined = undefined;
@@ -217,6 +212,9 @@ export struct ThreadDetailPage {
    * 否则开关停在 true、下次再点不再弹出。
    */
   @Local popupMenuShow: boolean = false;
+  @Local popupViewportWidth: number = 0;
+  @Local popupViewportHeight: number = 0;
+  @Local pageVisible: boolean = true;
 
   /**
    * 底部系统手势区（导航条）高度，单位 vp。
@@ -303,6 +301,7 @@ export struct ThreadDetailPage {
   }
 
   private handleSystemBack(): boolean {
+    if (this.popupMenuShow) { this.popupMenuShow = false; return true; }
     if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
       this.viewerUrl = '';
       this.viewerUrls = [];
@@ -314,6 +313,8 @@ export struct ThreadDetailPage {
   }
 
   aboutToAppear(): void {
+    this.commentsActive = true;
+    this.commentsJumpPending = this.routeParams?.openComments === true;
     this.videoMode = this.routeParams?.videoMode === true;
 
     let tid: number = 0;
@@ -336,6 +337,7 @@ export struct ThreadDetailPage {
     const tidForHistory: number = this.vm.tid > 0 ? this.vm.tid : tid;
     const targetPid: number = this.routeParams?.targetPid ?? 0;
     this.vm.load(context, tid, targetPid).then(() => {
+      this.requestCommentsJump();
       if (targetPid > 0 && this.vm.errorText.length === 0) {
         const index: number = this.vm.visiblePosts.findIndex((post: PostItem) => post.pid === targetPid);
         if (index >= 0) {
@@ -384,7 +386,21 @@ export struct ThreadDetailPage {
     this.readStatusBar();
   }
 
+  private requestCommentsJump(): void {
+    if (!this.commentsJumpPending || !this.commentsActive || this.commentsFramePending ||
+      this.vm.loading || !this.vm.loadedOnce || this.vm.errorText.length > 0) { return; }
+    this.commentsFramePending = true;
+    this.getUIContext().postFrameCallback(new ThreadCommentsFrame((): void => {
+      this.commentsFramePending = false;
+      if (!this.commentsActive || !this.commentsJumpPending || this.vm.loading || this.vm.errorText.length > 0) { return; }
+      this.commentsJumpPending = false;
+      if (this.videoMode) { this.videoComments = true; }
+      else { this.scroller.scrollToIndex(this.vm.visiblePosts.length > 0 ? 1 : 0, false, ScrollAlign.START); }
+    }));
+  }
+
   aboutToDisappear(): void {
+    this.commentsActive = false;
     this.videoFullscreen = false;
 
     this.closeReplyBox();
@@ -677,7 +693,7 @@ export struct ThreadDetailPage {
         }
       },
       onDidAppear: (): void => {
-        // 两种写评论胶囊都走首次打开；等编辑器进入弹窗节点树后再唤起输入法。
+        // 写评论入口都走首次打开；等编辑器进入弹窗节点树后再唤起输入法。
         // 卡片因表情面板切换而重建时不抢焦点。
         if (this.replyDialogSeq !== seq || !this.showReply || replacing || lifted) {
           return;
@@ -1293,6 +1309,9 @@ export struct ThreadDetailPage {
           .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
           .clip(false)
           .backgroundColor(AppTheme.BG)
+          .onTouch((event: TouchEvent): void => {
+            if (event.type === TouchType.Down) { this.popupMenuShow = false; }
+          })
           }
 
           // 底部操作栏 / 菜单 / 弹层 / 查看器：悬浮层语义不变（Stack 后声明者在上）
@@ -1328,6 +1347,10 @@ export struct ThreadDetailPage {
         .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
         .clip(false)
         .backgroundColor(AppTheme.BG)
+        .onAreaChange((_old: Area, area: Area): void => {
+          this.popupViewportWidth = Number(area.width);
+          this.popupViewportHeight = Number(area.height);
+        })
         // 楼中楼内容需画到屏幕底部；bindSheet 的内容区仍会在手势区上沿截断。
         .bindContentCover(this.showSubSheet, this.SubReplySheet(), {
           enableSafeArea: false,
@@ -1374,7 +1397,9 @@ export struct ThreadDetailPage {
         { statusBarContentColor: this.lightStatusBar() ? '#F2F3F4' : '#1B1B1B' },
         { statusBarContentColor: this.lightStatusBar() ? '#F2F3F4' : '#1B1B1B' }
       )
+      .onShown((): void => { this.pageVisible = true; })
       .onHidden((reason: VisibilityChangeReason): void => {
+        this.pageVisible = false;
         // 全屏视频的 ContentCover 会隐藏 destination，但仍使用同一 AVPlayer。
         // 导航离开、退后台及其它覆盖层仍释放；未知原因也不跳过释放。
         if (reason === VisibilityChangeReason.CONTENT_COVER && this.videoFullscreen) { return; }
@@ -2317,6 +2342,7 @@ export struct ThreadDetailPage {
       .clip(false)
       .backgroundColor(Color.Transparent)
       .divider({ strokeWidth: 0 })
+      .onAppear(() => { this.requestCommentsJump(); })
 
        .scrollBar(BarState.Off)
        .onReachEnd(() => {
@@ -2395,7 +2421,9 @@ export struct ThreadDetailPage {
       .backgroundColor(AppTheme.SURFACE_MUTED)
     }
     .width('100%')
+    .id('thread-comments-summary')
     .height(42)
+    .margin({ top: 12, bottom: 12 })
     .padding({ left: 16, right: 16, top: 7.5, bottom: 6 })
     .backgroundColor(AppTheme.BG)
   }
@@ -2645,70 +2673,6 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 左胶囊「回复楼主…」——「经典玻璃」样式（自绘玻璃）。
-   *
-   * 材质走 `MaterialSlot.BOTTOM_FLOATING_BAR`，配方与下沿暗线都在 `MaterialConfig` 里；
-   * 尺寸 / 圆角 / 内边距 / 图标 / 文案与「分离式」的对应胶囊**逐字相同**，
-   * 两种样式之间只差"谁在画玻璃"。
-   *
-   * ⚠️ 这里刻意**不写** `.backgroundBlurStyle(...)`：属性链上后调用的赢，
-   * 一个 `undefined` 就能把 `backgroundEffect` 整个复位掉（见 `MaterialConfig` 的退役说明）。
-   */
-  @Builder
-  ClassicGlassReplyPill() {
-    Row({ space: 8 }) {
-      SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(22)
-        .fontColor([AppTheme.TEXT_MAIN])
-      Text('回复楼主…')
-        .fontSize(15)
-        .fontColor(AppTheme.TEXT_MAIN)
-    }
-    .height(ACTION_PILL_HEIGHT)
-    .padding({ left: REPLY_PILL_PADDING, right: REPLY_PILL_PADDING })
-    .borderRadius(ACTION_PILL_RADIUS)
-    .backgroundEffect(materialManager.glassOf(MaterialSlot.BOTTOM_FLOATING_BAR))
-    .systemMaterial(materialManager.officialOf(MaterialSlot.BOTTOM_FLOATING_BAR))
-    .border({ width: capsuleEdgeWidth(), color: capsuleEdgeColor() })
-    .onClick(() => {
-      this.openReplyBox(0);
-    })
-  }
-
-  /**
-   * 右胶囊 ——「经典玻璃」与「弹出式」共用的四操作行。
-   *
-   * 两种样式**共用同一份内容**：唯一差异是「弹出式」在末尾多一个「更多」触发器，
-   * 由下面那个 `if` 决定 —— 其余样式下该分支整体为假，布局一个像素都不变。
-   *
-   * 四个操作全部接现网业务：回复数 = 滚回回复区、点赞 = `toggleMainLike()`、
-   * 收藏 = `toggleMainStore()`（随收藏态切换图标文案）、分享 = `shareThread()`（华为官方面板）。
-   * **没有为任何一种样式另写一份 handler。**
-   *
-   * 顺带说明它为什么读 `threadActionBarStore.style`：`@Trace` 的依赖是在 build 期间
-   * 动态登记的，这里读一次，设置页一改就能**下一帧**重绘。
-   */
-  @Builder
-  GlassActionCapsule() {
-    Row() {
-      this.BottomReplyCount()
-      this.BottomLikeAction()
-      this.BottomStoreAction()
-      this.BottomAction($r('sys.symbol.share'), '分享', (): void => { this.shareThread(); })
-      if (threadActionBarStore.style === ThreadActionBarStyle.POPUP) {
-        this.PopupMoreAnchor()
-      }
-    }
-    .layoutWeight(1)
-    .height(ACTION_PILL_HEIGHT)
-    .padding({ left: ACTION_QUAD_PADDING, right: ACTION_QUAD_PADDING })
-    .borderRadius(ACTION_PILL_RADIUS)
-    .backgroundEffect(materialManager.glassOf(MaterialSlot.BOTTOM_FLOATING_BAR))
-    .systemMaterial(materialManager.officialOf(MaterialSlot.BOTTOM_FLOATING_BAR))
-    .border({ width: capsuleEdgeWidth(), color: capsuleEdgeColor() })
-  }
-
-  /**
    * 左胶囊 ——「分离式」：玻璃由 `HdsTabs` 的**官方悬浮面**提供。
    *
    * 与首页底栏逐字同参（`IMMERSIVE` + `EXQUISITE`，经 `MaterialSlot.BOTTOM_BAR` 下发）。
@@ -2771,7 +2735,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 右胶囊 ——「分离式」：官方悬浮面 + 与「经典玻璃」逐字相同的四个操作。
+   * 右胶囊 ——「分离式」：官方悬浮面承载四个操作。
    *
    * 宽度钉 `ACTION_PILL_WIDTH`（现网右大胶囊实测 197vp）：底栏行可用宽 348vp，
    * 左 143 + 间距 8 + 右 197 正好填满。
@@ -2822,122 +2786,79 @@ export struct ThreadDetailPage {
     .padding({ left: ACTION_QUAD_PADDING, right: ACTION_QUAD_PADDING })
   }
 
-  /**
-   * 「弹出式」的菜单触发器：右胶囊末尾一个「更多」。
-   *
-   * 只是一个 44×52 的点击区，**不带任何背景** —— 它落在自绘玻璃胶囊**内部**，
-   * 再叠一层玻璃就变成"小玻璃压在大玻璃上"。
-   */
+  /** 弹出式的全部操作；选择后先关闭菜单，再复用现有处理方法。 */
   @Builder
-  PopupMoreAnchor() {
-    Column() {
-      SymbolGlyph($r('sys.symbol.dot_grid_1x2'))
-        .fontSize(22)
-        .fontColor([AppTheme.TEXT_MAIN])
-    }
-    .width(44)
-    .height(ACTION_PILL_HEIGHT)
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.popupMenuShow = !this.popupMenuShow;
-    })
-    .bindPopup(this.popupMenuShow, this.popupOptions())
-  }
-
-  /**
-   * 弹出菜单的内容。
-   *
-   * 四个 item **直接接现网业务回调**，不做静态假图标：评论 = 滚回回复区
-   * （与 `BottomReplyCount` 同逻辑）、点赞 = `toggleMainLike()`、
-   * 收藏 = `toggleMainStore()`（图标/文案随收藏态切换）、
-   * 分享 = `shareThread()`（华为官方面板）。点完自己关掉浮层 ——
-   * `show` 由我们维护，`onStateChange` 只负责把"系统关掉的那次"同步回来。
-   */
-  @Builder
-  PopupActionList() {
-    Column({ space: 0 }) {
-      this.PopupMenuItem($r('sys.symbol.message'), '评论', (): void => {
+  PopupActionAt(index: number) {
+    if (index === 0) {
+      this.PopupMenuItem($r('sys.symbol.pencil_line'), '回复', 'reply', '回复', (): void => {
+        this.popupMenuShow = false;
+        this.openReplyBox(0);
+      });
+    } else if (index === 1) {
+      this.PopupMenuItem($r('sys.symbol.message'), `${this.displayedReplyCount()}`, 'comments', '查看评论', (): void => {
         this.popupMenuShow = false;
         this.scroller.scrollToIndex(1, true, ScrollAlign.START);
       });
+    } else if (index === 2) {
       this.PopupMenuItem(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
-        : $r('sys.symbol.hand_thumbsup'), '点赞', (): void => {
+        : $r('sys.symbol.hand_thumbsup'), `${this.mainLikeCount()}`, 'like', '点赞', (): void => {
         this.popupMenuShow = false;
         this.toggleMainLike();
       });
+    } else if (index === 3) {
       this.PopupMenuItem(this.vm.collected ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'),
-        this.vm.collected ? '已收藏' : '收藏', (): void => {
+        this.popupCount(this.vm.detail.collectCount), 'collect', this.vm.collected ? '取消收藏，累计收藏' : '收藏，累计收藏', (): void => {
         this.popupMenuShow = false;
         this.toggleMainStore();
       });
-      this.PopupMenuItem($r('sys.symbol.share'), '分享', (): void => {
+    } else if (index === 4) {
+      this.PopupMenuItem($r('sys.symbol.share'), this.popupCount(this.vm.detail.shareCount), 'share', '分享', (): void => {
         this.popupMenuShow = false;
         this.shareThread();
       });
     }
-    .width(180)
-    .padding({ top: 8, bottom: 8 })
   }
 
-  /** 弹出菜单项：官方 Symbol + 文案，行高 48 对齐官方菜单行高 */
+  private popupCount(count: number): string { return count >= 0 ? `${count}` : '—'; }
+
+  /** 每个操作各有一个沉浸光感圆面，图标与计数复用原业务状态。 */
   @Builder
-  PopupMenuItem(icon: Resource, label: string, onTap: () => void) {
-    Row({ space: 12 }) {
-      SymbolGlyph(icon)
-        .fontSize(20)
-        .fontColor([AppTheme.TEXT_MAIN])
-      Text(label)
-        .fontSize(16)
-        .fontColor(AppTheme.TEXT_MAIN)
+  PopupMenuItem(icon: Resource, label: string, action: string, description: string, onTap: () => void) {
+    Stack() {
+      GlassCircleButton({
+        diameter: THREAD_ACTION_BUTTON_SIZE,
+        slot: MaterialSlot.BOTTOM_BAR,
+        useCustomIcon: true,
+        customIcon: (): void => { this.PopupActionContent(icon, label); }
+      }).hitTestBehavior(HitTestMode.None)
     }
-    .width('100%')
-    .height(48)
-    .padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => {
-      onTap();
-    })
+    .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
+    .responseRegion({ x: 4, y: 4, width: 44, height: 44 })
+    .hitTestBehavior(HitTestMode.Block)
+    .id(`thread-popup-${action}`)
+    .accessibilityGroup(true)
+    .accessibilityText(action === 'reply' ? description : `${description} ${label}`)
+    .onClick((): void => { onTap(); })
   }
 
-  /**
-   * 弹出菜单的参数。
-   *
-   * ★ 必须抽成**带返回类型的方法**，不能直接写在 `bindPopup(...)` 的实参里：
-   *   ArkTS 的 `arkts-no-obj-literals-as-types` 不允许在回调签名上内联对象字面量类型，
-   *   而且内联写法里也没法引用 `this` 的 Builder。
-   */
-  private popupOptions(): CustomPopupOptions {
-    return {
-      builder: (): void => {
-        this.PopupActionList();
-      },
-      placement: Placement.Top,
-      enableArrow: false,
-      autoCancel: true,
-      systemMaterial: materialManager.officialOf(MaterialSlot.SHEET),
-      onStateChange: (event: PopupStateChangeParam): void => {
-        // 点外部 / 系统 Back 由系统关闭时，把本地开关同步回来
-        this.popupMenuShow = event.isVisible;
-      }
-    };
+  @Builder
+  PopupActionContent(icon: Resource, label: string) {
+    Column({ space: 1 }) {
+      SymbolGlyph(icon).fontSize(21).maxFontScale(1).fontColor([AppTheme.TEXT_MAIN])
+      Text(label).fontSize(12).maxFontScale(1).fontColor(AppTheme.TEXT_MAIN)
+        .width(44).maxLines(1).minFontSize(8).maxFontSize(12).textAlign(TextAlign.Center)
+    }
+    .justifyContent(FlexAlign.Center)
+    .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
   }
 
-  /**
-   * 底部固定操作区 —— 三种样式在这里分叉，**只有布局与材质分叉**。
-   *
-   * 样式来源 = 设置页「外观」里的偏好（`threadActionBarStore.style`），不是构建期常量
-   * → 改设置**下一帧**就生效，无需重装、无需重启、无需重进页面。
-   *
-   * ★ 必须用 `if` 分成两个分支，不能靠三元在一条属性链里切 ★
-   *   ① 两种样式的胶囊根本不是同一类组件（`HdsTabs` vs `Row`）；
-   *   ② 自绘那条属性链上"后调用的赢"，多写一个属性就有可能把 `backgroundEffect` 复位掉。
-   */
+  /** 按已保存偏好显示分离式双胶囊或弹出式单按钮。 */
   @Builder
   BottomActionBar() {
     if (threadActionBarStore.style === ThreadActionBarStyle.SPLIT_IMMERSIVE) {
       this.SplitImmersiveActionBar()
     } else {
-      this.GlassActionBar()
+      this.PopupActionBar()
     }
   }
 
@@ -2971,18 +2892,17 @@ export struct ThreadDetailPage {
     })
   }
 
-  /** 自绘玻璃：「经典玻璃」与「弹出式」共用同一套布局，只有右胶囊末尾那个「更多」不同 */
+  /** 弹出式按钮的位置、触摸与握姿由独立组件管理。 */
   @Builder
-  GlassActionBar() {
-    Row({ space: ACTION_PILL_GAP }) {
-      this.ClassicGlassReplyPill()
-      this.GlassActionCapsule()
-    }
-    .width('100%')
-    .padding({
-      left: BOTTOM_BAR_SIDE_MARGIN,
-      right: BOTTOM_BAR_SIDE_MARGIN,
-      bottom: BOTTOM_BAR_BOTTOM_MARGIN
+  PopupActionBar() {
+    ThreadPopupButton({
+      viewportWidth: this.popupViewportWidth,
+      viewportHeight: this.popupViewportHeight,
+      topInset: this.titleBarH,
+      active: this.pageVisible && !this.showMore,
+      open: this.popupMenuShow,
+      onOpenChange: (open: boolean): void => { this.popupMenuShow = open; },
+      action: (index: number): void => { this.PopupActionAt(index); }
     })
   }
 

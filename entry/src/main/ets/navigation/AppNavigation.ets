@@ -22,6 +22,8 @@ export class AppRoute {
 /** 详情页路由参数。页面参数由 Index.PageMap 注入，不再从 router 读取。 */
 export interface ThreadDetailParams {
   tid: number;
+  /** 卡片评论入口：加载完成并布局后定位回复区。 */
+  openComments?: boolean;
   /** 吧内视频卡进入沉浸观看，仍共享原帖回复与写操作。 */
   videoMode?: boolean;
   /** 我的回复入口携带真实回复 id；缺省仍按普通首页加载。 */

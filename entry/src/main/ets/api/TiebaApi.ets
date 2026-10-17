@@ -29,8 +29,10 @@ import { parsePersonalizedErrorno, parsePersonalizedFeed } from '../model/Person
 import {
   PrivacyMarkField, PrivacyMarks, parsePrivacyMarks, privacyWriteConfirmed, validPrivacyMark
 } from '../model/PrivacyMarks';
-import { SearchPostPage, searchScopeForum, searchAuthorAvatar } from '../model/SearchPost';
+import { SearchPostPage, searchScopeForum, searchPostAuthorAvatar } from '../model/SearchPost';
 import { parseSignStats } from '../model/SignStats';
+import { parseOfficialSign, parseOfficialSignCapability } from '../model/OfficialSign';
+import { OfficialSignResponse, OfficialSignCapabilityResponse } from './ApiResponses';
 import { TailChange, TailList, parseTailWrite, parseTails, tailChangeError } from '../model/Tails';
 import { ReplySortType, SubPostPage, ThreadDetail } from '../model/ThreadDetail';
 import { ForumBrief, ForumTab, ThreadListResult } from '../model/ThreadList';
@@ -1185,15 +1187,12 @@ export class TiebaApi {
     return response;
   }
 
-  async fetchSearchAuthorAvatar(account: string): Promise<string> {
-    const name: string = account.trim();
-    if (name.length === 0) { return ''; }
-    // 该端点遇到 Android/HarmonyOS UA 会返回移动网页而非 JSON；匿名实测桌面形态可用。
-    this.client.userAgent = 'Mozilla/5.0';
-    const transport: HttpResult = await this.client.getWithCookie(
-      `https://tieba.baidu.com/home/get/panel?ie=utf-8&un=${encodeURIComponent(name)}`,
-      '', { 'Referer': 'https://tieba.baidu.com/' });
-    return transport.ok ? searchAuthorAvatar(decodeUtf8(transport.bytes), name) : '';
+  async fetchSearchPostAuthorAvatar(device: TiebaDevice, session: TiebaSession,
+    tid: number, pid: number): Promise<string> {
+    if (!Number.isSafeInteger(tid) || tid <= 0 || !Number.isSafeInteger(pid) || pid <= 0) { return ''; }
+    const response: ThreadDetailResponse =
+      await this.fetchThreadDetail(device, session, tid, 1, 1, ReplySortType.ASC, pid);
+    return response.ok ? searchPostAuthorAvatar(response.data, tid, pid) : '';
   }
 
   /** 与搜吧同族的公开搜人接口；当前真实响应 has_more=0，不猜测更多页。 */
@@ -1411,14 +1410,51 @@ export class TiebaApi {
     return response;
   }
 
-  /**
-   * 吧签到（`/c/c/forum/sign`）。
-   *
-   * 端点来源：aiotieba `sign_forum`（Unlicense）——客户端签名 POST，
-   * 参数 BDUSS + _client_version + kw + tbs（公共参数已含前两类，补 kw 即可；
-   * 公共参数在 session.tbs 非空时自带 tbs）。成功响应含 `user_info.sign_bonus_point`
-   * （本次签到奖励经验），用于界面提示。
-   */
+  /** 当前 APK qpe.e 指定吧批量签到；普通路径不发送空 authsid，不使用全账号隐式分支。 */
+  async fetchOfficialSignCapability(device: TiebaDevice, session: TiebaSession, uid: number): Promise<OfficialSignCapabilityResponse> {
+    const response: OfficialSignCapabilityResponse = new OfficialSignCapabilityResponse();
+    if (!session.hasBduss() || !Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('请先登录'); return response; }
+    const deviceError: string = TiebaApi.checkDevice(device);
+    if (deviceError.length > 0) { response.failLocal(deviceError); return response; }
+    device.clientVersion = TiebaVersion.LATEST;
+    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('user_id', String(uid)));
+    const text: string | undefined = await this.postJsonText('/c/f/forum/getforumlist', params, response);
+    if (text === undefined) { return response; }
+    response.data = parseOfficialSignCapability(text);
+    hilog.info(0x0000, 'OfficialSign', 'capability schema %{public}s min=%{public}d count=%{public}d all=%{public}s',
+      response.data.schema, response.data.minimumLevel, response.data.forums.length, String(response.data.canUseAll));
+    if (response.data.error.length > 0) { response.failLocal(response.data.error); return response; }
+    response.ok = true; return response;
+  }
+
+  async signForumsOfficial(device: TiebaDevice, session: TiebaSession, uid: number,
+    forumIds: number[]): Promise<OfficialSignResponse> {
+    const response: OfficialSignResponse = new OfficialSignResponse();
+    if (!session.hasBduss() || session.tbs.length === 0) { response.failLocal('请先登录并刷新签到凭据'); return response; }
+    if (!Number.isSafeInteger(uid) || uid <= 0 || forumIds.length === 0 || forumIds.length > 50 ||
+      forumIds.some((fid: number): boolean => !Number.isSafeInteger(fid) || fid <= 0) ||
+      new Set(forumIds).size !== forumIds.length) {
+      response.failLocal('官方签到参数无效（每批 1 至 50 个吧）'); return response;
+    }
+    const deviceError: string = TiebaApi.checkDevice(device);
+    if (deviceError.length > 0) { response.failLocal(deviceError); return response; }
+    device.clientVersion = TiebaVersion.LATEST;
+    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    // 当前 APK 普通路径的 authsid 为 null，NetWorkCoreByBdHttp 省略空参数。
+    params.push(new SignParam('user_id', String(uid)), new SignParam('forum_ids', forumIds.join(',')));
+    const text: string | undefined = await this.postJsonText('/c/c/forum/msign', params, response);
+    if (text === undefined) { return response; }
+    response.data = parseOfficialSign(text);
+    hilog.info(0x0000, 'OfficialSign', 'response schema %{public}s', response.data.schema);
+    if (response.data.error.length > 0) { response.failLocal(response.data.error); return response; }
+    response.ok = true;
+    return response;
+  }
+
+  /** 吧签到（/c/c/forum/sign），沿用 aiotieba sign_forum 参数；奖励仅用于提示。 */
   async signForum(device: TiebaDevice, session: TiebaSession, fname: string): Promise<SignForumResponse> {
     const response: SignForumResponse = new SignForumResponse();
 

@@ -1,7 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 
-/** 本机一键签到方案；官方批量写协议未验证前，默认保留逐个签到。 */
+/** 本机一键签到方案，默认逐个签到；官方方案每批最多 50 个吧。 */
 @ObservedV2
 export class SignStrategyStore {
   @Trace strategy: number = 0;

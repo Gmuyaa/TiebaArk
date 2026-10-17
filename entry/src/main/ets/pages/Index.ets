@@ -51,6 +51,7 @@ import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHideStore';
 import { readStatusBarVp } from '../utils/SafeArea';
 import { avatarTrace } from '../utils/AvatarTrace';
+import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 
 /** 一个 Tab 槽位的静态描述 */
 interface TabSlot {
@@ -77,6 +78,16 @@ struct Index {
 
   /** 当前页签，与 HDS Tab 切换同步，用于保持页面状态 */
   @Local currentIndex: number = 0;
+  @Local pageVisible: boolean = true;
+  @Local foreground: ForegroundRefresh = foregroundRefresh;
+  private foregroundRevision: number = foregroundRefresh.revision;
+
+  @Monitor('foreground.revision', 'pageVisible', 'homeNavVisible')
+  onForegroundRefresh(): void {
+    if (!this.pageVisible || !this.homeNavVisible || this.foregroundRevision === this.foreground.revision) { return; }
+    this.foregroundRevision = this.foreground.revision;
+    this.refreshMyProfile();
+  }
   @Local viewerUrls: string[] = [];
   @Local viewerIndex: number = 0;
   @Local homeScrollHidden: boolean = false;
@@ -124,14 +135,16 @@ struct Index {
   }
 
   private refreshMyProfile(): void {
+    if (!this.pageVisible || !this.homeNavVisible || this.viewerUrls.length > 0) { return; }
     const showsOwnAvatar: boolean = this.currentIndex === 3 ||
       (this.currentIndex === 0 && this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW);
     if (showsOwnAvatar && authSession.isLoggedIn()) {
-      void authSession.refreshOwnAvatarOnEntry(
+      void this.foreground.refreshAvatar(
         this.getUIContext().getHostContext() as common.UIAbilityContext);
     }
   }
   onPageShow(): void {
+    this.pageVisible = true;
     // 只记"外壳页真的回到前台"（含我们页当前页签），用来和状态发布时间对齐。
     avatarTrace('page-visible', 0, `page=index tab=${this.currentIndex}`);
     // 设置页里可能刚换过顶栏样式：回前台时同步一次（值没变则不会触发重绘）
@@ -150,6 +163,7 @@ struct Index {
   }
 
   onPageHide(): void {
+    this.pageVisible = false;
     this.setHomeScrollHidden(false);
   }
 
@@ -274,7 +288,8 @@ struct Index {
 
       TabContent() {
 
-        FollowView({ bottomBarOcclusion: AppTheme.BAR_TOTAL_H })
+        FollowView({ bottomBarOcclusion: AppTheme.BAR_TOTAL_H,
+          active: this.pageVisible && this.homeNavVisible && this.currentIndex === 1 })
       }
       .tabBar(this.tabBuilder('进吧', 1, this.slots[1]))
 

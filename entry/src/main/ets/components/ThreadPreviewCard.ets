@@ -1,4 +1,4 @@
-import { LengthMetrics } from '@kit.ArkUI';
+import { ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { AppTheme } from '../theme/Theme';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { ContentKind, ContentPiece } from '../model/ThreadDetail';
@@ -21,6 +21,10 @@ export struct ThreadPreviewCard {
   @Param images: string[] = [];
   @Param isTop: boolean = false;
   @Param isGood: boolean = false;
+  @Local actionState: ThreadCardActionState = new ThreadCardActionState();
+  @Event onToggleLike: (state: ThreadCardActionState) => void = (_state: ThreadCardActionState): void => {};
+  @Event onOpenComments: () => void = (): void => {};
+  @Event onShare: () => void = (): void => {};
   @Param agreeCount: number = 0;
   @Param replyCount: number = 0;
   @Param shareCount: number = 0;
@@ -46,14 +50,38 @@ export struct ThreadPreviewCard {
       .borderRadius(4).padding({ left: 5, right: 5, top: 2, bottom: 2 })
   }
 
+  private metricCount(label: string): number {
+    if (label === '赞') { return this.actionState?.count(this.agreeCount) ?? this.agreeCount; }
+    return label === '评论' ? this.replyCount : this.shareCount;
+  }
+
+  private activateMetric(label: string): void {
+    if (label === '赞') {
+      if (!this.actionState?.isPreparing()) { this.onToggleLike(this.actionState); }
+    } else if (label === '评论') { this.onOpenComments(); }
+    else { this.onShare(); }
+  }
+
+  /** 独立动作读取稳定观察态，避免在列表复用时捕获旧计数。 */
   @Builder
-  Metric(icon: Resource, label: string, count: number) {
-    Row({ space: 4 }) {
-      SymbolGlyph(icon).fontSize(ThreadCardLayout.METRIC_ICON_SIZE).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
-      Text(`${count}`).fontSize(ThreadCardLayout.META_SIZE).fontColor(AppTheme.TEXT_SUB)
+  Metric(icon: Resource, label: string) {
+    Row({ space: ThreadCardLayout.METRIC_ITEM_GAP }) {
+      if (label === '赞' && this.actionState?.isPreparing()) {
+        LoadingProgress().width(ThreadCardLayout.METRIC_ICON_SIZE).height(ThreadCardLayout.METRIC_ICON_SIZE)
+      } else {
+        SymbolGlyph(label === '赞' && this.actionState?.liked() ? $r('sys.symbol.hand_thumbsup_fill') : icon)
+          .fontSize(ThreadCardLayout.METRIC_ICON_SIZE).maxFontScale(1)
+          .fontColor([label === '赞' && this.actionState?.liked() ? AppTheme.ACCENT : AppTheme.TEXT_SUB])
+      }
+      Text(`${this.metricCount(label)}`).fontSize(ThreadCardLayout.METRIC_TEXT_SIZE)
+        .fontColor(label === '赞' && this.actionState?.liked() ? AppTheme.ACCENT : AppTheme.TEXT_SUB)
     }
+    .layoutWeight(1).justifyContent(FlexAlign.Center)
     .accessibilityGroup(true)
-    .accessibilityText(`${label} ${count}，只读统计`)
+    .constraintSize({ minHeight: 32 })
+    .id(label === '赞' ? 'thread-card-like' : (label === '评论' ? 'thread-card-comment' : 'thread-card-share'))
+    .accessibilityText(`${label === '赞' && this.actionState?.liked() ? '取消点赞' : label} ${this.metricCount(label)}`)
+    .onClick(() => { this.activateMetric(label); })
   }
 
   private openAuthor(): void {
@@ -125,7 +153,8 @@ export struct ThreadPreviewCard {
     }
   }
 
-  build() {
+  @Builder
+  Content() {
     Column({ space: ThreadCardLayout.SECTION_GAP }) {
       this.IdentityHeader()
 
@@ -164,19 +193,23 @@ export struct ThreadPreviewCard {
           onOpenImage: (index: number): void => { this.onOpenImage(index); } })
       }
 
-      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(ThreadCardLayout.METRIC_GAP),
-        cross: LengthMetrics.vp(6) } }) {
-        this.Metric($r('sys.symbol.hand_thumbsup'), '赞', this.agreeCount)
-        this.Metric($r('sys.symbol.message'), '评论', this.replyCount)
-        this.Metric($r('sys.symbol.share'), '分享', this.shareCount)
-        if (this.images.length > 1) {
-          Text(`共 ${this.images.length} 张`).fontSize(ThreadCardLayout.META_SIZE).fontColor(AppTheme.TEXT_SUB)
-        }
-      }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start)
-      .padding({ left: ThreadCardLayout.SIDE_PADDING, right: ThreadCardLayout.SIDE_PADDING,
-        top: ThreadCardLayout.TOP_PADDING, bottom: ThreadCardLayout.BOTTOM_PADDING })
-      .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+      .padding({ left: ThreadCardLayout.SIDE_PADDING, right: ThreadCardLayout.SIDE_PADDING })
       .onClick(() => { this.onOpenThread(); })
+  }
+
+  build() {
+    Column({ space: ThreadCardLayout.SECTION_GAP }) {
+      this.Content()
+      Row() {
+        this.Metric($r('sys.symbol.hand_thumbsup'), '赞')
+        this.Metric($r('sys.symbol.message'), '评论')
+        this.Metric($r('sys.symbol.share'), '分享')
+      }.width('100%')
+        .padding({ left: ThreadCardLayout.METRIC_SIDE_PADDING, right: ThreadCardLayout.METRIC_SIDE_PADDING })
+        .id('thread-card-metrics')
+    }.width('100%').alignItems(HorizontalAlign.Start)
+      .padding({ top: ThreadCardLayout.TOP_PADDING, bottom: ThreadCardLayout.BOTTOM_PADDING })
+      .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
   }
 }

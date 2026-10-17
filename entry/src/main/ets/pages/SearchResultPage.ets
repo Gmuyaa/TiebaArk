@@ -25,6 +25,7 @@ import { AppTheme } from '../theme/Theme';
 import { SearchPageHeader } from '../components/SearchPageHeader';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { addSearchHistory } from '../utils/SearchHistory';
 import { NavigationService, SearchResultParams } from '../navigation/AppNavigation';
@@ -39,6 +40,7 @@ const TAB_USER: number = 2;
 
 @ComponentV2
 export struct SearchResultPage {
+  @Local cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   /** PageMap 注入的路由参数，唯一定义见 navigation/AppNavigation.ets 的 SearchResultParams */
   @Param routeParams: SearchResultParams | undefined = undefined;
   /** 当前搜索词（可被改词重搜） */
@@ -119,19 +121,19 @@ export struct SearchResultPage {
     const epoch: number = ++this.requestEpoch;
     const owner: string = authSession.sessionKey();
     // 每次改词独立补图；旧查询与旧账号的结果不能回填当前卡片。
-    this.postAvatars.reset(async (name: string, forum: boolean): Promise<string> => {
+    this.postAvatars.reset(async (name: string, forum: boolean, tid: number, pid: number): Promise<string> => {
       if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return ''; }
       const avatarApi: TiebaApi = new TiebaApi();
+      const device: TiebaDevice = await DeviceIdentity.ensure(this.hostContext());
+      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return ''; }
       if (!forum) {
-        const url: string = await avatarApi.fetchSearchAuthorAvatar(name);
+        const url: string = await avatarApi.fetchSearchPostAuthorAvatar(device, authSession.session(), tid, pid);
         return epoch === this.requestEpoch && owner === authSession.sessionKey() ? url : '';
       }
       if (isForumAvatarFetched(name)) {
         const cached: string = getForumAvatar(name);
         if (cached.length > 0) { return cached; }
       }
-      const device: TiebaDevice = await DeviceIdentity.ensure(this.hostContext());
-      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return ''; }
       const response = await avatarApi.fetchThreadList(device, authSession.session(), name, 1, 1);
       if (epoch !== this.requestEpoch || owner !== authSession.sessionKey() || !response.ok) { return ''; }
       const url: string = response.data.forum.avatar;
@@ -523,7 +525,7 @@ export struct SearchResultPage {
         ListItem() {
           ThreadPreviewCard({
             authorName: item.authorName,
-            authorAvatar: this.postAvatars.urls.get(`author:${item.authorAccount}`) ?? '',
+            authorAvatar: this.postAvatars.urls.get(`author:${item.tid}:${item.pid}`) ?? '',
             forumName: item.forumName,
             forumAvatar: this.postAvatars.urls.get(`forum:${item.forumName}`) ?? '',
             postedTime: this.resultTimeText(item),
@@ -534,10 +536,23 @@ export struct SearchResultPage {
             canOpenForum: item.forumName.length > 0,
             onOpenForum: (): void => { this.openForumPage(item.forumName); },
             imageScroller: this.cardScroller,
+            onToggleLike: (state: ThreadCardActionState): void => {
+              void this.cardActions.toggleLike(state, this.getUIContext().getHostContext() as common.UIAbilityContext,
+                item.tid, item.forumName).then((reason: string): void => {
+                  if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+                });
+            },
+            onOpenComments: (): void => { NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName, openComments: true }); },
+            onShare: (): void => {
+              void this.cardActions.share(this.getUIContext().getHostContext() as common.UIAbilityContext,
+                item.tid, item.title).then((reason: string): void => {
+                  if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+                });
+            },
             onOpenThread: (): void => { this.openThread(item); }
           })
         }
-        .onAppear(() => { this.postAvatars.request(item.authorAccount, item.forumName); })
+        .onAppear(() => { this.postAvatars.request(item.tid, item.pid, item.forumName); })
       }, (item: SearchPostItem) => `${item.tid}-${item.pid}`)
 
       ListItem() {

@@ -6,11 +6,12 @@ import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { curves, promptAction, router } from '@kit.ArkUI';
 import { ThreadPreviewCard } from './ThreadPreviewCard';
+import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { buildThreadCardMenu } from './ThreadCardMenu';
 import { visibleThreads } from '../model/ThreadBlock';
-import { threadBlockStore } from '../utils/ThreadBlockStore';
+import { ThreadBlockStore, threadBlockStore } from '../utils/ThreadBlockStore';
 import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
-import { ThreadBrief } from '../model/ThreadList';
+import { ThreadBrief, threadBriefIdentity } from '../model/ThreadList';
 import { RecommendVM } from '../viewmodel/RecommendVM';
 import { FollowFeedVM } from '../viewmodel/FollowFeedVM';
 import { HotTopicVM } from '../viewmodel/HotTopicVM';
@@ -56,6 +57,7 @@ const REFRESH_OFFSET_VP: number = HOME_REFRESH_OFFSET;
 
 @ComponentV2
 export struct ForumListView {
+  @Local cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private changes = followChanges;
   private relationshipRefreshPending: boolean = false;
   @Monitor('changes.forums')
@@ -98,6 +100,15 @@ export struct ForumListView {
 
   @Local followVm: FollowFeedVM = new FollowFeedVM();
   @Local hotVm: HotTopicVM = new HotTopicVM();
+  @Local blocks: ThreadBlockStore = threadBlockStore;
+  @Computed
+  get visibleRecommendThreads(): ThreadBrief[] {
+    return visibleThreads(this.vm.threads, this.blocks.rules());
+  }
+  @Computed
+  get visibleFollowThreads(): ThreadBrief[] {
+    return visibleThreads(this.followVm.threads, this.blocks.rules());
+  }
   @Local inputName: string = '';
   @Local refreshing: boolean = false;
   /** 关注流的下拉刷新（与推荐流各自独立，两个列表都可能被刷） */
@@ -313,9 +324,9 @@ export struct ForumListView {
       this.StatusView('正在加载内容…')
     } else if (this.vm.errorText.length > 0 && this.vm.threads.length === 0) {
       this.ErrorView(this.vm.errorText)
-    } else if (this.vm.threads.length === 0) {
+    } else if (this.visibleRecommendThreads.length === 0) {
       Column({ space: 16 }) {
-        Text('暂时没有图文帖').fontColor(AppTheme.TEXT_SUB).fontSize(14)
+        Text('暂无可显示的帖子').fontColor(AppTheme.TEXT_SUB).fontSize(14)
         if (this.vm.hasMore) {
           Button(this.vm.loadingMore ? '正在加载…' : '继续加载图文帖').enabled(!this.vm.loadingMore)
             .onClick(() => { void this.vm.loadMore(this.hostContext(), true); })
@@ -610,8 +621,7 @@ export struct ForumListView {
   }
 
   private threadsOf(channel: string): ThreadBrief[] {
-    const items: ThreadBrief[] = channel === '关注' ? this.followVm.threads : this.vm.threads;
-    return visibleThreads(items, threadBlockStore.rules());
+    return channel === '关注' ? this.visibleFollowThreads : this.visibleRecommendThreads;
   }
 
   @Builder
@@ -637,7 +647,7 @@ export struct ForumListView {
 
         const epoch: number = this.avatarEpoch;
 
-        return `${item.tid}-${item.avatarStamp + epoch * 0}`;
+        return `${threadBriefIdentity(item)}-${item.avatarStamp + epoch * 0}`;
       })
 
       ListItem() {
@@ -843,7 +853,7 @@ export struct ForumListView {
       this.FollowPendingView()
     } else if (this.followVm.errorText.length > 0 && this.followVm.threads.length === 0) {
       this.ErrorView(this.followVm.errorText)
-    } else if (this.followVm.threads.length === 0) {
+    } else if (this.visibleFollowThreads.length === 0) {
       this.FollowEmptyView()
     } else {
       this.FollowFeed()
@@ -1074,6 +1084,19 @@ export struct ForumListView {
       isGood: this.vm.mode.length > 0 && item.isGood,
       agreeCount: item.agreeCount, replyCount: item.replyCount,
       shareCount: item.shareCount,
+      onToggleLike: (state: ThreadCardActionState): void => {
+        void this.cardActions.toggleLike(state, this.getUIContext().getHostContext() as common.UIAbilityContext,
+          item.tid, this.forumOf(item)).then((reason: string): void => {
+            if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+          });
+      },
+      onOpenComments: (): void => { NavigationService.openThreadDetail({ tid: item.tid, targetPid: item.targetPid, forumName: this.forumOf(item), replyCount: item.replyCount, openComments: item.targetPid <= 0 }); },
+      onShare: (): void => {
+        void this.cardActions.share(this.getUIContext().getHostContext() as common.UIAbilityContext,
+          item.tid, item.title).then((reason: string): void => {
+            if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+          });
+      },
       menu: buildThreadCardMenu(this.getUIContext(), item), imageScroller: this.imageScroller(item.tid),
       canOpenAuthor: item.authorId > 0 || item.authorAvatar.length > 0,
       canOpenForum: this.forumOf(item).length > 0,
@@ -1083,7 +1106,7 @@ export struct ForumListView {
       onOpenForum: (): void => { this.openForumPage(this.forumOf(item)); },
       onOpenThread: (): void => {
         // 保留来源吧名兜底：详情响应的 forum 可能为空。
-        NavigationService.openThreadDetail({ tid: item.tid, replyCount: item.replyCount,
+        NavigationService.openThreadDetail({ tid: item.tid, targetPid: item.targetPid, replyCount: item.replyCount,
           forumName: this.forumOf(item) });
       },
       onOpenImage: (index: number): void => {

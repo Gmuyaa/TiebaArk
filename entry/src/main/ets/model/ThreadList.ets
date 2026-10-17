@@ -132,6 +132,10 @@ export class ForumTab {
 }
 
 export class ThreadBrief {
+  /** 回复推荐的稳定条目身份，不能用于详情请求；普通主题为0。 */
+  feedItemId: number = 0;
+  /** 回复推荐对应的楼层；详情加载失败或目标已删时保留原帖入口。 */
+  targetPid: number = 0;
   isVideo: boolean = false;
   video: VideoClip | undefined = undefined;
   /** 帖子 id */
@@ -191,8 +195,12 @@ export class ThreadBrief {
   avatarStamp: number = 0;
 }
 
+export function threadBriefIdentity(item: ThreadBrief): number {
+  return item.feedItemId > 0 ? item.feedItemId : item.tid;
+}
+
 /**
- * 追加主题列表分页结果，按 tid 去重并保留两页各自的服务端顺序。
+ * 追加列表分页结果，按推荐条目身份（普通主题使用 tid）去重并保留服务端顺序。
  *
  * 置顶帖可能在后续页重复返回；这里只去掉重复项，不按置顶、时间或热度重排。
  */
@@ -202,17 +210,17 @@ export function mergeThreadPages(current: ThreadBrief[], incoming: ThreadBrief[]
   for (let i = 0; i < current.length; i++) {
     merged.push(current[i]);
     if (current[i].tid > 0) {
-      tids.add(current[i].tid);
+      tids.add(threadBriefIdentity(current[i]));
     }
   }
   for (let i = 0; i < incoming.length; i++) {
     const item: ThreadBrief = incoming[i];
-    if (item.tid > 0 && tids.has(item.tid)) {
+    if (item.tid > 0 && tids.has(threadBriefIdentity(item))) {
       continue;
     }
     merged.push(item);
     if (item.tid > 0) {
-      tids.add(item.tid);
+      tids.add(threadBriefIdentity(item));
     }
   }
   return merged;

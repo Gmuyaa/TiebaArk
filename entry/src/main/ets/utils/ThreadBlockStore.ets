@@ -6,7 +6,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { authSession } from '../auth/AuthSession';
 import {
   BlockRules, BlockedUser, HiddenThread, blockedUserUids, emptyRules, mergeBlockedUser,
-  mergeHiddenThread, mergeRules, normalizeForumName, normalizeForumNames, parseBlockedUsers,
+  mergeHiddenThread, normalizeForumName, normalizeForumNames, normalizeTids, normalizeUids, parseBlockedUsers,
   parseHiddenThreads, removeBlockedUser, removeHiddenThread, serializeBlockedUsers,
   serializeHiddenThreads
 } from '../model/ThreadBlock';
@@ -43,7 +43,7 @@ export class ThreadBlockStore {
    */
   @Trace blockedUsers: BlockedUser[] = [];
 
-  private owner: string = '';
+  @Trace private owner: string = '';
   private loadingOwner: string = '';
   private loaded: boolean = false;
   private loading: Promise<void> | undefined = undefined;
@@ -98,7 +98,12 @@ export class ThreadBlockStore {
    */
   rules(): BlockRules {
     if (this.owner !== ownerKey()) { return emptyRules(); }
-    return mergeRules(this.blockedForums, [], blockedUserUids(this.blockedUsers), this.hidden);
+    const rules: BlockRules = new BlockRules();
+    // 存储中的吧名已经归一化；再次削尾会让以「吧」结尾的实际吧名失配。
+    rules.forums = this.blockedForums.slice();
+    rules.uids = normalizeUids(blockedUserUids(this.blockedUsers));
+    rules.tids = normalizeTids(this.hidden.map((item: HiddenThread): number => item.tid));
+    return rules;
   }
 
   isHidden(tid: number): boolean {
@@ -128,7 +133,7 @@ export class ThreadBlockStore {
     if (session !== authSession.sessionKey()) { return; }
     const name: string = normalizeForumName(forumName);
     if (name.length === 0) { return; }
-    this.blockedForums = normalizeForumNames(this.blockedForums.concat([name]));
+    this.blockedForums = uniqueForumNames(this.blockedForums.concat([name]));
     await this.persist(context, scoped(KEY_FORUMS, ownerKey()),
       JSON.stringify({ values: this.blockedForums }));
   }
@@ -183,7 +188,8 @@ export class ThreadBlockStore {
     const session: string = authSession.sessionKey();
     await this.load(context);
     if (session !== authSession.sessionKey()) { return; }
-    this.blockedForums = normalizeForumNames(complete ? forums : this.blockedForums.concat(forums));
+    const incoming: string[] = normalizeForumNames(forums);
+    this.blockedForums = complete ? incoming : uniqueForumNames(this.blockedForums.concat(incoming));
     await this.persist(context, scoped(KEY_FORUMS, ownerKey()),
       JSON.stringify({ values: this.blockedForums }));
   }
@@ -218,10 +224,20 @@ function parseForumList(raw: string): string[] {
     for (const item of parsed.values) {
       if (typeof item === 'string') { values.push(item); }
     }
-    return normalizeForumNames(values);
+    return uniqueForumNames(values);
   } catch (err) {
     return [];
   }
+}
+
+/** 已归一化的存储值只去空和去重，不再次移除吧名尾字。 */
+function uniqueForumNames(names: string[]): string[] {
+  const values: string[] = [];
+  for (const name of names) {
+    const value: string = name.trim();
+    if (value.length > 0 && values.indexOf(value) < 0) { values.push(value); }
+  }
+  return values;
 }
 
 export const threadBlockStore: ThreadBlockStore = new ThreadBlockStore();

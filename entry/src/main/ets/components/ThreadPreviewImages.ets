@@ -59,14 +59,6 @@ struct ThreadPreviewImage {
     return drift > 0.05 ? ImageFit.Cover : ImageFit.Contain;
   }
 
-  /** 图片本体的绘制高度：长图按真实比例可以高出预览框，超出部分由预览框裁掉 */
-  private drawHeight(frame: FeedImageBox): number {
-    if (frame.long && this.actual.width > 0) {
-      return Math.max(1, frame.width * this.actual.height / this.actual.width);
-    }
-    return frame.height;
-  }
-
   private applyLoaded(event: PreviewImageComplete | undefined): void {
     if (event === undefined || event.loadingStatus !== 1) { return; }
     if (!(event.width > 0) || !(event.height > 0)) { return; }
@@ -112,7 +104,7 @@ struct ThreadPreviewImage {
         }
         Image(this.url)
           .width(this.frame().width)
-          .height(this.drawHeight(this.frame()))
+          .height(this.frame().height)
           .objectFit(this.imageFit(this.frame()))
           .objectRepeat(ImageRepeat.NoRepeat)
           .opacity(this.loaded ? 1 : 0)

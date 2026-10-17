@@ -2,26 +2,15 @@
 
 import { RawSearchPostEntry, RawSearchPostPage, RawSearchPostResponse } from '../api/RawSearchPost';
 import { profilePortrait } from './PageDirectory';
-import { portraitUrl } from './ThreadDetail';
+import { portraitUrl, PostItem, ThreadDetail } from './ThreadDetail';
 
-interface RawAuthorPanel {
-  no?: number | string;
-  data?: RawAuthorPanelData;
-}
-interface RawAuthorPanelData {
-  name?: string;
-  portrait?: string;
-}
-
-/** 公开资料仅在账号名严格一致时补图，不能用昵称或模糊搜人结果认领身份。 */
-export function searchAuthorAvatar(json: string, account: string): string {
-  if (account.trim().length === 0) { return ''; }
-  try {
-    const raw: RawAuthorPanel = JSON.parse(json) as RawAuthorPanel;
-    if (raw === null || (raw.no !== 0 && raw.no !== '0') || raw.data === undefined
-      || raw.data === null || raw.data.name !== account || typeof raw.data.portrait !== 'string') { return ''; }
-    return portraitUrl(profilePortrait(raw.data.portrait));
-  } catch (_) { return ''; }
+/** 搜帖 name 可能是昵称；只从同帖同楼层的作者资料补图，不能按名字认领身份。 */
+export function searchPostAuthorAvatar(detail: ThreadDetail, tid: number, pid: number): string {
+  if (!Number.isSafeInteger(tid) || tid <= 0 || !Number.isSafeInteger(pid) || pid <= 0
+    || detail.tid !== tid) { return ''; }
+  const post: PostItem | undefined = detail.posts.find((item: PostItem) => item.pid === pid);
+  if (post === undefined || post.author.id <= 0) { return ''; }
+  return portraitUrl(profilePortrait(post.author.portraitUrl));
 }
 
 /**
@@ -218,8 +207,6 @@ export class SearchPostItem {
   /** 来源吧名 */
   forumName: string = '';
   authorName: string = '';
-  /** 稳定账号名，保留与展示昵称的区别，用于公开资料精确反查。 */
-  authorAccount: string = '';
   /** 毫秒时间戳（服务端给秒，转换时乘 1000） */
   timeMs: number = 0;
 
@@ -284,8 +271,7 @@ export class SearchPostPage {
       item.forumName = str(entry.fname);
       item.timeMs = numStr(entry.time) * 1000;
       if (entry.author !== undefined) {
-        item.authorAccount = str(entry.author.name).trim();
-        // 端点实测只保证 name / name_show；展示优先 name_show（昵称），没有退 name
+        // name 也可能是昵称，两个字段仅用于展示；身份以 tid + pid 对应的作者为准。
         item.authorName = str(entry.author.name_show).length > 0
           ? str(entry.author.name_show) : str(entry.author.name);
       }

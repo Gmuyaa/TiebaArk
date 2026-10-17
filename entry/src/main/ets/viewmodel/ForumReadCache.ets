@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { TiebaApi, ThreadListResponse } from '../api/TiebaApi';
 import { ForumMembership } from '../model/ThreadList';
 import { FollowForumItem, FollowForumList } from '../model/FollowForum';
+import { SignStats } from '../model/SignStats';
 import { authSession } from '../auth/AuthSession';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -138,6 +139,13 @@ export class ForumCacheGuard {
 }
 export function publishForumRead(guard: ForumCacheGuard, name: string, response: ThreadListResponse): void {
   if (!guard.current() || owner.length === 0 || !response.ok || response.data.forum.id <= 0) { return; }
+  const previous: ForumSnapshot | undefined = forums.get(name);
+  if (previous !== undefined && previous.response.data.forum.id === response.data.forum.id) {
+    const known: ForumMembership = previous.response.data.membership;
+    // 缺字段不等于零：保留最近一次服务端返回的签到计数，直到有新值替换。
+    if (response.data.membership.continuousCount < 0) { response.data.membership.continuousCount = known.continuousCount; }
+    if (response.data.membership.totalCount < 0) { response.data.membership.totalCount = known.totalCount; }
+  }
   if (confirmedSigns.get(name) === forumCacheDay()) { response.data.membership.signed = true; }
   forums.set(name, new ForumSnapshot(response));
   if (forums.size > 256) {
@@ -181,9 +189,9 @@ export function cachedForumMembership(name: string, id: number): ForumMembership
   const out: ForumMembership = new ForumMembership();
   out.level = source.level; out.levelName = source.levelName;
   out.currentScore = source.currentScore; out.nextScore = source.nextScore;
+  out.continuousCount = source.continuousCount; out.totalCount = source.totalCount;
   if (value.day === forumCacheDay()) {
     out.signed = source.signed; out.missedDays = source.missedDays;
-    out.continuousCount = source.continuousCount; out.totalCount = source.totalCount;
   }
   const signed: FollowForumItem | undefined = guideDay === forumCacheDay() ?
     guide?.items.find((item: FollowForumItem): boolean => item.fid === id && item.fname === name) : undefined;
@@ -195,17 +203,30 @@ export async function readForumShared(context: common.UIAbilityContext, name: st
   id: number, force: boolean = false): Promise<ThreadListResponse> {
   restoreForumCache(context);
   bind(); const value: ForumSnapshot | undefined = forums.get(name);
-  if (!force && forumReadFresh(name) && value?.response.data.forum.id === id) { return value.response; }
-  const existing: Promise<ThreadListResponse> | undefined = reads.get(name);
-  if (existing !== undefined) { return existing; }
+  if (!force && forumReadFresh(name) && value?.response.data.forum.id === id) {
+    hilog.info(0x0000, 'ForumReadCache', 'forum cache hit');
+    return value.response;
+  }
   const guard: ForumCacheGuard = new ForumCacheGuard(name);
+  const existing: Promise<ThreadListResponse> | undefined = reads.get(name);
+  if (existing !== undefined) {
+    if (!force) { return existing; }
+    // 回前台的补读不能把切后台前已发出的请求当成最新结果。
+    try { await existing; } catch (_) { /* 旧请求失败后仍允许本轮重新读取。 */ }
+    if (!guard.current()) { throw new Error('账号或吧状态已变化'); }
+    const trailing: Promise<ThreadListResponse> | undefined = reads.get(name);
+    if (trailing !== undefined && trailing !== existing) { return trailing; }
+  }
   const request: Promise<ThreadListResponse> = (async (): Promise<ThreadListResponse> => {
     const device = await DeviceIdentity.ensure(context);
     if (!guard.current()) { throw new Error('账号或吧状态已变化'); }
-    hilog.info(0x0000, 'ForumReadCache', 'forum request started');
+    hilog.info(0x0000, 'ForumReadCache', 'forum request started force=%{public}s', String(force));
     const response = await new TiebaApi().fetchThreadList(device, authSession.session(), name, 1, 1);
     if (!guard.current()) { throw new Error('账号或吧状态已变化'); }
     if (response.ok && response.data.forum.id === id) { publishForumRead(guard, name, response); }
+    const signed: boolean | undefined = response.ok ? response.data.membership?.signed : undefined;
+    hilog.info(0x0000, 'ForumReadCache', 'forum response ok=%{public}s sign=%{public}d',
+      String(response.ok), signed === undefined ? -1 : (signed ? 1 : 0));
     return response;
   })();
   reads.set(name, request);
@@ -220,6 +241,7 @@ export function cachedFollowForums(): FollowForumItem[] | undefined {
     if (membership !== undefined) {
       if (membership.level >= 0) { out.level = membership.level; }
       out.levelName = membership.levelName; out.currentScore = membership.currentScore; out.nextScore = membership.nextScore;
+      out.continuousCount = membership.continuousCount; out.totalCount = membership.totalCount;
       if (membership.signed !== undefined) { out.isSigned = membership.signed; out.signKnown = true; }
     }
     if (confirmedSigns.get(item.fname) === forumCacheDay()) { out.isSigned = true; out.signKnown = true; }
@@ -229,13 +251,22 @@ export function cachedFollowForums(): FollowForumItem[] | undefined {
 export async function readFollowForumsShared(context: common.UIAbilityContext, force: boolean = false): Promise<FollowForumList> {
   restoreForumCache(context);
   bind();
-  if (!force && guide !== undefined && guideDay === forumCacheDay() && Date.now() - guideAt < FRESH_MS) { return guide; }
-  if (guideRead !== undefined) { return guideRead; }
+  if (!force && guide !== undefined && guideDay === forumCacheDay() && Date.now() - guideAt < FRESH_MS) {
+    hilog.info(0x0000, 'ForumReadCache', 'guide cache hit');
+    return guide;
+  }
   const guard = new ForumCacheGuard();
+  const existing: Promise<FollowForumList> | undefined = guideRead;
+  if (existing !== undefined) {
+    if (!force) { return existing; }
+    try { await existing; } catch (_) { /* 只重试读取，不重发任何签到写请求。 */ }
+    if (!guard.current()) { throw new Error('账号或吧状态已变化'); }
+    if (guideRead !== undefined && guideRead !== existing) { return guideRead; }
+  }
   const request: Promise<FollowForumList> = (async (): Promise<FollowForumList> => {
     if (authSession.session().tbs.length === 0) { await authSession.refreshTbs(context); }
     if (!guard.current()) { throw new Error('账号或吧状态已变化'); }
-    hilog.info(0x0000, 'ForumReadCache', 'guide request started');
+    hilog.info(0x0000, 'ForumReadCache', 'guide request started force=%{public}s', String(force));
     const api: TiebaApi = new TiebaApi();
     const seen: Set<number> = new Set<number>();
     const all: FollowForumItem[] = [];
@@ -264,7 +295,26 @@ export async function readFollowForumsShared(context: common.UIAbilityContext, f
         return out;
       });
       guide = result; guideAt = Date.now(); guideServerAt = guideAt; guideDay = forumCacheDay();
+      // 新列表的明确签到状态不能再被较旧的吧头快照覆盖；本机已确认的写成功仍优先。
+      for (const item of result.items) {
+        const cached: ForumSnapshot | undefined = forums.get(item.fname);
+        if (cached === undefined || cached.response.data.forum.id !== item.fid) { continue; }
+        const membership: ForumMembership = cached.response.data.membership;
+        if (item.signKnown && cached.day === guideDay) {
+          if (membership.signed !== item.isSigned) {
+            cached.at = 0;
+            versions.set(item.fname, (versions.get(item.fname) ?? 0) + 1);
+            reads.delete(item.fname);
+          }
+          membership.signed = item.isSigned;
+        }
+        if (item.continuousCount >= 0) { membership.continuousCount = item.continuousCount; }
+        if (item.totalCount >= 0) { membership.totalCount = item.totalCount; }
+      }
       fetchedAt = guideAt; store();
+      hilog.info(0x0000, 'ForumReadCache', 'guide response applied rows=%{public}d known=%{public}d signed=%{public}d',
+        result.items.length, result.items.filter((item: FollowForumItem): boolean => item.signKnown).length,
+        result.items.filter((item: FollowForumItem): boolean => item.signKnown && item.isSigned).length);
     }
     return result;
   })();
@@ -277,13 +327,30 @@ export function invalidateForumRead(name: string): void {
   if (value !== undefined) { value.at = 0; }
   reads.delete(name); guideAt = 0; guideRead = undefined;
 }
-export function confirmForumSign(name: string): void {
+export function confirmForumSign(name: string, stats: SignStats = new SignStats(), id: number = 0): void {
   invalidateForumRead(name); confirmedSigns.set(name, forumCacheDay());
-  const value: ForumSnapshot | undefined = forums.get(name);
+  let value: ForumSnapshot | undefined = forums.get(name);
+  if (value === undefined) {
+    const item: FollowForumItem | undefined = guide?.items.find((entry: FollowForumItem): boolean => entry.fname === name);
+    const fid: number = id > 0 ? id : (item?.fid ?? 0);
+    if (fid > 0) {
+      const response: ThreadListResponse = new ThreadListResponse(); response.ok = true;
+      response.data.forum.id = fid; response.data.forum.name = name; response.data.forum.followed = true;
+      response.data.forum.avatar = item?.avatar ?? '';
+      response.data.membership.level = item?.level ?? -1;
+      response.data.membership.levelName = item?.levelName ?? '';
+      publishForumRead(new ForumCacheGuard(name), name, response);
+      value = forums.get(name);
+    }
+  }
   if (value !== undefined) {
     value.response.data.membership.signed = true;
     value.response.data.membership.currentScore = -1;
     value.response.data.membership.nextScore = -1;
+    if (stats.continuousCount >= 0) { value.response.data.membership.continuousCount = stats.continuousCount; }
+    if (stats.totalCount >= 0) { value.response.data.membership.totalCount = stats.totalCount; }
+    value.at = 0;
+    value.serverAt = Date.now(); value.accessedAt = value.serverAt;
     value.day = forumCacheDay();
   }
   if (guide !== undefined && guideDay === forumCacheDay()) {
@@ -293,7 +360,7 @@ export function confirmForumSign(name: string): void {
       return out;
     });
   }
-  store(true);
+  fetchedAt = Date.now(); store(true);
 }
 
 /** A confirmed write replaces the relationship before any older read can publish. */

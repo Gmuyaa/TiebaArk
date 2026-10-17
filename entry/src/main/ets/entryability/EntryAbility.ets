@@ -18,6 +18,7 @@ import { smartReachStore } from '../common/appearance/SmartReachStore';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
 import { restoreForumCache } from '../viewmodel/ForumReadCache';
+import { foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import app from '@system.app';
 import { IMAGE_DISK_CACHE_BYTES } from '../model/CachePolicy';
 import { trimExportCache } from '../utils/ExportCachePolicy';
@@ -135,11 +136,13 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     smartReachStore.foreground = true;
+    foregroundRefresh.onForeground();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
     smartReachStore.foreground = false;
+    foregroundRefresh.onBackground();
     void videoPlayback.stop();
     void voicePlayback.stop();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onBackground');

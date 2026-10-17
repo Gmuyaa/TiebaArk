@@ -15,9 +15,39 @@ import { AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { NavigationService } from '../navigation/AppNavigation';
 import { SignStrategyStore, signStrategyStore } from '../common/appearance/SignStrategyStore';
+import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 @ComponentV2
 export struct FollowView {
+  @Param active: boolean = true;
+  @Local foreground: ForegroundRefresh = foregroundRefresh;
+  private foregroundRevision: number = foregroundRefresh.revision;
+  private foregroundRefreshPending: boolean = false;
+  private foregroundExperiencePending: boolean = false;
+  private foregroundAccount: string = '';
+
+  @Monitor('foreground.revision', 'active')
+  onForegroundRefresh(): void {
+    if (!this.active) { this.foregroundRefreshPending = false; this.foregroundExperiencePending = false; return; }
+    if (this.foregroundRevision === this.foreground.revision) { return; }
+    this.foregroundRevision = this.foreground.revision;
+    this.foregroundAccount = authSession.forumCacheSessionKey();
+    this.foregroundRefreshPending = true;
+    this.applyForegroundRefresh();
+  }
+
+  @Monitor('vm.loading', 'vm.signingAll', 'vm.signingFname')
+  applyForegroundRefresh(): void {
+    if (!this.foregroundRefreshPending || !this.active || this.vm.loading || this.vm.signingAll ||
+      this.vm.signingFname.length > 0) { return; }
+    this.foregroundRefreshPending = false;
+    if (this.foregroundAccount.length === 0 || this.foregroundAccount !== authSession.forumCacheSessionKey()) { return; }
+    this.foregroundExperiencePending = true;
+    hilog.info(0x0000, 'ForegroundRefresh', 'follow requested revision=%{public}d', this.foregroundRevision);
+    void this.vm.load(this.hostContext(), true);
+  }
+
   private changes = followChanges;
   private relationshipRefreshPending: boolean = false;
   private visibleForums: Map<number, FollowForumItem> = new Map();
@@ -29,8 +59,10 @@ export struct FollowView {
   @Monitor('vm.loading')
   applyRelationshipRefresh(): void {
     if (this.vm.loading) { return; }
+    const force: boolean = this.active && this.foregroundExperiencePending;
+    this.foregroundExperiencePending = false;
     for (const item of this.vm.forums) {
-      if (this.visibleForums.has(item.fid)) { this.vm.ensureExperience(this.hostContext(), item); }
+      if (this.active && this.visibleForums.has(item.fid)) { this.vm.ensureExperience(this.hostContext(), item, force); }
     }
     if (!this.relationshipRefreshPending) { return; }
     this.relationshipRefreshPending = false;
@@ -41,8 +73,14 @@ export struct FollowView {
   @Local vm: FollowVM = new FollowVM();
   @Local auth: AuthSession = authSession;
   @Local signStrategy: SignStrategyStore = signStrategyStore;
+  private account: string = authSession.forumCacheSessionKey();
   @Monitor('auth.snapshot')
-  onAccountChanged(): void { void this.vm.load(this.hostContext()); }
+  onAccountChanged(): void {
+    const account: string = authSession.forumCacheSessionKey();
+    if (account === this.account) { return; }
+    this.account = account;
+    void this.vm.load(this.hostContext());
+  }
   /** 状态栏高度（vp），见 SafeArea.ets */
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
 
@@ -85,7 +123,7 @@ export struct FollowView {
         GlassCircleButton({
           label: this.vm.signingAll ? '…' : '签', diameter: 40, iconSize: 22, iconOffsetX: -2.5, labelOffsetY: 0.5,
           accessibilityLabel: this.vm.signingAll ? '正在签到' :
-            (this.signStrategy.strategy === 1 ? '官方签到，暂不可用' : '一键签到'),
+            (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到'),
           onTap: (): void => {
             this.vm.signInAll(this.hostContext()).then((message: string) => {
               if (message.length > 0) {
@@ -165,14 +203,11 @@ export struct FollowView {
 
         Row({ space: 8 }) {
           ForumLevelBadge({ level: item.level, levelName: item.levelName }).flexShrink(0)
-          if (item.continuousCount >= 0 || item.totalCount >= 0) {
-            Text((item.continuousCount >= 0 ? `连签 ${item.continuousCount} 天` : '') +
-              (item.continuousCount >= 0 && item.totalCount >= 0 ? ' · ' : '') +
-              (item.totalCount >= 0 ? `累计 ${item.totalCount} 次` : ''))
-              .fontSize(10).fontColor(AppTheme.TEXT_SUB)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1)
-          }
+          Text(`连签 ${item.continuousCount >= 0 ? item.continuousCount : '--'} 天 · ` +
+            `累计 ${item.totalCount >= 0 ? item.totalCount : '--'} 次`)
+            .fontSize(10).fontColor(AppTheme.TEXT_SUB)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)

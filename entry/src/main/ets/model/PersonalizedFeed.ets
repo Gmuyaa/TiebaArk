@@ -8,7 +8,10 @@ const RES_ERROR: number = 1;
 const RES_DATA: number = 2;
 const DATA_THREAD_LIST: number = 2;
 
-const T_TID: number = 1;
+const T_ID: number = 1;
+const T_TID: number = 2;
+const T_POST_ID: number = 52;
+const T_ORIGIN: number = 141;
 const T_TITLE: number = 3;
 const T_REPLY_NUM: number = 4;
 const T_VIEW_NUM: number = 5;
@@ -43,6 +46,8 @@ function authorAvatarUrl(portrait: string): string {
 
 /** 官方推荐流里的一条帖子（解析中间态，字段名与 wire 字段一一对应） */
 export class PersonalizedThread {
+  feedItemId: number = 0;
+  targetPid: number = 0;
   isVideo: boolean = false;
   tid: number = 0;
   title: string = '';
@@ -143,12 +148,34 @@ export function parsePersonalizedFeed(bytes: Uint8Array): PersonalizedThread[] {
 
 function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
   const t: PersonalizedThread = new PersonalizedThread();
+  let itemId: number = 0;
+  let threadType: number = 0;
+  let postId: number = 0;
+  let originTid: number = 0;
   const reader: ProtoReader = new ProtoReader(bytes);
   while (reader.hasMore()) {
     const f: number = reader.readTag();
     switch (f) {
+      case T_ID:
+        itemId = Number(reader.readUint64());
+        break;
       case T_TID:
-        t.tid = Number(reader.readVarint());
+        t.tid = Number(reader.readUint64());
+        break;
+      case T_POST_ID:
+        postId = Number(reader.readUint64());
+        break;
+      case T_ORIGIN:
+        if (reader.wireType === WireType.LENGTH_DELIMITED) {
+          const origin = new ProtoReader(reader.readBytes());
+          while (origin.hasMore()) {
+            const of: number = origin.readTag();
+            if (of === 5 && origin.wireType === WireType.LENGTH_DELIMITED) {
+              const value: string = origin.readString();
+              if (/^[0-9]+$/.test(value)) { originTid = Number(value); }
+            } else { origin.skipField(); }
+          }
+        } else { reader.skipField(); }
         break;
       case T_TITLE:
         t.title = reader.readString();
@@ -201,7 +228,9 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
       case T_VIDEO_INFO:
         t.isVideo = true; reader.skipField(); break;
       case T_THREAD_TYPE:
-        if (reader.wireType === WireType.VARINT) { t.isVideo = Number(reader.readVarint()) === 40 || t.isVideo; }
+        if (reader.wireType === WireType.VARINT) {
+          threadType = Number(reader.readVarint()); t.isVideo = threadType === 40 || t.isVideo;
+        }
         else { reader.skipField(); }
         break;
       default:
@@ -209,6 +238,16 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
         break;
     }
   }
+  // 回复推荐的 id 可能是回复身份；官方 getTid 优先 tid，仅缺省时回退 id。
+  if (t.tid === 0) { t.tid = itemId; }
+  // type=81 的回复推荐使用虚拟 tid，pb/page 必须读 origin_thread_info.tid。
+  if (threadType === 81) {
+    t.feedItemId = t.tid;
+    t.tid = originTid;
+    t.targetPid = Number.isSafeInteger(postId) && postId > 0 ? postId : 0;
+    if (!Number.isSafeInteger(t.feedItemId) || t.feedItemId <= 0) { t.feedItemId = 0; }
+  }
+  if (!Number.isSafeInteger(t.tid) || t.tid <= 0) { t.tid = 0; }
   return t;
 }
 
@@ -285,6 +324,8 @@ function readAuthor(bytes: Uint8Array, t: PersonalizedThread): void {
 export function personalizedToBrief(t: PersonalizedThread): ThreadBrief {
   const b: ThreadBrief = new ThreadBrief();
   b.tid = t.tid;
+  b.feedItemId = t.feedItemId;
+  b.targetPid = t.targetPid;
   b.isVideo = t.isVideo;
   b.title = t.title;
   b.summary = t.summary;

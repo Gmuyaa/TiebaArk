@@ -9,10 +9,38 @@ import { cachedForumAvatar } from '../viewmodel/ForumReadCache';
 import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot } from '../common/material/MaterialConfig';
+import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 吧头身份区：未关注为关注入口，确认关注后同一按钮切换为签到。 */
 @ComponentV2
 export struct ForumIdentity {
+  @Param active: boolean = true;
+  @Local foreground: ForegroundRefresh = foregroundRefresh;
+  private foregroundRevision: number = foregroundRefresh.revision;
+  private foregroundRefreshPending: boolean = false;
+  private foregroundAccount: string = '';
+
+  @Monitor('foreground.revision', 'active')
+  onForegroundRefresh(): void {
+    if (!this.active) { this.foregroundRefreshPending = false; return; }
+    if (this.foregroundRevision === this.foreground.revision) { return; }
+    this.foregroundRevision = this.foreground.revision;
+    this.foregroundAccount = authSession.forumCacheSessionKey();
+    this.foregroundRefreshPending = true;
+    this.applyForegroundRefresh();
+  }
+
+  @Monitor('vm.reading', 'vm.signing', 'vm.follow.loading', 'vm.follow.pending', 'vm.follow.known')
+  applyForegroundRefresh(): void {
+    if (!this.foregroundRefreshPending || !this.active || this.vm.reading || this.vm.signing ||
+      this.vm.follow.loading || this.vm.follow.pending || !this.vm.follow.known) { return; }
+    this.foregroundRefreshPending = false;
+    if (this.foregroundAccount.length === 0 || this.foregroundAccount !== authSession.forumCacheSessionKey()) { return; }
+    hilog.info(0x0000, 'ForegroundRefresh', 'forum requested revision=%{public}d', this.foregroundRevision);
+    void this.vm.ensureMembership(this.context(), true);
+  }
+
   @Param forumId: number = 0;
   @Param forumName: string = '';
   @Param avatar: string = '';
@@ -23,11 +51,18 @@ export struct ForumIdentity {
   @Event onIntroductionVisible: (visible: boolean) => void = (visible: boolean): void => {};
   @Local vm: ForumHeaderVM = new ForumHeaderVM();
   @Local auth: AuthSession = authSession;
+  private boundAccount: string = '';
+  private boundForumId: number = 0;
+  private boundForumName: string = '';
 
   aboutToAppear(): void { void this.bind(); }
   aboutToDisappear(): void { this.vm.dispose(); }
   @Monitor('forumId', 'forumName', 'auth.snapshot')
-  onIdentityChanged(): void { void this.bind(); }
+  onIdentityChanged(): void {
+    if (this.boundForumId === this.forumId && this.boundForumName === this.forumName &&
+      this.boundAccount === authSession.forumCacheSessionKey()) { return; }
+    void this.bind();
+  }
   @Monitor('vm.follow.following', 'vm.follow.known', 'vm.follow.pending')
   onFollowChanged(): void {
     this.onIntroductionVisible(this.showIntroduction());
@@ -40,6 +75,9 @@ export struct ForumIdentity {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
   private async bind(): Promise<void> {
+    this.boundAccount = authSession.forumCacheSessionKey();
+    this.boundForumId = this.forumId;
+    this.boundForumName = this.forumName;
     await this.vm.initialize(this.context(), this.forumId, this.forumName);
     this.onIntroductionVisible(this.showIntroduction());
     void this.vm.ensureIntroduction(this.context());

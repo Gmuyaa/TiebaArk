@@ -12,6 +12,7 @@ export const SEARCH_FIELD_HEIGHT: number = 32;
 
 @ComponentV2
 export struct SearchField {
+  @Param inputId: string = 'search-field-input';
   @Param text: string = '';
   @Param placeholder: string = '搜索';
   @Param editable: boolean = true;
@@ -67,7 +68,7 @@ export struct SearchField {
           .fontColor([AppTheme.TAB_UNDERLINE_TEXT])
         if (this.editable) {
           TextInput({ text: this.text, placeholder: this.placeholder })
-            .id('search-field-input')
+            .id(this.inputId)
             .fontSize(16)
             .fontColor(AppTheme.TEXT_MAIN)
             .placeholderColor(AppTheme.TAB_UNDERLINE_TEXT)

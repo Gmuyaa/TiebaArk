@@ -18,6 +18,7 @@ export interface RawSearchPostEntry {
 }
 
 export interface RawSearchPostAuthor {
+  /** 可能下发昵称，不能视作稳定账号名或用户身份。 */
   name?: string;
   name_show?: string;
 }

@@ -18,10 +18,24 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { UserPageVM } from '../viewmodel/UserPageVM';
 import { AppTheme } from '../theme/Theme';
 import { avatarTrace } from '../utils/AvatarTrace';
+import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 
 @ComponentV2
 export struct UserPage {
+  @Local pageVisible: boolean = false;
+  @Local foreground: ForegroundRefresh = foregroundRefresh;
+  private foregroundRevision: number = foregroundRefresh.revision;
+
+  @Monitor('foreground.revision', 'pageVisible')
+  onForegroundRefresh(): void {
+    if (!this.pageVisible || this.foregroundRevision === this.foreground.revision) { return; }
+    this.foregroundRevision = this.foreground.revision;
+    const uid: number = this.vm.profile.uid || this.routeParams?.uid || 0;
+    if (authSession.isLoggedIn() && uid === authSession.snapshot.uid) {
+      void this.foreground.refreshAvatar(this.context());
+    }
+  }
   @Local pullRefreshDragging: boolean = false;
   @Param routeParams: UserPageParams | undefined = undefined;
   @Local vm: UserPageVM = new UserPageVM();
@@ -165,10 +179,12 @@ export struct UserPage {
       })
     }.hideTitleBar(true)
     .onShown(() => {
+      this.pageVisible = true;
       if (authSession.isLoggedIn() && this.routeParams?.uid === authSession.snapshot.uid) {
-        void authSession.refreshOwnAvatarOnEntry(this.context());
+        void this.foreground.refreshAvatar(this.context());
       }
     })
+    .onHidden(() => { this.pageVisible = false; })
   }
 
   @Builder

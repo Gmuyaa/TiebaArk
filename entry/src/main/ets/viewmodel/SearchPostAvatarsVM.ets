@@ -1,14 +1,17 @@
 /** 搜帖卡片按需补图；只保留当前查询的内存结果，不新增落盘缓存。 */
-export type SearchAvatarFetcher = (name: string, forum: boolean) => Promise<string>;
+export type SearchAvatarFetcher = (name: string, forum: boolean, tid: number, pid: number) => Promise<string>;
 
 class AvatarTask {
   name: string;
   forum: boolean;
   key: string;
   epoch: number;
-  constructor(name: string, forum: boolean, epoch: number) {
+  tid: number;
+  pid: number;
+  constructor(name: string, forum: boolean, epoch: number, tid: number, pid: number) {
     this.name = name; this.forum = forum; this.epoch = epoch;
-    this.key = `${forum ? 'forum' : 'author'}:${name}`;
+    this.tid = tid; this.pid = pid;
+    this.key = forum ? `forum:${name}` : `author:${tid}:${pid}`;
   }
 }
 
@@ -29,16 +32,18 @@ export class SearchPostAvatarsVM {
     this.urls = new Map();
   }
 
-  request(account: string, forumName: string): void {
-    this.enqueue(account, false);
-    this.enqueue(forumName, true);
+  request(tid: number, pid: number, forumName: string): void {
+    if (Number.isSafeInteger(tid) && tid > 0 && Number.isSafeInteger(pid) && pid > 0) {
+      this.enqueue('', false, tid, pid);
+    }
+    this.enqueue(forumName, true, 0, 0);
     this.pump();
   }
 
-  private enqueue(name: string, forum: boolean): void {
+  private enqueue(name: string, forum: boolean, tid: number, pid: number): void {
     const clean: string = name.trim();
-    if (clean.length === 0 || this.fetcher === undefined) { return; }
-    const task: AvatarTask = new AvatarTask(clean, forum, this.epoch);
+    if ((forum && clean.length === 0) || this.fetcher === undefined) { return; }
+    const task: AvatarTask = new AvatarTask(clean, forum, this.epoch, tid, pid);
     const failed: number | undefined = this.failedAt.get(task.key);
     if (this.urls.has(task.key) || this.pending.has(task.key)
       || (failed !== undefined && Date.now() - failed < 60000)) { return; }
@@ -58,7 +63,7 @@ export class SearchPostAvatarsVM {
 
   private async run(task: AvatarTask, fetcher: SearchAvatarFetcher): Promise<void> {
     let url: string = '';
-    try { url = await fetcher(task.name, task.forum); } catch (_) { /* 保留文字兜底并进入冷却。 */ }
+    try { url = await fetcher(task.name, task.forum, task.tid, task.pid); } catch (_) { /* 保留文字兜底并进入冷却。 */ }
     this.inflight--;
     if (task.epoch === this.epoch) {
       this.pending.delete(task.key);

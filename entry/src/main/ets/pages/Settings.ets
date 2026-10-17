@@ -21,6 +21,7 @@ import { common } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
 import { promptAction } from '@kit.ArkUI';
 import { authSession } from '../auth/AuthSession';
+import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { StoreResult } from '../auth/AuthStore';
 import { AppTheme } from '../theme/Theme';
 import { GlassBackButton } from '../components/GlassBackButton';
@@ -93,6 +94,18 @@ const TOP_NAV_PREVIEW_DUAL_H: number = 119 + 28;
 @ComponentV2
 struct SettingsPage {
   @Local smartReach: SmartReachStore = smartReachStore;
+  @Local pageVisible: boolean = false;
+  @Local foreground: ForegroundRefresh = foregroundRefresh;
+  private foregroundRevision: number = foregroundRefresh.revision;
+
+  @Monitor('foreground.revision', 'pageVisible')
+  onForegroundRefresh(): void {
+    if (!this.pageVisible || this.cropOpen || this.foregroundRevision === this.foreground.revision) { return; }
+    this.foregroundRevision = this.foreground.revision;
+    if (this.pane === SettingsPane.NONE || this.pane === SettingsPane.ACCOUNT) {
+      void this.foreground.refreshAvatar(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    }
+  }
 
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
 
@@ -141,10 +154,11 @@ struct SettingsPage {
   }
 
   onPageShow(): void {
+    this.pageVisible = true;
     this.refreshCacheStats();
     if ((this.pane === SettingsPane.NONE || this.pane === SettingsPane.ACCOUNT) &&
       authSession.isLoggedIn()) {
-      void authSession.refreshOwnAvatarOnEntry(
+      void this.foreground.refreshAvatar(
         this.getUIContext().getHostContext() as common.UIAbilityContext);
     }
     if (this.pane === SettingsPane.APP_PERMISSIONS) {
@@ -157,9 +171,12 @@ struct SettingsPage {
    * 交接给共享刷新队列（换号则放弃），不是静默丢弃 —— 语义在 `AvatarEditVM.handOffSync`。
    */
   aboutToDisappear(): void {
+    this.pageVisible = false;
     this.avatarVm.dispose();
     this.cacheStats.dispose();
   }
+
+  onPageHide(): void { this.pageVisible = false; }
 
   /**
    * 系统返回：先退出关于页内层或其它设置的数据说明，再回分类列表。
@@ -295,7 +312,7 @@ struct SettingsPage {
     this.autoFillCount = 0;            // 首屏补页计数随新页归零
     this.pane = next;
     if (next === SettingsPane.ACCOUNT && from !== next && authSession.isLoggedIn()) {
-      void authSession.refreshOwnAvatarOnEntry(
+      void this.foreground.refreshAvatar(
         this.getUIContext().getHostContext() as common.UIAbilityContext);
     }
     this.resetScroll();
@@ -391,7 +408,7 @@ struct SettingsPage {
     this.pane = next;
     if ((next === SettingsPane.NONE || next === SettingsPane.ACCOUNT) &&
       from !== next && authSession.isLoggedIn()) {
-      void authSession.refreshOwnAvatarOnEntry(
+      void this.foreground.refreshAvatar(
         this.getUIContext().getHostContext() as common.UIAbilityContext);
     }
     this.pendingRestore = this.paneScrollY.get(String(next)) ?? 0;
@@ -1152,7 +1169,7 @@ struct SettingsPage {
       content: (): void => { this.SignSettingsRows() }
     })
     SettingsNote({ text: signStrategyStore.strategy === 1
-      ? '官方批量签到暂不可用：协议与真实结果仍待验证。点击一键签到不会发出请求。'
+      ? '通过官方批量接口签到，每批最多 50 个吧。普通账号通常支持 7 级及以上的吧，具体以服务端条件为准；未满足条件的吧可切换为逐个签到。'
       : '逐个签到按关注吧顺序依次提交，可逐项确认结果。' })
   }
 

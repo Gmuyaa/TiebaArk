@@ -141,6 +141,7 @@ export struct ForumRefreshButton {
       })
       .transition(TransitionEffect.translate({ x: left ? -80 : 80 }).animation({ curve: curves.interpolatingSpring(0, 1, 170, 17) }))
       .onTouch((event: TouchEvent): void => {
+        event.stopPropagation();
         if (event.type === TouchType.Down) { this.pressed = true; }
         else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
           this.pressed = false; this.scheduleMove();
@@ -172,9 +173,6 @@ export struct ForumRefreshButton {
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      if (this.left) { this.Button(true); } else { this.Button(false); }
-    }
-    .width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
+    this.Button(this.left)
   }
 }

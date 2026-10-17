@@ -47,6 +47,10 @@ export class ThreadActionBarStore {
       if (await store.has(KEY_STYLE)) {
         const raw: number = (await store.get(KEY_STYLE, DEFAULT_ACTION_BAR_STYLE as number)) as number;
         this.style = normalizeActionBarStyle(raw);
+        if (raw !== (this.style as number)) {
+          await store.put(KEY_STYLE, this.style as number);
+          await store.flush();
+        }
         hilog.info(DOMAIN, TAG, 'action bar style loaded: %{public}s', this.describe());
         return;
       }

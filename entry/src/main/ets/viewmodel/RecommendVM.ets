@@ -3,7 +3,7 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  ForumBrief, PageInfo, ThreadBrief, mergeThreadPages
+  ForumBrief, PageInfo, ThreadBrief, mergeThreadPages, threadBriefIdentity
 } from '../model/ThreadList';
 import {
   personalizedToBriefs
@@ -59,7 +59,7 @@ export class RecommendVM {
   private acceptRecommended(items: ThreadBrief[], replace: boolean): boolean {
     if (replace) { this.recommendSeen.clear(); }
     let fresh: boolean = false;
-    for (const item of items) { if (!this.recommendSeen.has(item.tid)) { fresh = true; this.recommendSeen.add(item.tid); } }
+    for (const item of items) { const key: number = threadBriefIdentity(item); if (!this.recommendSeen.has(key)) { fresh = true; this.recommendSeen.add(key); } }
     const visible: ThreadBrief[] = items.filter((item: ThreadBrief): boolean => !item.isVideo);
     this.threads = mergeThreadPages(replace ? [] : this.threads, visible);
     return items.length > 0 && fresh;

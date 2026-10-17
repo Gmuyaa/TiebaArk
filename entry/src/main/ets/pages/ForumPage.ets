@@ -28,6 +28,7 @@ import { ThreadListVM } from '../viewmodel/ThreadListVM';
 import { AppTheme } from '../theme/Theme';
 import { ImageViewer } from '../components/ImageViewer';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
 import { buildThreadCardMenu } from '../components/ThreadCardMenu';
@@ -39,6 +40,7 @@ import {
 } from '../common/appearance/ForumHeroStyle';
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassCircleButton } from '../components/GlassCircleButton';
+import { SearchField } from '../components/SearchField';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { ForumPageParams, NavigationService, SearchResultParams } from '../navigation/AppNavigation';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
@@ -64,6 +66,7 @@ let forumTintSerial: number = 0;
 
 @ComponentV2
 export struct ForumPage {
+  @Local cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   @Local vm: ThreadListVM = new ThreadListVM();
   /** PageMap 注入的路由参数，唯一定义见 navigation/AppNavigation.ets 的 ForumPageParams */
   @Param routeParams: ForumPageParams | undefined = undefined;
@@ -74,7 +77,10 @@ export struct ForumPage {
   private pullEligible: boolean = false;
   @Local headerRefreshRevision: number = 0;
   @Local introductionVisible: boolean = false;
-  @Local moreShown: boolean = false;
+  @Local forumSearchExpanded: boolean = false;
+  @Local forumSearchProgress: number = 0;
+  @Local forumSearchText: string = '';
+  @Local forumSearchSlotWidth: number = 40;
   @Local restorePending: boolean = false;
   @Local pinnedExpanded: boolean = false;
   /**
@@ -217,13 +223,37 @@ export struct ForumPage {
   }
 
   private openForumSearch(): void {
+    if (this.forumSearchExpanded) { return; }
+    this.forumSearchExpanded = true;
+    this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseOut }, (): void => {
+      this.forumSearchProgress = 1;
+    });
+    setTimeout((): void => {
+      if (this.active && this.pageVisible && this.forumSearchExpanded) {
+        this.getUIContext().getFocusController().requestFocus('forum-search-input');
+      }
+    }, 280);
+  }
+
+  private closeForumSearch(): void {
+    this.getUIContext().getFocusController().clearFocus();
+    this.forumSearchExpanded = false;
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+      this.forumSearchProgress = 0;
+    });
+  }
+
+  private submitForumSearch(): void {
+    const word: string = this.forumSearchText.trim();
+    if (word.length === 0) { return; }
     const name: string = this.forumName.trim();
     if (name.length === 0) {
       this.getUIContext().getPromptAction().showToast({ message: '吧名尚未加载，请稍后重试' });
       return;
     }
     this.saveScrollPosition();
-    NavigationService.openSearchResult({ forumName: name } as SearchResultParams);
+    this.getUIContext().getFocusController().clearFocus();
+    NavigationService.openSearchResult({ forumName: name, word } as SearchResultParams);
   }
 
   private async handleRefresh(scrollToContentTop: boolean = false): Promise<void> {
@@ -302,6 +332,7 @@ export struct ForumPage {
   }
 
   private goBack(): void {
+    if (this.forumSearchExpanded) { this.closeForumSearch(); return; }
     NavigationService.back();
   }
 
@@ -407,6 +438,11 @@ export struct ForumPage {
     )
     .onShown((): void => { this.pageVisible = true; })
     .onHidden((): void => { this.pageVisible = false; })
+    .onBackPressed((): boolean => {
+      if (!this.forumSearchExpanded) { return false; }
+      this.closeForumSearch();
+      return true;
+    })
   }
 
   /** 无有效吧名时使用的普通顶栏。同样要让出状态栏（页面从 y=0 起排） */
@@ -492,30 +528,39 @@ export struct ForumPage {
               this.goBack();
             }
           })
-          Row({ space: 8 }) {
+          Stack({ alignContent: Alignment.End }) {
+            Row({ space: 8 }) {
+              ForumAvatarImage({ url: this.vm.forum.avatar, forumName: this.titleText(),
+                avatarSize: 28, radius: forumAvatarRadius(28), onHero: true })
+              Text(this.titleText().endsWith('吧') ? this.titleText() : `${this.titleText()}吧`)
+                .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Color.White)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            }
+            .width('100%').padding({ right: 50 })
+            .opacity(this.tabsNavProgress * (1 - this.forumSearchProgress))
+            .hitTestBehavior(this.tabsNavProgress > 0 && !this.forumSearchExpanded ? HitTestMode.Default : HitTestMode.None)
+            .onClick(() => { this.openForumDirectory('forum'); })
 
-            ForumAvatarImage({ url: this.vm.forum.avatar, forumName: this.titleText(),
-              avatarSize: 28, radius: forumAvatarRadius(28), onHero: true })
-            Text(this.titleText().endsWith('吧') ? this.titleText() : `${this.titleText()}吧`)
-              .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Color.White)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            Stack({ alignContent: Alignment.End }) {
+              SearchField({ inputId: 'forum-search-input', text: this.forumSearchText,
+                placeholder: '搜索吧内帖子', minimumHeight: 40,
+                onChange: (value: string): void => { this.forumSearchText = value; },
+                onSubmit: (): void => { this.submitForumSearch(); } })
+                .opacity(this.forumSearchProgress)
+                .hitTestBehavior(this.forumSearchExpanded ? HitTestMode.Default : HitTestMode.None)
+              GlassCircleButton({ symbol: $r('sys.symbol.magnifyingglass'), iconSize: 22, iconOffsetX: -3,
+                accessibilityLabel: '搜索吧内帖子', onTap: (): void => { this.openForumSearch(); } })
+                .opacity(1 - this.forumSearchProgress)
+                .hitTestBehavior(this.forumSearchExpanded ? HitTestMode.None : HitTestMode.Default)
+            }
+            .width(40 + Math.max(0, this.forumSearchSlotWidth - 40) * this.forumSearchProgress)
+            .height(40).clip(true).id('forum-search-expand')
           }
-          .layoutWeight(1).opacity(this.tabsNavProgress)
-          .hitTestBehavior(this.tabsNavProgress > 0 ? HitTestMode.Default : HitTestMode.None)
-          .onClick(() => { this.openForumDirectory('forum'); })
-
-          GlassCircleButton({ symbol: $r('sys.symbol.magnifyingglass'), iconSize: 22, iconOffsetX: -3,
-            onTap: (): void => { this.openForumSearch(); } })
-          // more 字形在字面框内偏右；真机 24fp 笔画质心偏移约 4vp。
-          GlassCircleButton({ symbol: $r('sys.symbol.more'), iconSize: 24, iconOffsetX: -4,
-            onTap: (): void => { this.moreShown = !this.moreShown; } })
-            .bindMenu(this.moreShown, [{ value: '吧资料', action: (): void => {
-              this.moreShown = false;
-              this.openForumDirectory('forum');
-            } }, { value: '吧成员', action: (): void => {
-              this.moreShown = false;
-              this.openForumMember();
-            } }], { onDisappear: (): void => { this.moreShown = false; } })
+          .layoutWeight(1).height(40)
+          .onAreaChange((_old: Area, area: Area): void => {
+            const width: number = Number(area.width);
+            if (width > 0 && Math.abs(width - this.forumSearchSlotWidth) > 0.5) { this.forumSearchSlotWidth = width; }
+          })
         }
         .width('100%')
         .height(56)
@@ -523,6 +568,7 @@ export struct ForumPage {
         .alignItems(VerticalAlign.Center)
 
         ForumIdentity({ forumId: this.vm.forum.id, forumName: this.titleText(), avatar: this.vm.forum.avatar,
+          active: this.pageVisible && this.viewerUrls.length === 0,
           refreshRevision: this.headerRefreshRevision, memberCount: this.vm.forum.memberCount,
           threadCount: this.vm.forum.threadCount,
           onOpenInformation: (): void => { this.openForumDirectory('forum'); },
@@ -537,7 +583,7 @@ export struct ForumPage {
       .padding({ top: this.statusBarH })
     }
     .width('100%')
-    .height(this.heroHeight() + this.statusBarH)
+    .height(this.heroHeight() + this.statusBarH + 24)
     .clip(true)
     // 底图未加载完 / 无主题色时的兜底底色，避免解析期闪白
     .backgroundColor(this.heroPalette().bottomColor)
@@ -734,7 +780,7 @@ export struct ForumPage {
               }
             }
             .backgroundColor(AppTheme.FORUM_TAB_BG)
-            .borderRadius({ topLeft: 24, topRight: 24 })
+            .borderRadius({ topLeft: 24 * (1 - this.tabsNavProgress), topRight: 24 * (1 - this.tabsNavProgress) })
           }
           .width('100%')
           .layoutWeight(1)
@@ -879,6 +925,19 @@ export struct ForumPage {
       isTop: item.isTop, isGood: item.isGood,
       agreeCount: item.agreeCount, replyCount: item.replyCount,
       shareCount: item.shareCount,
+      onToggleLike: (state: ThreadCardActionState): void => {
+        void this.cardActions.toggleLike(state, this.getUIContext().getHostContext() as common.UIAbilityContext,
+          item.tid, this.forumName).then((reason: string): void => {
+            if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+          });
+      },
+      onOpenComments: (): void => { this.saveScrollPosition(); NavigationService.openThreadDetail({ tid: item.tid, forumName: this.forumName, replyCount: item.replyCount, openComments: true }); },
+      onShare: (): void => {
+        void this.cardActions.share(this.getUIContext().getHostContext() as common.UIAbilityContext,
+          item.tid, item.title).then((reason: string): void => {
+            if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
+          });
+      },
       menu: buildThreadCardMenu(this.getUIContext(), item),
       imageScroller: this.imageScroller(item.tid),
       canOpenAuthor: item.authorId > 0 || item.authorAvatar.length > 0,

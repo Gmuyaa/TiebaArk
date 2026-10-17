@@ -17,6 +17,7 @@ import { MessageSettings } from '../model/MessageSettings';
 import { StoredThread, UserPostItem } from '../model/MyContent';
 import { NotifyItem } from '../model/Notify';
 import { OfficialMessageSettings } from '../model/OfficialMessages';
+import { OfficialSignResult, OfficialSignCapability } from '../model/OfficialSign';
 import { DirectoryData } from '../model/PageDirectory';
 import { PersonalizedThread } from '../model/PersonalizedFeed';
 import { PrivacyMarks } from '../model/PrivacyMarks';
@@ -87,6 +88,13 @@ export class SignForumResponse extends ApiResult {
   bonusPoint: string = '';
   /** 重复签到以业务码 160002 判断，不依赖可能过期的列表 is_sign。 */
   alreadySigned: boolean = false;
+}
+
+export class OfficialSignResponse extends ApiResult {
+  data: OfficialSignResult = new OfficialSignResult();
+}
+export class OfficialSignCapabilityResponse extends ApiResult {
+  data: OfficialSignCapability = new OfficialSignCapability();
 }
 
 /**

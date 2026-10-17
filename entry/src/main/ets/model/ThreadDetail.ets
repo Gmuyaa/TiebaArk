@@ -466,10 +466,17 @@ export class ContentPiece {
    * 这里只会拦住字母和下划线这类残码。
    */
   private static tokenContinues(text: string, at: number): boolean {
-    if (at >= text.length) {
+    // 摘要会把相邻的独立表情片段拼成连续编码，不能把下一个编码当成英文后缀。
+    let boundary: number = at;
+    while (text.startsWith('image_emoticon', boundary)) { boundary += 'image_emoticon'.length; }
+    if (text.startsWith('shoubai_emoji_face_', boundary)) {
+      const next: string = text[boundary + 'shoubai_emoji_face_'.length];
+      if (next >= '0' && next <= '9') { return false; }
+    }
+    if (boundary >= text.length) {
       return false;
     }
-    const ch: string = text[at];
+    const ch: string = text[boundary];
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_';
   }
   /**
@@ -1043,6 +1050,9 @@ export class ThreadDetail {
   title: string = '';
   replyCount: number = 0;
   agreeCount: number = 0;
+  /** 服务端分享数与累计收藏数；-1表示未返回有效计数，收藏数不代表个人收藏态。 */
+  shareCount: number = -1;
+  collectCount: number = -1;
   /**
    * 首楼（主帖）pid，来自服务端 `thread.post_id`（`RawThreadPage.ets:143` 注释：
    * "首楼 pid，实测等于 `post_list[0].id`"）。
@@ -1116,6 +1126,10 @@ export class ThreadDetail {
       d.createTimeMs = toNum(thread.create_time) * 1000;
       // 收藏态：collect_status 非 0 即已收藏（实测收藏后=2，不能用 toFlag 的 ===1）
       d.isStored = toNum(thread.collect_status) !== 0;
+      d.shareCount = thread.share_num !== undefined && Number.isFinite(thread.share_num) && thread.share_num >= 0 ?
+        Math.floor(thread.share_num) : -1;
+      d.collectCount = thread.collect_num !== undefined && Number.isFinite(thread.collect_num) && thread.collect_num >= 0 ?
+        Math.floor(thread.collect_num) : -1;
       d.author = UserBrief.fromRaw(thread.author);
     }
 

@@ -129,8 +129,8 @@ export function imageBox(info: FeedImageInfo, density: number, spec: ImageBoxSpe
   box.long = info.long || ratio < PREVIEW_LONG_RATIO;
   const nativeWidth: number = info.width / Math.max(1, density) * spec.maxNativeScale;
   if (box.long && spec.cropLong) {
-    // 长图：宽度按行高等比收，高度固定为行高，超出部分交给 `Cover` 裁
-    box.width = Math.max(1, Math.min(spec.maxWidth, nativeWidth, spec.rowHeight * ratio));
+    // 长图使用可读的预览宽度，固定行高裁切；不按整张长图比例收成细条。
+    box.width = Math.max(1, Math.min(spec.maxWidth, nativeWidth));
     box.height = Math.max(1, spec.rowHeight);
   } else {
     // 常规：高度上限换算成宽度上限，宽高成对，图片完整显示

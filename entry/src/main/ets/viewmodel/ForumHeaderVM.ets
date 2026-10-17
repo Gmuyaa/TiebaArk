@@ -6,6 +6,7 @@ import { ForumMembership } from '../model/ThreadList';
 import { FollowForumItem, FollowForumList } from '../model/FollowForum';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { followAction, FollowActionVM } from './FollowActionVM';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 function ownerKey(): string {
   return authSession.forumCacheSessionKey();
@@ -152,7 +153,7 @@ export class ForumHeaderVM {
       if (!this.follow.following) { return; }
       const membership: ForumMembership = cachedForumMembership(this.forumName, this.forumId) ?? response.data.membership;
       // FRS JSON 有时省略签到段，复用已验证的 forumGuide 只读链路。
-      if (membership.signed === undefined) {
+      if (membership.signed === undefined || (retry && response.data.membership.signed === undefined)) {
         if (authSession.session().tbs.length === 0) {
           const result = await authSession.refreshTbs(context);
           if (!this.current(sequence, day)) { return; }
@@ -166,7 +167,7 @@ export class ForumHeaderVM {
         const seen: Set<number> = new Set<number>();
         for (let page: number = 1; page <= 10; page++) {
           let guide: FollowForumList;
-          if (page === 1) { guide = await readFollowForumsShared(context); }
+          if (page === 1) { guide = await readFollowForumsShared(context, retry); }
           else {
             const response = await this.api.fetchFollowForums(authSession.session(), page, 50);
             if (!this.current(sequence, day)) { return; }
@@ -179,6 +180,8 @@ export class ForumHeaderVM {
           if (item !== undefined) {
             if (membership.level < 0 && item.level > 0) { membership.level = item.level; }
             if (item.signKnown) { membership.signed = item.isSigned; }
+            if (item.continuousCount >= 0) { membership.continuousCount = item.continuousCount; }
+            if (item.totalCount >= 0) { membership.totalCount = item.totalCount; }
             break;
           }
           const before: number = seen.size;
@@ -190,6 +193,8 @@ export class ForumHeaderVM {
       if (this.confirmedDay === day) { membership.signed = true; }
       this.membership = membership;
       this.readDay = day;
+      hilog.info(0x0000, 'ForegroundRefresh', 'forum state applied sign=%{public}d',
+        membership.signed === undefined ? -1 : (membership.signed ? 1 : 0));
       if (membership.signed === undefined && this.errorText.length === 0) {
         this.errorText = '签到状态暂未获取，请重试';
       }
@@ -243,7 +248,7 @@ export class ForumHeaderVM {
       const response = await this.api.signForum(device, authSession.session(), this.forumName);
       if (!this.current(sequence, day)) { return ''; }
       if (!response.ok) { return response.describeFailure(); }
-      confirmForumSign(this.forumName);
+      confirmForumSign(this.forumName, response.stats, this.forumId);
       this.confirmedDay = day;
       const membership: ForumMembership = new ForumMembership();
       membership.level = this.membership.level;
