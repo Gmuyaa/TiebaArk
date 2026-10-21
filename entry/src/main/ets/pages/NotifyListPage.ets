@@ -5,11 +5,12 @@ import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { PageHeader } from '../components/PageHeader';
-import { NotifyItem, NotifyKind } from '../model/Notify';
+import { NotifyAuthor, NotifyItem, NotifyKind } from '../model/Notify';
 import { NavigationService, NotifyListParams } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { NotifyVM } from '../viewmodel/NotifyVM';
+import { authSession, AuthSession } from '../auth/AuthSession';
 
 /** kind → 页面标题（也是唯一被消费的文案真值源） */
 export function notifyPageTitle(kind: NotifyKind): string {
@@ -26,6 +27,9 @@ export struct NotifyListPage {
   @Local vm: NotifyVM = new NotifyVM('reply');
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
+  @Local auth: AuthSession = authSession;
+  @Monitor('auth.snapshot')
+  onAccountChanged(): void { void this.reload(); }
   private scroller: ListScroller = new ListScroller();
 
   private context(): common.UIAbilityContext {
@@ -49,8 +53,12 @@ export struct NotifyListPage {
   }
 
   /** 点一条通知进帖子：带 targetPid（回复我=被回的那楼；赞我=被赞的楼，主题帖被赞则不带） */
-  private openTarget(item: NotifyItem): void {
-    if (item.kind === 'at' && (item.threadId === 0 || (item.postIdText.length > 0 && item.postId === 0))) {
+  private openTarget(item: NotifyItem, original: boolean = false): void {
+    if (item.deleted && !original) {
+      this.getUIContext().getPromptAction().showToast({ message: '原内容已删除' }); return;
+    }
+    if ((item.threadIdText.length > 0 && item.threadId === 0) ||
+      (!original && item.postIdText.length > 0 && item.postIdText !== '0' && item.postId === 0)) {
       this.getUIContext().getPromptAction().showToast({ message: '帖子标识超出当前导航支持范围' }); return;
     }
     if (item.threadId <= 0) {
@@ -59,9 +67,16 @@ export struct NotifyListPage {
     }
     NavigationService.openThreadDetail({
       tid: item.threadId,
-      targetPid: item.postId > 0 ? item.postId : undefined,
+      targetPid: !original && item.postId > 0 ? item.postId : undefined,
       forumName: item.forumName
     });
+  }
+
+  private openUser(item: NotifyItem): void {
+    if (item.userId <= 0 && item.portrait.length === 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '没有取得可用的用户身份' }); return;
+    }
+    NavigationService.openUser({ uid: item.userId, portrait: item.portrait, name: item.displayName() });
   }
 
   /** 通知行主文案：谁、做了什么、在哪（不编造：字段缺失就少显示一段） */
@@ -93,7 +108,7 @@ export struct NotifyListPage {
             } else {
               ForEach(this.vm.items, (item: NotifyItem) => {
                 ListItem() { this.NotifyRow(item) }
-              }, (item: NotifyItem) => `${item.kind}-${item.threadIdText || item.threadId}-${item.postIdText || item.postId}-${item.userIdText || item.userId}-${item.timeMs}`)
+              }, (item: NotifyItem) => item.key())
               if (!this.vm.hasItems() && this.vm.error.length === 0) {
                 ListItem() { PageState({ message: '还没有通知' }) }
               }
@@ -105,7 +120,9 @@ export struct NotifyListPage {
           }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
           .edgeEffect(EdgeEffect.Spring)
           .scrollBar(BarState.Off)
-          .onReachEnd(() => { void this.vm.loadMore(this.context()); })
+          .onReachEnd(() => {
+            if (this.vm.loadMoreError.length === 0) { void this.vm.loadMore(this.context()); }
+          })
         }.refreshOffset(PULL_REFRESH_OFFSET)
         .onStateChange((state: RefreshStatus) => {
           this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;
@@ -125,22 +142,114 @@ export struct NotifyListPage {
     }
   }
 
-  /** 一条通知：头像 + 名字 + 内容行 + 时间（右侧箭头可进帖子） */
+  private ownName(): string { return authSession.snapshot.nickname || authSession.snapshot.userName || '我'; }
+
+  private openAuthor(author: NotifyAuthor): void {
+    if (author.userId <= 0 && author.portrait.length === 0) { return; }
+    NavigationService.openUser({ uid: author.userId, portrait: author.portrait, name: author.displayName() });
+  }
+
   @Builder
   NotifyRow(item: NotifyItem) {
+    if (item.kind === 'at') { this.MentionRow(item) }
+    else { this.InteractionCard(item) }
+  }
+
+  /** 头像/用户名/时间 → 互动内容 → 独立原帖信息块。 */
+  @Builder
+  InteractionCard(item: NotifyItem) {
+    Column({ space: 14 }) {
+      Row({ space: 10 }) {
+        AvatarComponent({ url: item.avatar, avatarSize: 42, fallbackName: item.displayName() })
+          .onClick(() => { this.openUser(item); })
+        Column({ space: 4 }) {
+          Text(item.displayName()).fontSize(15).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .onClick(() => { this.openUser(item); })
+          if (item.timeMs > 0) {
+            Text(this.timeText(item.timeMs)).fontSize(11).fontColor(AppTheme.TEXT_MUTED)
+          }
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      }.width('100%')
+
+      if (item.kind === 'agree') {
+        Column({ space: 8 }) {
+          Text(item.hasPost ? '赞了你的回复' : item.threadId > 0 ? '赞了你的帖子' : '赞了你的内容')
+            .fontSize(14).fontColor(AppTheme.TEXT_MAIN).width('100%')
+          if (item.excerpt.length > 0) {
+            Text(`${item.postAuthor.displayName() || this.ownName()}：${item.excerpt}`)
+              .fontSize(14).fontColor(AppTheme.TEXT_SUB).lineHeight(22)
+              .maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+              .padding({ left: 10, top: 8, right: 10, bottom: 8 })
+              .backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(8)
+          }
+        }.width('100%').alignItems(HorizontalAlign.Start)
+        .onClick(() => { this.openTarget(item); })
+      } else {
+        Text(item.replyText(this.ownName()))
+          .fontSize(15).fontColor(AppTheme.TEXT_MAIN).lineHeight(24)
+          .maxLines(5).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+          .onClick(() => { this.openTarget(item); })
+      }
+      if (item.deleted) {
+        Text('原内容已删除').fontSize(12).fontColor(AppTheme.TEXT_MUTED)
+      }
+      this.ThreadContext(item)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(16)
+    .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+  }
+
+  @Builder
+  ThreadContext(item: NotifyItem) {
+    Column({ space: 8 }) {
+      if (item.threadAuthor.displayName().length > 0 || item.threadAuthor.avatar.length > 0) {
+        Row({ space: 8 }) {
+          AvatarComponent({ url: item.threadAuthor.avatar, avatarSize: 24,
+            fallbackName: item.threadAuthor.displayName() })
+          if (item.threadAuthor.displayName().length > 0) {
+            Text(item.threadAuthor.displayName()).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          }
+        }.width('100%').onClick(() => { this.openAuthor(item.threadAuthor); })
+      }
+      Text(item.title || '查看原帖')
+        .fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN).lineHeight(22)
+        .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      if (item.forumName.length > 0) {
+        Text(item.forumName.endsWith('吧') ? item.forumName : `${item.forumName}吧`)
+          .fontSize(12).fontColor(AppTheme.TEXT_MUTED).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      }
+    }.alignItems(HorizontalAlign.Start).width('100%').padding(12)
+    .borderRadius(10).backgroundColor(AppTheme.SURFACE_MUTED)
+    .onClick(() => { this.openTarget(item, true); })
+  }
+
+  /** @我的保留原有紧凑卡片。 */
+  @Builder
+  MentionRow(item: NotifyItem) {
     Row({ space: 12 }) {
       AvatarComponent({ url: item.avatar, avatarSize: 42, fallbackName: item.displayName() })
+        .onClick(() => { this.openUser(item); })
       Column({ space: 5 }) {
         Row({ space: 6 }) {
           Text(item.displayName())
             .fontSize(15).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(item.headline())
+            .onClick(() => { this.openUser(item); })
+          Text(item.kind === 'agree' ? '赞了你的内容' : item.kind === 'at' ? '提到了你' : '回复了你')
             .fontSize(13).fontColor(AppTheme.TEXT_SUB)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
         }
         .width('100%')
+        if (item.deleted) {
+          Text('原内容已删除').fontSize(13).fontColor(AppTheme.TEXT_SUB)
+        }
+        if (item.title.length > 0) {
+          Text(item.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+        }
         if (this.lineOf(item).length > 0) {
           Text(this.lineOf(item))
             .fontSize(13).fontColor(AppTheme.TEXT_MAIN).maxLines(2)
@@ -149,6 +258,10 @@ export struct NotifyListPage {
         if (item.timeMs > 0) {
           Text(this.timeText(item.timeMs))
             .fontSize(11).fontColor(AppTheme.TEXT_MUTED)
+        }
+        if (item.quoteContent.length > 0 && item.excerpt.length > 0 && item.quoteContent !== item.excerpt) {
+          Text(`我的内容：${item.quoteContent}`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }
       }
       .alignItems(HorizontalAlign.Start)
@@ -171,6 +284,7 @@ export struct NotifyListPage {
     if (sameDay) {
       return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
-    return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    const year: string = date.getFullYear() === now.getFullYear() ? '' : `${date.getFullYear()}-`;
+    return `${year}${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 }

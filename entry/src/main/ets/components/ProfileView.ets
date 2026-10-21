@@ -7,6 +7,7 @@ import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { AuthSnapshot } from '../auth/AuthModel';
 import { AppTheme } from '../theme/Theme';
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AvatarComponent } from './AvatarComponent';
 import { GlassCircleButton } from './GlassCircleButton';
 import { ThemeModeIcon } from './ThemeModeIcon';
@@ -229,7 +230,7 @@ export struct ProfileView {
           .constraintSize({ minHeight: ROW_HEIGHT })
           .padding({ left: 6, right: 6, top: 8, bottom: 8 })
           .borderRadius(SettingsLayout.CARD_RADIUS)
-          .backgroundColor(AppTheme.CARD)
+          .backgroundColor(visualThemeStore.isPaper ? AppTheme.GOLD_LIGHT : AppTheme.CARD)
           .margin({ top: 20 })
         }
 
@@ -274,7 +275,7 @@ export struct ProfileView {
       Text(value)
         .fontSize(19)
         .fontWeight(FontWeight.Medium)
-        .fontColor(AppTheme.TEXT_MAIN)
+        .fontColor(visualThemeStore.isPaper ? AppTheme.GOLD : AppTheme.TEXT_MAIN)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(label)

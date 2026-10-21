@@ -1,4 +1,4 @@
-/** D-03 当前 APK AtListActivity/emf/BaseMetaData；账号名与展示昵称分别保留。 */
+/** 当前 APK AtListActivity/emf/BaseMetaData；账号名与展示昵称分别保留。 */
 export type AtCandidateKind = 'search';
 export class AtCandidate {
   id: string = '';

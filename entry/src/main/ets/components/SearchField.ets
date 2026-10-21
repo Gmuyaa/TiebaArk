@@ -4,6 +4,7 @@ import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { searchFieldHeight } from '../common/appearance/UiLayout';
 import { HdsTabs } from '@kit.UIDesignKit';
 import { AppTheme } from '../theme/Theme';
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
@@ -45,7 +46,7 @@ export struct SearchField {
         .scrollable(false)
         .animationDuration(0)
         .barOverlap(true)
-        .barBackgroundColor(Color.Transparent)
+        .barBackgroundColor(visualThemeStore.isPaper ? AppTheme.ACCENT_LIGHT : Color.Transparent)
         .barBackgroundBlurStyle(BlurStyle.NONE)
         .barFloatingStyle({
           barWidth: { smallWidth: this.fieldWidth, mediumWidth: this.fieldWidth,
@@ -98,8 +99,8 @@ export struct SearchField {
     .width('100%')
     .height(this.fieldHeight())
     .borderRadius(this.fieldHeight() / 2)
-    .border({ width: 0.5, color: themeModeStore.isDark ?
-      'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.04)' })
+    .border({ width: 0.5, color: visualThemeStore.isPaper ? AppTheme.DIVIDER : (themeModeStore.isDark ?
+      'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.04)') })
     .shadow({ radius: 10, offsetY: 2, color: themeModeStore.isDark ?
       'rgba(0, 0, 0, 0.40)' : 'rgba(0, 0, 0, 0.06)' })
     .onAreaChange((_old: Area, area: Area) => {

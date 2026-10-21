@@ -202,6 +202,7 @@ export struct SettingsEntryRow {
 
   @Param avatarUrl: string = '';
   @Param avatarName: string = '';
+  @Param showChevron: boolean = true;
   @Param showDivider: boolean = true;
   @Event onTap: () => void = (): void => {};
 
@@ -258,7 +259,9 @@ export struct SettingsEntryRow {
         .fontColor(AppTheme.VALUE_TEXT)
         .margin({ left: 12, right: SettingsLayout.CHEVRON_INSET })
     }
-    RowChevron()
+    if (this.showChevron) {
+      RowChevron()
+    }
   }
 }
 

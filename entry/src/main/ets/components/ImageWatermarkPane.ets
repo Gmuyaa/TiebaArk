@@ -45,7 +45,7 @@ export struct ImageWatermarkPane {
           }
         })
       }
-      SettingsNote({ text: '修改尚未开放；图片上传与水印效果尚未验证。' })
+      SettingsNote({ text: '仅查看，暂不支持修改。' })
     }
     .width('100%')
   }

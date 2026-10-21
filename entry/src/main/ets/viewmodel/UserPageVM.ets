@@ -20,6 +20,7 @@ export class UserPageVM {
   @Trace loadingMore: boolean = false;
   @Trace error: string = '';
   @Trace pagingError: string = '';
+  @Trace postForumAvatars: Map<number, string> = new Map<number, string>();
   @Trace hasMore: boolean = false;
   private uid: number = 0;
   private portrait: string = '';
@@ -169,6 +170,8 @@ export class UserPageVM {
         }
         this.items = merged;
         this.hasMore = response.hasMore && merged.length > old.length;
+        if (tab === 0) { await this.loadPostForumAvatars(device, request); }
+        if (request !== this.request) { return; }
       }
       this.page = page;
     } catch (err) {
@@ -179,5 +182,32 @@ export class UserPageVM {
     } finally {
       if (request === this.request) { this.loading = false; this.loadingMore = false; }
     }
+  }
+
+  private async loadPostForumAvatars(device: TiebaDevice, request: number): Promise<void> {
+    const ids: number[] = [];
+    for (const item of this.items) {
+      if (item.forumId > 0 && !ids.includes(item.forumId) && !this.forumAvatars.has(item.forumId)) {
+        ids.push(item.forumId);
+      }
+    }
+    const session = authSession.session();
+    let next: number = 0;
+    const worker = async (): Promise<void> => {
+      while (request === this.request && next < ids.length) {
+        const id: number = ids[next++];
+        try {
+          const response: DirectoryResponse = await this.api.fetchDirectory(device, session, 'forum', id);
+          if (request !== this.request) { return; }
+          if (response.ok && response.data.forum.avatar.length > 0) {
+            this.forumAvatars.set(id, response.data.forum.avatar);
+          }
+        } catch (err) {
+          // 头像读取失败保留共享卡片的文字兜底。
+        }
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    if (request === this.request) { this.postForumAvatars = new Map<number, string>(this.forumAvatars); }
   }
 }

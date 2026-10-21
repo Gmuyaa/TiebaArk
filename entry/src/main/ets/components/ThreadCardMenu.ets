@@ -74,7 +74,7 @@ async function confirmHideThread(ui: UIContext, context: common.UIAbilityContext
   thread: ThreadBrief): Promise<void> {
   const confirm = await ui.getPromptAction().showDialog({
     title: '隐藏该贴',
-    message: '仅在本机隐藏这一条帖子（不写服务端）。可在「设置 → 隐私设置 → 拉黑与隐藏」里恢复。',
+    message: '仅在本机隐藏这一条帖子（不写服务端）。可在「设置 → 隐私设置 → 隐藏」里恢复。',
     buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
       { text: '隐藏', color: $r('app.color.detail_accent') }]
   });

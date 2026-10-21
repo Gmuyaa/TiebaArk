@@ -10,6 +10,7 @@ import {
 
 @ComponentV2
 export struct BlockManagePane {
+  @Param hiddenThreads: boolean = false;
   /** 页面顶栏刷新序号：自增即重读本机记录（初值 0 不触发） */
   @Param refreshSeq: number = 0;
 
@@ -53,7 +54,7 @@ export struct BlockManagePane {
     const what: string = item.title.length > 0 ? item.title : `帖子 ${item.tid}`;
     const confirm = await this.getUIContext().getPromptAction().showDialog({
       title: '恢复该贴',
-      message: `恢复后「${what}」会重新出现在列表里（本机操作，不涉及服务端）。`,
+      message: `恢复后「${what}」会重新出现在本机列表中。`,
       buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
         { text: '恢复', color: $r('app.color.detail_accent') }]
     });
@@ -64,8 +65,11 @@ export struct BlockManagePane {
 
   build() {
     Column() {
-      this.UsersSection()
-      this.HiddenSection()
+      if (this.hiddenThreads) {
+        this.HiddenSection()
+      } else {
+        this.UsersSection()
+      }
     }
     .width('100%')
   }
@@ -77,9 +81,7 @@ export struct BlockManagePane {
       content: (): void => { this.UserRows() }
     })
     SettingsNote({
-      text: '服务端没有"已拉黑用户"的 HTTP 列表接口（官方那个黑名单页走的是长连接通道，'
-        + '本应用还没接），这里只列出在本应用里拉黑过的用户；在官方客户端拉黑的用户不会'
-        + '出现在这里。点一行可解除拉黑（会同步服务端）。'
+      text: '仅显示在本应用内拉黑的用户，不含官方客户端的记录。解除拉黑会同步到贴吧账号。'
     })
   }
 
@@ -91,7 +93,7 @@ export struct BlockManagePane {
       ForEach(threadBlockStore.blockedUsers, (user: BlockedUser, index: number) => {
         SettingsEntryRow({
           label: user.name.length > 0 ? user.name : `用户 ${user.uid}`,
-          summary: `uid ${user.uid} · 点击解除拉黑`,
+          summary: '点击解除拉黑',
           showDivider: index < threadBlockStore.blockedUsers.length - 1,
           onTap: (): void => { void this.confirmUnblock(user); }
         })
@@ -106,7 +108,7 @@ export struct BlockManagePane {
       content: (): void => { this.HiddenRows() }
     })
     SettingsNote({
-      text: '隐藏只作用于本机（服务端没有帖子级隐藏接口）。点一行即可恢复。'
+      text: '仅在本机隐藏，点击可恢复。'
     })
   }
 

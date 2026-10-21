@@ -48,7 +48,8 @@ export enum SettingsPane {
   OTHER_SETTINGS = 30,
   /** 吧内分区默认导航：热门或最新，本机偏好。 */
   FORUM_DEFAULT_TAB = 31,
-  HDS_MATERIAL = 32
+  HDS_MATERIAL = 32,
+  HIDDEN_THREADS = 33
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -121,7 +122,7 @@ export interface SettingsState {
   hideStatusBar: boolean;
   hideTopNavigation: boolean;
   hideBottomNavigation: boolean;
-  /** A-08 低流量模式：不自动加载图片（列表、正文图集、视频流；本机偏好） */
+  /** 低流量模式：不自动加载图片（列表、正文图集、视频流；本机偏好） */
   lowFlow: boolean;
 
   superResolution: boolean;
@@ -137,8 +138,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.66';
-export const SETTINGS_VERSION_CODE: string = '2610065';
+export const SETTINGS_APP_VERSION: string = '1.0.88';
+export const SETTINGS_VERSION_CODE: string = '2610087';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -161,14 +162,13 @@ export function buildSettingsGroups(state: SettingsState): SettingsGroup[] {
   return [
     {
       key: 'experience', title: '使用体验', entries: [
-        paneEntry('appearance', '外观设计', appearanceSummaryOf(state.darkModeLabel, state.fontLabel), SettingsPane.APPEARANCE),
+        paneEntry('appearance', '外观设计', '', SettingsPane.APPEARANCE),
         paneEntry('browsing', '浏览设置', '', SettingsPane.BROWSING)
       ]
     },
     {
       key: 'harmony', title: '鸿蒙特性', entries: [
-        // 首页顶栏样式的档位摘要挂在这一行：它现在住在鸿蒙特性设置页里
-        paneEntry('harmony_features', '鸿蒙特性设置', browsingSummaryOf(state.topNavLabel), SettingsPane.HARMONY_FEATURES)
+        paneEntry('harmony_features', '鸿蒙特性设置', '', SettingsPane.HARMONY_FEATURES)
       ]
     },
     {
@@ -207,7 +207,7 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
   switch (pane) {
     case SettingsPane.BROWSING:
       // 浏览设置：内容加载方式与吧内默认分区。
-      // A-08 低流量模式：打开后不自动加载图片（列表、正文图集、视频流；见 LowFlowStore 头注释）
+      // 低流量模式：打开后不自动加载图片（列表、正文图集、视频流；见 LowFlowStore 头注释）
       return [
         switchEntry('low_flow', '低流量模式', state.lowFlow),
         paneEntry('image_watermark', '图片水印', '', SettingsPane.IMAGE_WATERMARK),
@@ -241,7 +241,8 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
       return [
         paneEntry('forbidden_forums', '屏蔽吧', '', SettingsPane.FORBIDDEN_FORUMS),
 
-        paneEntry('block_manage', '拉黑与隐藏', '', SettingsPane.BLOCK_MANAGE),
+        paneEntry('block_manage', '拉黑', '', SettingsPane.BLOCK_MANAGE),
+        paneEntry('hidden_threads', '隐藏', '', SettingsPane.HIDDEN_THREADS),
         paneEntry('app_permissions', '系统权限', '', SettingsPane.APP_PERMISSIONS),
         paneEntry('data_use', '数据使用说明', '', SettingsPane.DATA_USE)
       ];
@@ -339,7 +340,9 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.FORBIDDEN_FORUMS:
       return '屏蔽吧';
     case SettingsPane.BLOCK_MANAGE:
-      return '拉黑与隐藏';
+      return '拉黑';
+    case SettingsPane.HIDDEN_THREADS:
+      return '隐藏';
     case SettingsPane.PRIVACY_MARKS:
       return '吧务身份标记';
     case SettingsPane.IMAGE_WATERMARK:

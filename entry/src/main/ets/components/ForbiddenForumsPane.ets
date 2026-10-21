@@ -8,7 +8,7 @@ import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { ForbiddenForum } from '../model/ForbiddenForums';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
-import { SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
 
 @ComponentV2
 export struct ForbiddenForumsPane {
@@ -113,7 +113,6 @@ export struct ForbiddenForumsPane {
 
   build() {
     Column() {
-      SettingsNote({ text: '这里列出账号在服务端屏蔽的吧（读回服务端列表）。点一行可解除屏蔽。' })
       SettingsCard({
         content: (): void => { this.ForumRows() }
       })
@@ -142,9 +141,10 @@ export struct ForbiddenForumsPane {
       ForEach(this.vm.items, (item: ForbiddenForum, index: number) => {
         SettingsEntryRow({
           label: item.name.length > 0 ? (item.name.endsWith('吧') ? item.name : `${item.name}吧`) : '吧名未返回',
-          summary: this.unblockingId === item.id ? '正在解除…' : '点击解除屏蔽',
+          summary: this.unblockingId === item.id ? '正在解除…' : '取消屏蔽',
 
           avatarUrl: item.avatar, avatarName: item.name,
+          showChevron: false,
           showDivider: index < this.vm.items.length - 1,
           onTap: (): void => { void this.confirmUnblock(item); }
         })

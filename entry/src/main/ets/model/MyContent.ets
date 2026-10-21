@@ -166,6 +166,11 @@ export class UserPostItem {
   content: string = '';
   authorName: string = '';
   replyNum: number = 0;
+  agreeNum: number = -1;
+  shareNum: number = -1;
+  authorPortrait: string = '';
+  images: string[] = [];
+  originImages: string[] = [];
   /** 创建时间（秒 → 毫秒） */
   createTimeMs: number = 0;
   /** 同一帖子下的历史回复各自带 pid、时间和内容，不能拼成一条。 */
@@ -291,6 +296,7 @@ export function parseUserPostProto(bytes: Uint8Array): UserPostItem[] {
 
 function readPostInfo(bytes: Uint8Array): UserPostItem {
   const item: UserPostItem = new UserPostItem();
+  let summaryPieces: ContentPiece[] = [];
   const reader: ProtoReader = new ProtoReader(bytes);
   while (reader.hasMore()) {
     const f: number = reader.readTag();
@@ -339,12 +345,74 @@ function readPostInfo(bytes: Uint8Array): UserPostItem {
       case POST_REPLY_NUM:
         item.replyNum = Number(reader.readVarint());
         break;
+      // 固定 22.11 APK PostInfoList 注解：15 摘要、16 媒体、19 头像、37 赞、39 分享。
+      case 15:
+        summaryPieces = summaryPieces.concat(readPostSummary(reader.readBytes()));
+        break;
+      case 16:
+        readPostMedia(reader.readBytes(), item);
+        break;
+      case 19:
+        item.authorPortrait = reader.readString();
+        break;
+      case 37:
+        item.agreeNum = Math.max(-1, reader.readInt32());
+        break;
+      case 39:
+        item.shareNum = Math.max(-1, reader.readInt32());
+        break;
       default:
         reader.skipField();
         break;
     }
   }
+  if (summaryPieces.length > 0) {
+    item.pieces = summaryPieces;
+    item.content = summaryPieces.map((piece: ContentPiece): string => piece.text).join('');
+  }
   return item;
+}
+
+function readPostSummary(bytes: Uint8Array): ContentPiece[] {
+  const reader: ProtoReader = new ProtoReader(bytes);
+  let type: number = 0;
+  let text: string = '';
+  let link: string = '';
+  while (reader.hasMore()) {
+    const field: number = reader.readTag();
+    if (field === 1 && reader.wireType === WireType.VARINT) { type = reader.readInt32(); }
+    else if (field === 2 && reader.wireType === WireType.LENGTH_DELIMITED) { text = reader.readString(); }
+    else if (field === 3 && reader.wireType === WireType.LENGTH_DELIMITED) { link = reader.readString(); }
+    else { reader.skipField(); }
+  }
+  return ContentPiece.listFromRaw([{ type: type === 1 || type === 2 ? type : 0, text, link }]);
+}
+
+/** Media 图片 type=3；视频/语音媒体不冒充图片。字段由真实 protobuf 与 JSON 对照。 */
+function readPostMedia(bytes: Uint8Array, item: UserPostItem): void {
+  const reader: ProtoReader = new ProtoReader(bytes);
+  let type: number = 0;
+  let big: string = '';
+  let source: string = '';
+  let origin: string = '';
+  let active: string = '';
+  while (reader.hasMore()) {
+    const field: number = reader.readTag();
+    if (field === 1 && reader.wireType === WireType.VARINT) { type = reader.readInt32(); }
+    else if (reader.wireType === WireType.LENGTH_DELIMITED && [3, 8, 15, 18].includes(field)) {
+      const url: string = reader.readString();
+      if (!/^https?:\/\//i.test(url)) { continue; }
+      if (field === 3) { big = url; }
+      else if (field === 8) { source = url; }
+      else if (field === 15) { origin = url; }
+      else { active = url; }
+    } else { reader.skipField(); }
+  }
+  const preview: string = active || big || source || origin;
+  if (type === 3 && preview.length > 0) {
+    item.images.push(preview);
+    item.originImages.push(origin || source || preview);
+  }
 }
 
 /** PostInfoContent：保留单条回复的完整摘要、独立 pid、时间和有序片段。 */

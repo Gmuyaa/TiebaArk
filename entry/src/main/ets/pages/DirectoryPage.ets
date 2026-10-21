@@ -56,8 +56,10 @@ export struct DirectoryPage {
   }
   aboutToAppear(): void {
     readStatusBarVp(this.context()).then((vp: number) => { this.statusBarH = vp; }).catch(() => {});
+    this.vm = new DirectoryVM();
     this.reload();
   }
+  aboutToDisappear(): void { this.vm.dispose(); }
   private async reload(more: boolean = false): Promise<void> {
     await this.vm.load(this.context(), this.kind(), this.routeParams?.id ?? 0, more);
   }

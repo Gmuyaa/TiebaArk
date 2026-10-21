@@ -10,6 +10,7 @@ export struct RootPageHeader {
   @Param title: string = '';
   @Param gutter: number = UiLayout.PAGE_GUTTER;
   @BuilderParam actions: () => void = this.emptyActions;
+  @BuilderParam titleContent: () => void = this.defaultTitle;
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local originY: number = 0;
   private measuredOrigin: boolean = false;
@@ -21,11 +22,15 @@ export struct RootPageHeader {
 
   @Builder emptyActions() {}
 
+  @Builder defaultTitle() {
+    Text(this.title).fontSize(UiLayout.ROOT_TITLE).fontWeight(FontWeight.Bold)
+      .fontColor(AppTheme.TEXT_MAIN).layoutWeight(1)
+  }
+
   build() {
     Column() {
       Row({ space: 12 }) {
-        Text(this.title).fontSize(UiLayout.ROOT_TITLE).fontWeight(FontWeight.Bold)
-          .fontColor(AppTheme.TEXT_MAIN).layoutWeight(1)
+        Row() { this.titleContent() }.layoutWeight(1)
         this.actions()
       }.width('100%').constraintSize({ minHeight: 44 }).alignItems(VerticalAlign.Center)
     }

@@ -89,7 +89,7 @@ struct ThreadPreviewImage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       /*
-       * 低流量模式（A-08）：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
+       * 低流量模式（）：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
        * 占位仍可点（外层 onClick 不变），点开查看器照常加载原图。
        */
       if (lowFlowStore.enabled) {

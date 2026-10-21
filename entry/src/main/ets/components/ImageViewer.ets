@@ -38,7 +38,7 @@ const MIN_SCALE: number = 1;
 const MAX_SCALE: number = 4;
 const DOUBLE_TAP_SCALE: number = 2;
 const ANIMATION_DURATION: number = 180;
-/** 导出菜单日志（C-06／H-07 真机取证用；只记状态与地址前 60 字符，不含凭据） */
+/** 导出菜单日志（／真机取证用；只记状态与地址前 60 字符，不含凭据） */
 const EXPORT_DOMAIN: number = 0x0;
 const EXPORT_TAG: string = 'ImageViewerExport';
 
@@ -75,7 +75,7 @@ struct ZoomableImagePage {
   imageUrl: string = '';
 
   onTapImage: () => void = (): void => {};
-  /** 长按画面：打开导出菜单（C-06／H-07） */
+  /** 长按画面：打开导出菜单（／） */
   onLongPressImage: () => void = (): void => {};
 
   @State private zoomScale: number = MIN_SCALE;
@@ -526,7 +526,7 @@ export struct ImageViewer {
   @State private currentIndex: number = 0;
   /** 底部安全区（系统手势条高度，vp）：页码贴底时用它把文字顶到手势条之上 */
   @State private bottomSafeVp: number = 0;
-  /** 导出菜单是否打开（C-06／H-07） */
+  /** 导出菜单是否打开（／） */
   @State private exportOpen: boolean = false;
   /** 导出准备状态：0 未开始｜1 下载中｜2 就绪｜3 失败 */
   @State private exportState: number = 0;
@@ -712,7 +712,7 @@ export struct ImageViewer {
     }
   }
 
-  // ───────────────────────── C-06／H-07：长按导出 ─────────────────────────
+  // ───────────────────────── ／长按导出 ─────────────────────────
 
   /** 当前页地址 */
   private currentUrl(): string {

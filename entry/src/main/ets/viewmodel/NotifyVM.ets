@@ -6,7 +6,7 @@ import { NotifyCursor, NotifyItem, NotifyKind } from '../model/Notify';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 
 function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
+  return authSession.isLoggedIn() ? `${authSession.sessionKey()}:${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
 }
 
 @ObservedV2
@@ -97,9 +97,14 @@ export class NotifyVM {
         return false;
       }
       if (replace) {
-        this.items = response.items;
+        const seen: Set<string> = new Set<string>();
+        this.items = response.items.filter((item: NotifyItem): boolean => {
+          const key: string = this.keyOf(item);
+          if (seen.has(key)) { return false; }
+          seen.add(key); return true;
+        });
       } else {
-        // 去重：reply 按 thread_id+post_id，agree 按对方+时间（agree 的稳定键是 thread+agreeer）
+        // 三类通知统一使用模型的精确记录键，点赞优先使用 AgreeList.id。
         const seen: Set<string> = new Set<string>();
         for (const item of this.items) { seen.add(this.keyOf(item)); }
         let added: number = 0;
@@ -132,11 +137,7 @@ export class NotifyVM {
   }
 
   private keyOf(item: NotifyItem): string {
-    if (this.kind === 'at') { return `at-${item.threadIdText}-${item.postIdText}-${item.userIdText}-${item.timeMs}`; }
-    if (this.kind === 'reply') {
-      return `r-${item.threadId}-${item.postId}-${item.userId}`;
-    }
-    return `a-${item.threadId}-${item.postId}-${item.userId}-${item.timeMs}`;
+    return item.key();
   }
   private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
   private finish(mine: number): void {

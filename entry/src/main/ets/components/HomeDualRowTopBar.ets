@@ -1,3 +1,6 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { PaperLayout } from '../common/appearance/VisualTheme';
+import { AppTheme } from '../theme/Theme';
 /** 首页沉浸顶栏的搜索行与频道行。收起时隐藏搜索行及其占用高度，展开时恢复；材质由外层容器提供。 */
 import { AvatarComponent } from './AvatarComponent';
 import { searchFieldHeight, homeChannelHeight } from '../common/appearance/UiLayout';
@@ -49,7 +52,8 @@ export struct HomeDualRowTopBar {
   private panelH(): number {
     // 收起态高度 = 状态栏 + 频道行 + 上下内距（搜索行整段消失，不留白）
     const content: number = this.collapsed ? homeChannelHeight(this.scaleValue()) : homeDualRowHeight(this.scaleValue());
-    return this.statusBarHeight + content + DUAL_BOX_INSET * 2;
+    return this.statusBarHeight + content + DUAL_BOX_INSET * 2 +
+      (visualThemeStore.isPaper && !this.collapsed ? PaperLayout.BRAND_HEIGHT : 0);
   }
 
   private visibleW(): number {
@@ -76,6 +80,9 @@ export struct HomeDualRowTopBar {
      * 屏宽 → 变成一枚大圆角药丸）。**必须让承载节点自身的宽度就是超宽值**。
      * 垂直方向由宿主负责顶部对齐（Index 的浮层用 `.align(Alignment.Top)`）。
      */
+    if (visualThemeStore.isPaper) {
+      this.PaperHeader()
+    } else {
     Stack({ alignContent: Alignment.Top }) {
       // 零高测量条：只用来拿宿主可见宽度（面板节点已超宽，量不到可见宽）
       Row()
@@ -115,6 +122,36 @@ export struct HomeDualRowTopBar {
     }
     .width('100%')
     .height(this.panelH())
+    }
+  }
+
+  @Builder
+  PaperHeader() {
+    Column({ space: 2 }) {
+      if (!this.collapsed) {
+        Row({ space: 8 }) {
+          Column() {
+            Row().width(4).height(7).backgroundColor(AppTheme.EMPHASIS)
+            Row().width(4).height(6).backgroundColor(AppTheme.GOLD)
+            Row().width(4).height(7).backgroundColor(AppTheme.JADE)
+          }.borderRadius(2).clip(true).accessibilityLevel('no')
+          Text('TiebaArk').fontSize(22).fontWeight(FontWeight.Bold).fontColor(AppTheme.ACCENT_DARK)
+            .layoutWeight(1).maxLines(1)
+          AvatarComponent({ url: this.avatarUrl, avatarSize: AVATAR_D, fallbackName: '我' })
+            .width(44).height(PaperLayout.BRAND_HEIGHT).accessibilityText('个人主页')
+            .onClick((): void => { this.onAvatar(); })
+        }.height(PaperLayout.BRAND_HEIGHT).width('100%')
+        SearchField({ editable: false, placeholder: '搜索吧、帖子或用户',
+          onTap: (): void => { this.onSearch(); } })
+          .height(Math.max(DUAL_SEARCH_ROW_H, searchFieldHeight(this.scaleValue()) + 8))
+      }
+      this.ChannelRow()
+    }
+    .width('100%').height(this.panelH())
+    .padding({ top: this.statusBarHeight + 4, left: 16, right: 16, bottom: 4 })
+    .linearGradient({ angle: 115, colors: [[AppTheme.HEADER_START, 0], [AppTheme.HEADER_END, 1]] })
+    .border({ width: { bottom: 0.5 }, color: AppTheme.DIVIDER })
+    .id('paper-home-header')
   }
 
   @Builder

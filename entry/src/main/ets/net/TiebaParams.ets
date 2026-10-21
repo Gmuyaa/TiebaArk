@@ -27,6 +27,8 @@ import { TransferStats, TransferStatsSnapshot } from './TransferStats';
 export class TiebaVersion {
   /** 大部分 API 使用此版本 */
   static readonly LATEST: string = '22.6.5.1';
+  /** 楼中楼图片要求此版本；22.6.5.1 会把 type=3 降级为 [图片] 文本。 */
+  static readonly SUB_POST: string = '22.11.1.0';
   /** 部分依赖旧版响应格式的 API（如帖子列表）使用此版本 */
   static readonly LEGACY: string = '12.64.1.1';
   static readonly CHAT: string = '12.68.1.0';
@@ -42,7 +44,7 @@ export class TiebaHost {
 
 }
 
-/** B-04当前原生创建/验证码；创建参数仅准备，无写API/UI调用。 */
+/** 当前原生创建/验证码；创建参数仅准备，无写API/UI调用。 */
 export class CreateForumParams {
   static readonly CHALLENGE_PATH: string = '/c/f/anti/vcode';
   static readonly CREATE_PATH: string = '/c/c/forum/create';
@@ -60,7 +62,7 @@ export class CreateForumParams {
   }
 }
 
-/** E-01 NetWork.uploadImage：普通头像pic全图，独立于帖子分片。 */
+/** NetWork.uploadImage：普通头像pic全图，独立于帖子分片。 */
 export class AvatarUploadParams {
   static readonly PATH: string = '/c/c/img/portrait';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -88,7 +90,7 @@ export class AvatarUploadParams {
   }
 }
 
-/** D-02 普通帖图分片，当前 c27/NetWork/f8 契约；不复用头像上传。 */
+/** 普通帖图分片，当前 c27/NetWork/f8 契约；不复用头像上传。 */
 export class ImageUploadParams {
   static readonly PATH: string = '/c/s/uploadPicture';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -970,7 +972,7 @@ export class ForumMemberParams {
 }
 
 /**
- * 官方 `GetBawuInfo`（A-01 补：吧务全量名单）：消息 id 1001705，**API cmd = 301007**。
+ * 官方 `GetBawuInfo`（补：吧务全量名单）：消息 id 1001705，**API cmd = 301007**。
  * 同样来自反编译：`com/baidu/tieba/forumMember/bawu/BawuTeamRequestMessage` 的 `super(1001705, 301007)`。
  *
  * ⚠️ 字段顺序与 `GetMemberInfo` **相反**：`GetBawuInfo/DataReq{ common=1, forum_id=2 }`
@@ -1253,7 +1255,7 @@ export class TailsParams {
 }
 
 /**
- * 官方「赞我」（F-01）：消息 id 1002211，**API cmd = 309593**。
+ * 官方「赞我」（）：消息 id 1002211，**API cmd = 309593**。
  *
  * 证据：`ij7.java` 静态注册 `ur8.c(309593, 1002211, "c/u/feed/agreeme", …)`；
  * 请求 `AgreeMeRequestMessage.id` = **上一批最后一条的 `AgreeList.id`**（游标分页，

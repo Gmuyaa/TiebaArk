@@ -35,7 +35,7 @@ export struct AppPermissionsPane {
 
   build() {
     Column() {
-      SettingsNote({ text: '仅查看：权限可在系统设置中管理。' })
+      SettingsNote({ text: '权限可在系统设置中管理。' })
       SettingsCard({
         content: (): void => { this.PermissionRows() }
       })
@@ -63,7 +63,6 @@ export struct AppPermissionsPane {
         marginTop: SettingsLayout.GROUP_GAP,
         content: (): void => { this.OpenSettingsRow() }
       })
-      SettingsNote({ text: '打开系统设置只跳转页面，不代表权限已改变。' })
     }
     .width('100%')
   }

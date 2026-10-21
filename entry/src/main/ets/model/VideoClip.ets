@@ -1,6 +1,6 @@
 import { RawVideoInfo } from '../api/RawThreadPage';
 
-/** A-06/C-04 共用服务器已返回的媒体地址；不与中间页推荐列表混淆。 */
+/** /共用服务器已返回的媒体地址；不与中间页推荐列表混淆。 */
 export class VideoClip {
   url: string = '';
   cover: string = '';

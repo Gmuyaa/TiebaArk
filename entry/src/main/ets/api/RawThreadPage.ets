@@ -62,8 +62,9 @@ export interface RawUser {
   name_show?: string;
   /** 头像标识，需要拼成 URL（见 model/ThreadDetail.ets 的 portraitUrl） */
   portrait?: string;
-  level_id?: number;
+  level_id?: number | string;
   level_name?: string;
+  user_growth?: RawCommentUserGrowth;
   /** IP 归属地，如 "北京"；楼中楼里实测缺失 */
   ip_address?: string;
   gender?: number;
@@ -71,6 +72,11 @@ export interface RawUser {
   bawu_type?: string;
   /** 吧务头衔，desc 形如 "贴吧吧主吧吧主" */
   bazhu_grade?: RawBazhuGrade;
+}
+
+/** 个人成长等级独立于用户在当前吧的level_id。 */
+export interface RawCommentUserGrowth {
+  level_id?: number | string;
 }
 
 /** 详情页里的一个楼层 */
@@ -112,6 +118,7 @@ export interface RawSubPost {
 
 /** 主题（楼主信息与标题在这里，不在 post_list 里） */
 export interface RawThreadHead {
+  thread_type?: number | string;
   /** 当前 APK ThreadData/VideoItemData 的 JSON video_info；真实视频帖待验收。 */
   video_info?: RawVideoInfo;
   id?: number;

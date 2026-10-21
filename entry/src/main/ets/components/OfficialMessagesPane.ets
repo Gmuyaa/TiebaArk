@@ -32,7 +32,7 @@ export struct OfficialMessagesPane {
 
   build() {
     Column() {
-      SettingsNote({ text: '仅查看：修改尚未开放。' })
+      SettingsNote({ text: '仅查看，暂不支持系统通知。' })
       SettingsCard({
         content: (): void => { this.OfficialRows() }
       })
@@ -46,7 +46,6 @@ export struct OfficialMessagesPane {
           }
         })
       }
-      SettingsNote({ text: '此状态不代表本应用已接通系统通知。' })
     }
     .width('100%')
   }

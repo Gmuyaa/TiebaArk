@@ -106,9 +106,10 @@ function numberValue(value: number | string | undefined): number {
 
 function userFromRaw(raw: RawDirectoryUser, role: string = ''): DirectoryUser {
   const user: DirectoryUser = new DirectoryUser();
-  user.uid = numberValue(raw.user_id ?? raw.id);
+  const uid: number = numberValue(raw.user_id ?? raw.id);
+  user.uid = Number.isSafeInteger(uid) ? uid : 0;
   user.name = raw.name_show || raw.user_name || raw.name || '贴吧用户';
-  user.portrait = raw.portrait ?? '';
+  user.portrait = profilePortrait(raw.portrait ?? '');
   user.avatar = portraitUrl(user.portrait);
   user.intro = raw.intro ?? '';
   user.role = raw.role_name || role;

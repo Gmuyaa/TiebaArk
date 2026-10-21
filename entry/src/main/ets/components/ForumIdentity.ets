@@ -7,8 +7,7 @@ import { formatCount } from '../model/UserProfile';
 import { ForumHeaderVM } from '../viewmodel/ForumHeaderVM';
 import { cachedForumAvatar } from '../viewmodel/ForumReadCache';
 import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot } from '../common/material/MaterialConfig';
+import { ForumActionButton } from './ForumActionButton';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -117,17 +116,10 @@ export struct ForumIdentity {
           .layoutWeight(1).alignItems(HorizontalAlign.Start)
         }
         .layoutWeight(1).height(76).onClick(() => { this.onOpenInformation(); })
-        Text(this.vm.buttonLabel())
-          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(Color.White)
-          .textAlign(TextAlign.Center).height(36).constraintSize({ minWidth: 72, maxWidth: 116 })
-          .padding({ left: 12, right: 12 }).borderRadius(18).backgroundColor('#33FFFFFF')
-          .backgroundEffect(materialManager.glassOf(MaterialSlot.FORUM_ACTION_BUTTON))
-          .border({ width: 1, color: '#40FFFFFF' }).clip(true)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .opacity(this.vm.signing || (this.vm.reading && this.vm.membership.signed === undefined) ? 0.6 : 1)
-          .enabled(this.forumId > 0 && !this.vm.follow.pending && !this.vm.signing && !this.vm.reading)
-          .onClick(() => { void this.activate(); })
-          .accessibilityText(this.vm.buttonLabel())
+        ForumActionButton({ label: this.vm.buttonLabel(),
+          busy: this.vm.signing || (this.vm.reading && this.vm.membership.signed === undefined),
+          disabled: this.forumId <= 0 || this.vm.follow.pending || this.vm.signing || this.vm.reading,
+          onTap: (): void => { void this.activate(); } })
       }
       .width('100%').height(76).alignItems(VerticalAlign.Center)
       if (this.vm.follow.known && this.vm.follow.following &&

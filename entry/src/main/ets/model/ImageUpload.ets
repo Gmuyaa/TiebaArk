@@ -1,4 +1,4 @@
-/** D-02：当前 APK ImageUploadResult / UploadedImageInfo 普通帖图契约。
+/** 当前 APK ImageUploadResult / UploadedImageInfo 普通帖图契约。
  * 分片响应即使 error_code=0 也不代表完整图片；不复用头像或表情上传协议。
  */
 interface RawImageDimensions { width?: number | string; height?: number | string; picUrl?: string; }

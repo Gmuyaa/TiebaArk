@@ -1,3 +1,5 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from './PageState';
 import { followChanges } from '../viewmodel/FollowActionVM';
 
@@ -572,7 +574,7 @@ export struct ForumListView {
     /** 抵消 HdsTabs 的顶部内容预留，使页面内容与自定义顶栏对齐。 */
 
     .clip(false)
-    .backgroundColor(AppTheme.BG)
+    .backgroundColor(visualThemeStore.isPaper ? AppTheme.CARD : AppTheme.BG)
   }
 
   /**
@@ -626,7 +628,7 @@ export struct ForumListView {
 
   @Builder
   FeedList(channel: string) {
-    List({ space: 8, scroller: channel === '关注' ? this.followScroller : this.recommendScroller }) {
+    List({ space: visualThemeStore.isPaper ? 0 : 8, scroller: channel === '关注' ? this.followScroller : this.recommendScroller }) {
 
       ListItem() {
         Row()
@@ -638,7 +640,7 @@ export struct ForumListView {
         ListItem() {
           this.ThreadCard(item)
         }
-        .padding({ left: 8, right: 8 })
+        .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8 })
 
         .onAppear(() => {
           this.maybeQueueAvatar(item);
@@ -1079,6 +1081,7 @@ export struct ForumListView {
       forumName: this.forumOf(item), forumAvatar: item.sourceForumAvatar,
       postedTime: formatPostTime(item.postedMs, Date.now()),
       title: item.title, summary: item.summary,
+      isHelp: item.isHelp,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),
       isTop: this.vm.mode.length > 0 && item.isTop,
       isGood: this.vm.mode.length > 0 && item.isGood,

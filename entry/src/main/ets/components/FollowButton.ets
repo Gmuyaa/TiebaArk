@@ -4,6 +4,7 @@ import { authSession } from '../auth/AuthSession';
 import { FollowKind } from '../model/FollowOperation';
 import { AppTheme } from '../theme/Theme';
 import { followAction, FollowActionVM } from '../viewmodel/FollowActionVM';
+import { ForumActionButton } from './ForumActionButton';
 
 @ComponentV2
 export struct FollowButton {
@@ -11,6 +12,7 @@ export struct FollowButton {
   @Param targetId: number = 0;
   @Param portrait: string = '';
   @Param targetName: string = '';
+  @Param forumStyle: boolean = false;
   @Event onChanged: () => void = (): void => {};
   @Local vm: FollowActionVM = new FollowActionVM('user', 0, '', '');
   private auth = authSession;
@@ -60,12 +62,17 @@ export struct FollowButton {
   }
   build() {
     if (!this.vm.self && (this.targetId > 0 || this.portrait.length > 0)) {
+      if (this.forumStyle) {
+        ForumActionButton({ label: this.label(), onHero: false, compact: true, busy: this.busy(), disabled: this.busy(),
+          onTap: (): void => { void this.activate(); } })
+      } else {
       Text(this.label())
         .fontSize(13).fontColor(Color.White).textAlign(TextAlign.Center).constraintSize({ minHeight: 40 })
         .padding({ left: 16, right: 16, top: 8, bottom: 8 }).borderRadius(16).backgroundColor(AppTheme.ACCENT)
         .opacity(this.busy() ? 0.6 : 1).enabled(!this.busy())
         .accessibilityText(this.label())
         .onClick(() => { this.activate(); })
+      }
     }
   }
 }

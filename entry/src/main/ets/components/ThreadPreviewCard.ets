@@ -1,3 +1,4 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { AppTheme } from '../theme/Theme';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
@@ -6,6 +7,8 @@ import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { ThreadPreviewImages } from './ThreadPreviewImages';
 import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 import { AvatarComponent } from './AvatarComponent';
+import { PostContentInline } from './PostContentInline';
+import { HelpTag } from './HelpTag';
 
 /** 标准帖子卡：页面传入展示值与动作，组件不发请求、不执行导航。 */
 @ComponentV2
@@ -18,9 +21,12 @@ export struct ThreadPreviewCard {
   @Param postedTime: string = '';
   @Param title: string = '';
   @Param summary: string = '';
+  @Param contentPieces: ContentPiece[] = [];
+  @Event onActivateContent: (piece: ContentPiece) => void = (_piece: ContentPiece): void => {};
   @Param images: string[] = [];
   @Param isTop: boolean = false;
   @Param isGood: boolean = false;
+  @Param isHelp: boolean = false;
   @Local actionState: ThreadCardActionState = new ThreadCardActionState();
   @Event onToggleLike: (state: ThreadCardActionState) => void = (_state: ThreadCardActionState): void => {};
   @Event onOpenComments: () => void = (): void => {};
@@ -45,8 +51,8 @@ export struct ThreadPreviewCard {
   @Builder
   Tag(label: string, filled: boolean) {
     Text(label).fontSize(10)
-      .fontColor(filled ? Color.White : AppTheme.ACCENT_DARK)
-      .backgroundColor(filled ? AppTheme.ACCENT : AppTheme.ACCENT_LIGHT)
+      .fontColor(filled ? AppTheme.ON_EMPHASIS : AppTheme.GOLD)
+      .backgroundColor(filled ? AppTheme.EMPHASIS : AppTheme.GOLD_LIGHT)
       .borderRadius(4).padding({ left: 5, right: 5, top: 2, bottom: 2 })
   }
 
@@ -62,6 +68,13 @@ export struct ThreadPreviewCard {
     else { this.onShare(); }
   }
 
+  private metricColor(label: string): ResourceColor {
+    const liked: boolean = label === '赞' && (this.actionState?.liked() ?? false);
+    if (!visualThemeStore.isPaper) { return liked ? AppTheme.ACCENT : AppTheme.TEXT_SUB; }
+    if (liked) { return AppTheme.EMPHASIS; }
+    return label === '评论' ? AppTheme.JADE : (label === '分享' ? AppTheme.GOLD : AppTheme.ACCENT);
+  }
+
   /** 独立动作读取稳定观察态，避免在列表复用时捕获旧计数。 */
   @Builder
   Metric(icon: Resource, label: string) {
@@ -71,16 +84,16 @@ export struct ThreadPreviewCard {
       } else {
         SymbolGlyph(label === '赞' && this.actionState?.liked() ? $r('sys.symbol.hand_thumbsup_fill') : icon)
           .fontSize(ThreadCardLayout.METRIC_ICON_SIZE).maxFontScale(1)
-          .fontColor([label === '赞' && this.actionState?.liked() ? AppTheme.ACCENT : AppTheme.TEXT_SUB])
+          .fontColor([this.metricColor(label)])
       }
-      Text(`${this.metricCount(label)}`).fontSize(ThreadCardLayout.METRIC_TEXT_SIZE)
-        .fontColor(label === '赞' && this.actionState?.liked() ? AppTheme.ACCENT : AppTheme.TEXT_SUB)
+      Text(this.metricCount(label) < 0 ? '—' : `${this.metricCount(label)}`).fontSize(ThreadCardLayout.METRIC_TEXT_SIZE)
+        .fontColor(this.metricColor(label))
     }
     .layoutWeight(1).justifyContent(FlexAlign.Center)
     .accessibilityGroup(true)
     .constraintSize({ minHeight: 32 })
     .id(label === '赞' ? 'thread-card-like' : (label === '评论' ? 'thread-card-comment' : 'thread-card-share'))
-    .accessibilityText(`${label === '赞' && this.actionState?.liked() ? '取消点赞' : label} ${this.metricCount(label)}`)
+    .accessibilityText(`${label === '赞' && this.actionState?.liked() ? '取消点赞' : label} ${this.metricCount(label) < 0 ? '数量未知' : this.metricCount(label)}`)
     .onClick(() => { this.activateMetric(label); })
   }
 
@@ -111,7 +124,8 @@ export struct ThreadPreviewCard {
           Row({ space: 6 }) {
             Text(this.forumName.endsWith('吧') ? this.forumName : `${this.forumName}吧`)
               .fontSize(ThreadCardLayout.AUTHOR_SIZE).fontWeight(FontWeight.Medium)
-              .fontColor(AppTheme.TEXT_MAIN).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(visualThemeStore.isPaper ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               .flexShrink(1).constraintSize({ maxWidth: '45%' })
               .id('thread-card-forum-name').onClick(() => { this.openForum(); })
             Row().width(1).height(12).backgroundColor(AppTheme.TEXT_SUB).opacity(0.45).flexShrink(0)
@@ -158,23 +172,29 @@ export struct ThreadPreviewCard {
     Column({ space: ThreadCardLayout.SECTION_GAP }) {
       this.IdentityHeader()
 
-      if (this.title.length > 0 || this.isTop || this.isGood) {
+      if (this.title.length > 0 || this.isTop || this.isGood || this.isHelp) {
         Column({ space: 5 }) {
-          if (this.isTop || this.isGood) {
+          if (this.isTop || this.isGood || this.isHelp) {
             Row({ space: 4 }) {
               if (this.isTop) { this.Tag('置顶', true) }
               if (this.isGood) { this.Tag('精品', false) }
+              if (this.isHelp) { HelpTag() }
             }
           }
           if (this.title.length > 0) {
-            Text(this.title).fontSize(ThreadCardLayout.BODY_SIZE).fontWeight(FontWeight.Bold)
+            Text(this.title).fontSize(visualThemeStore.isPaper ? 18 : ThreadCardLayout.BODY_SIZE).fontWeight(FontWeight.Bold)
               .fontColor(AppTheme.TEXT_MAIN).lineHeight(ThreadCardLayout.LINE_HEIGHT)
               .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
           }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }
-      if (this.summary.length > 0 && this.summary !== this.title) {
+      if ((this.summary.length > 0 || this.contentPieces.length > 0) && this.summary !== this.title) {
         Text() {
+          if (this.contentPieces.length > 0) {
+            PostContentInline({ pieces: this.contentPieces, emojiSize: 20, textColor: AppTheme.TEXT_MAIN,
+              accentColor: AppTheme.ACCENT_DARK,
+              onActivate: (piece: ContentPiece): void => { this.onActivateContent(piece); } })
+          } else {
           ForEach(this.summaryPieces(), (piece: ContentPiece, index: number) => {
             if (piece.kind === ContentKind.EMOJI && piece.emojiUrl.length > 0) {
               ImageSpan(emojiSrc(piece.emojiUrl)).width(20).height(20)
@@ -183,6 +203,7 @@ export struct ThreadPreviewCard {
               Span(piece.text)
             }
           }, (piece: ContentPiece, index: number) => `${index}:${piece.text}:${piece.emojiUrl}`)
+          }
         }.fontSize(ThreadCardLayout.BODY_SIZE).fontColor(AppTheme.TEXT_MAIN)
           .fontWeight(FontWeight.Normal)
           .lineHeight(ThreadCardLayout.LINE_HEIGHT).maxLines(4)
@@ -210,6 +231,7 @@ export struct ThreadPreviewCard {
         .id('thread-card-metrics')
     }.width('100%').alignItems(HorizontalAlign.Start)
       .padding({ top: ThreadCardLayout.TOP_PADDING, bottom: ThreadCardLayout.BOTTOM_PADDING })
-      .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+      .borderRadius(visualThemeStore.isPaper ? 0 : AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+      .border({ width: { bottom: visualThemeStore.isPaper ? 0.5 : 0 }, color: AppTheme.DIVIDER })
   }
 }

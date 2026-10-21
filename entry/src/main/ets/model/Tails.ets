@@ -1,4 +1,4 @@
-/** D-08：当前基准 APK GetTails protobuf；响应 data=1/error=2，与多数接口相反。 */
+/** 当前基准 APK GetTails protobuf；响应 data=1/error=2，与多数接口相反。 */
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 
 export class TailItem {

@@ -1,4 +1,4 @@
-/** E-04/G-02：GetPrivateInfo 的吧务标记字段；缺失不沿用官方界面默认值。 */
+/** /GetPrivateInfo 的吧务标记字段；缺失不沿用官方界面默认值。 */
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 
 export type PrivacyMarkField = 'bazhu_show_inside' | 'bazhu_show_outside';

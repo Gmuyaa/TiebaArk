@@ -82,7 +82,7 @@ export class ThreadBlockActions {
     }
   }
 
-  /** 隐藏这一条帖子（纯本机，可在 设置 → 隐私设置 → 拉黑与隐藏 恢复） */
+  /** 隐藏这一条帖子（纯本机，可在 设置 → 隐私设置 → 隐藏 恢复） */
   async hideThread(context: common.UIAbilityContext, thread: ThreadBrief): Promise<string> {
     if (thread.tid <= 0) { return '帖子身份无效，无法隐藏'; }
     const item: HiddenThread = new HiddenThread();

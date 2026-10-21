@@ -69,7 +69,27 @@ export interface RawFrsTab {
   tab_name?: string;
   tab_type?: number;
   net_tab_type?: number;
+  is_general_tab?: number | string;
+  sort_menu?: RawFrsMenu[];
+  partition_menu?: RawFrsMenu[];
   tab_url?: string;
+}
+
+export interface RawFrsMenu { text?: string; source_id?: number | string; }
+export interface RawShownPost {
+  post_id?: number | string;
+  /** 0=回答，1=高赞回答。 */
+  type?: number | string;
+  text?: RawAbstractItem[];
+}
+export interface RawThreadMedia {
+  type?: number | string;
+  big_pic?: string;
+  src_pic?: string;
+  origin_pic?: string;
+  width?: number | string;
+  height?: number | string;
+  is_long_pic?: number | string;
 }
 
 /** 摘要里的富文本片段（`abstract` / `rich_abstract` 的元素） */
@@ -82,6 +102,9 @@ export interface RawAbstractItem {
 
 /** 列表里的单条主题 */
 export interface RawThread {
+  show_post_content?: RawShownPost | RawShownPost[];
+  show_user_list?: RawListUser[];
+  media?: RawThreadMedia[] | string;
   video_info?: RawVideoInfo;
   thread_type?: number | string;
   author?: RawListUser;
@@ -152,6 +175,7 @@ export interface RawFrsPage {
   frs_main_tab_list?: RawFrsTab[];
   frs_tab_default?: number;
   page_data_tab_id?: number;
+  sort_type?: number | string;
 }
 
 /** 官方 FRS SignInfo.user_info / SignUser；缺失不等于未签到。 */
@@ -283,6 +307,7 @@ export interface RawFeedBizItem {
 
 /** business_info_map 为卡片业务信息的对象形态，forum_avatar 为完整吧头像 URL；数组形态使用 business_info 键值对。 */
 export interface RawFeedBizMap {
+  thread_type?: string;
   forum_avatar?: string;
   forum_name?: string;
   create_time?: string;

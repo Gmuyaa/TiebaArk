@@ -1,3 +1,4 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
@@ -32,6 +33,7 @@ export default class EntryAbility extends UIAbility {
     catch (_) { hilog.warn(DOMAIN, 'CachePolicy', 'export cache maintenance failed'); }
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onCreate');
 
+    visualThemeStore.load(this.context);
     themeModeStore.load(this.context);
     smartReachStore.load(this.context);
 

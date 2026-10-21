@@ -30,8 +30,26 @@ export class NotifyResult {
   agreeHasMore: boolean = false;
 }
 
+/** 通知中不同角色的身份；缺少名称时保持空，不把动作人冒充原帖作者。 */
+export class NotifyAuthor {
+  userIdText: string = '';
+  userId: number = 0;
+  userName: string = '';
+  nameShow: string = '';
+  portrait: string = '';
+  avatar: string = '';
+  displayName(): string { return this.nameShow || this.userName; }
+}
+
 /** 一条通知（两类 kind 的展示并集；不用的字段保持空值，页面按 kind 取用） */
 export class NotifyItem {
+  /** 点赞记录标识，仅用于去重和翻页，不能当作楼层 ID。 */
+  agreeIdText: string = '';
+  deleted: boolean = false;
+  threadAuthor: NotifyAuthor = new NotifyAuthor();
+  quoteAuthor: NotifyAuthor = new NotifyAuthor();
+  postAuthor: NotifyAuthor = new NotifyAuthor();
+  hasPost: boolean = false;
   /** @我 JSON 的精确 ID；超出当前 number 导航范围时仍保留且禁止舍入跳转。 */
   threadIdText: string = '';
   postIdText: string = '';
@@ -59,11 +77,23 @@ export class NotifyItem {
   /** 秒级时间戳（模型统一乘 1000 存毫秒） */
   timeMs: number = 0;
 
+  key(): string {
+    if (this.kind === 'agree' && this.agreeIdText.length > 0) { return `agree-${this.agreeIdText}`; }
+    return `${this.kind}-${this.threadIdText || this.threadId}-${this.postIdText || this.postId}-${this.userIdText || this.userId}-${this.timeMs}`;
+  }
+
   /** 展示名：优先 name_show，退 name，最后兜底（与全站"贴吧用户"口径一致） */
   displayName(): string {
     if (this.nameShow.length > 0) { return this.nameShow; }
     if (this.userName.length > 0) { return this.userName; }
     return '贴吧用户';
+  }
+
+  /** 部分历史通知正文自带“回复 昵称：”前缀，保留服务端文本，避免重复拼接。 */
+  replyText(fallbackName: string): string {
+    if (this.excerpt.length === 0) { return '回复了你'; }
+    if (/^回复\s*[^：:\r\n]{1,256}[：:]/.test(this.excerpt)) { return this.excerpt; }
+    return `回复 ${this.quoteAuthor.displayName() || fallbackName || '我'}：${this.excerpt}`;
   }
 
   /** 页面主文案（不编造：各字段有什么画什么） */
@@ -74,6 +104,12 @@ export class NotifyItem {
     }
     return this.title.length > 0 ? this.title : '赞了你的内容';
   }
+}
+
+/** 保留精确 ID；现有 number 路由不能安全表示的值保持 0，页面禁止舍入跳转。 */
+function safeId(value: string): number {
+  const parsed: number = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
 /** 读 `Error`：errorno=1、errmsg=2、usermsg=3（优先展示非空 usermsg） */
@@ -94,11 +130,13 @@ function readError(reader: ProtoReader, out: NotifyResult): void {
 }
 
 /** 读 `User` 的展示三件套：id=2(int64)、name=3、name_show=4、portrait=5 */
-function readUser(reader: ProtoReader, item: NotifyItem): void {
+function readAuthor(reader: ProtoReader): NotifyAuthor {
+  const item: NotifyAuthor = new NotifyAuthor();
   while (reader.hasMore()) {
     const tag: number = reader.readTag();
     if (tag === 2 && reader.wireType === WireType.VARINT) {
-      item.userId = Number(reader.readInt64());
+      item.userIdText = reader.readInt64().toString();
+      item.userId = safeId(item.userIdText);
     } else if (tag === 3 && reader.wireType === WireType.LENGTH_DELIMITED) {
       item.userName = reader.readString();
     } else if (tag === 4 && reader.wireType === WireType.LENGTH_DELIMITED) {
@@ -110,6 +148,14 @@ function readUser(reader: ProtoReader, item: NotifyItem): void {
       reader.skipField();
     }
   }
+  return item;
+}
+
+function readUser(reader: ProtoReader, item: NotifyItem): void {
+  const author: NotifyAuthor = readAuthor(reader);
+  item.userIdText = author.userIdText; item.userId = author.userId;
+  item.userName = author.userName; item.nameShow = author.nameShow;
+  item.portrait = author.portrait; item.avatar = author.avatar;
 }
 
 /**
@@ -119,12 +165,15 @@ function readUser(reader: ProtoReader, item: NotifyItem): void {
 function readReplyItem(reader: ProtoReader): NotifyItem {
   const item: NotifyItem = new NotifyItem();
   item.kind = 'reply';
+  let hideForum: boolean = false;
   while (reader.hasMore()) {
     const tag: number = reader.readTag();
     if (tag === 1 && reader.wireType === WireType.VARINT) {
-      item.threadId = Number(reader.readInt64());
+      item.threadIdText = reader.readInt64().toString();
+      item.threadId = safeId(item.threadIdText);
     } else if (tag === 2 && reader.wireType === WireType.VARINT) {
-      item.postId = Number(reader.readInt64());
+      item.postIdText = reader.readInt64().toString();
+      item.postId = safeId(item.postIdText);
     } else if (tag === 3 && reader.wireType === WireType.VARINT) {
       item.timeMs = reader.readInt32() * 1000;
     } else if (tag === 4 && reader.wireType === WireType.LENGTH_DELIMITED) {
@@ -139,10 +188,17 @@ function readReplyItem(reader: ProtoReader): NotifyItem {
       item.quoteContent = reader.readString();
     } else if (tag === 9 && reader.wireType === WireType.LENGTH_DELIMITED) {
       readUser(reader.readMessageView(), item);
+    } else if (tag === 15 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      item.quoteAuthor = readAuthor(reader.readMessageView());
+    } else if (tag === 25 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      item.threadAuthor = readAuthor(reader.readMessageView());
+    } else if (tag === 19 && reader.wireType === WireType.VARINT) {
+      hideForum = reader.readInt32() === 1;
     } else {
       reader.skipField();
     }
   }
+  if (hideForum) { item.forumName = ''; }
   return item;
 }
 
@@ -177,16 +233,23 @@ function readReplyData(reader: ProtoReader, out: NotifyResult): void {
 function readAgreeItem(reader: ProtoReader): NotifyItem {
   const item: NotifyItem = new NotifyItem();
   item.kind = 'agree';
+  let actionTime: number = 0;
   while (reader.hasMore()) {
     const tag: number = reader.readTag();
     if (tag === 1 && reader.wireType === WireType.LENGTH_DELIMITED) {
       const thread: ProtoReader = reader.readMessageView();
+      let fallbackId: string = '';
       while (thread.hasMore()) {
         const f: number = thread.readTag();
-        if (f === 2 && thread.wireType === WireType.VARINT) {
-          item.threadId = Number(thread.readInt64());
+        if (f === 1 && thread.wireType === WireType.VARINT) {
+          fallbackId = thread.readInt64().toString();
+        } else if (f === 2 && thread.wireType === WireType.VARINT) {
+          item.threadIdText = thread.readInt64().toString();
+          item.threadId = safeId(item.threadIdText);
         } else if (f === 3 && thread.wireType === WireType.LENGTH_DELIMITED) {
           item.title = thread.readString();
+        } else if (f === 18 && thread.wireType === WireType.LENGTH_DELIMITED) {
+          item.threadAuthor = readAuthor(thread.readMessageView());
         } else if (f === 28 && thread.wireType === WireType.LENGTH_DELIMITED) {
           item.forumName = thread.readString();
         } else if (f === 45 && thread.wireType === WireType.VARINT) {
@@ -195,28 +258,48 @@ function readAgreeItem(reader: ProtoReader): NotifyItem {
           thread.skipField();
         }
       }
+      // 官方 ThreadData.getTid：非零 tid 优先，否则 id；不能拿舍入后的 0 触发回退。
+      if (item.threadIdText.length === 0 || item.threadIdText === '0') {
+        item.threadIdText = fallbackId; item.threadId = safeId(fallbackId);
+      }
     } else if (tag === 4 && reader.wireType === WireType.VARINT) {
-      // AgreeList 顶层 time：ThreadInfo.create_time 没给时用它兜底
-      if (item.timeMs === 0) { item.timeMs = reader.readInt32() * 1000; }
+      // 动作时间优先于发帖时间；无论是否有兜底值，都必须消费当前 varint。
+      actionTime = reader.readInt32() * 1000;
+    } else if (tag === 5 && reader.wireType === WireType.VARINT) {
+      item.deleted = reader.readInt32() === 1;
     } else if (tag === 7 && reader.wireType === WireType.VARINT) {
-      // AgreeList.id = 游标（uint64）。暂存在 postId，parseNotifyAgree 末尾统一搬进 nextAgreeId
-      item.postId = Number(reader.readInt64());
+      item.agreeIdText = reader.readInt64().toString();
     } else if (tag === 8 && reader.wireType === WireType.LENGTH_DELIMITED) {
       readUser(reader.readMessageView(), item);
     } else if (tag === 9 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      item.hasPost = true;
       const post: ProtoReader = reader.readMessageView();
+      let content: string = '';
       while (post.hasMore()) {
         const f: number = post.readTag();
-        if (f === 2 && post.wireType === WireType.LENGTH_DELIMITED) {
+        if (f === 1 && post.wireType === WireType.VARINT) {
+          item.postIdText = post.readInt64().toString(); item.postId = safeId(item.postIdText);
+        } else if (f === 2 && post.wireType === WireType.LENGTH_DELIMITED) {
           item.excerpt = post.readString();
+        } else if (f === 23 && post.wireType === WireType.LENGTH_DELIMITED) {
+          item.postAuthor = readAuthor(post.readMessageView());
+        } else if (f === 5 && post.wireType === WireType.LENGTH_DELIMITED) {
+          const piece: ProtoReader = post.readMessageView();
+          while (piece.hasMore()) {
+            const field: number = piece.readTag();
+            if (field === 2 && piece.wireType === WireType.LENGTH_DELIMITED) { content += piece.readString(); }
+            else { piece.skipField(); }
+          }
         } else {
           post.skipField();
         }
       }
+      if (content.length > 0) { item.excerpt = content; }
     } else {
       reader.skipField();
     }
   }
+  if (actionTime > 0) { item.timeMs = actionTime; }
   return item;
 }
 
@@ -227,7 +310,6 @@ function readAgreeData(reader: ProtoReader, out: NotifyResult): void {
     if (tag === 1 && reader.wireType === WireType.VARINT) {
       out.agreeHasMore = reader.readInt32() === 1;
     } else if (tag === 2 && reader.wireType === WireType.LENGTH_DELIMITED) {
-      // readAgreeItem 会把 AgreeList.id（游标）暂存在 item.postId 里，由 parseNotifyAgree 统一取
       out.items.push(readAgreeItem(reader.readMessageView()));
     } else {
       reader.skipField();
@@ -241,6 +323,7 @@ function readAgreeData(reader: ProtoReader, out: NotifyResult): void {
  */
 export function parseNotifyReply(bytes: Uint8Array): NotifyResult {
   const out: NotifyResult = new NotifyResult();
+  let dataSeen: boolean = false;
   try {
     const root: ProtoReader = new ProtoReader(bytes);
     while (root.hasMore()) {
@@ -248,6 +331,7 @@ export function parseNotifyReply(bytes: Uint8Array): NotifyResult {
       if (field === 1 && root.wireType === WireType.LENGTH_DELIMITED) {
         readError(root.readMessageView(), out);
       } else if (field === 2 && root.wireType === WireType.LENGTH_DELIMITED) {
+        dataSeen = true;
         readReplyData(root.readMessageView(), out);
       } else {
         root.skipField();
@@ -255,6 +339,10 @@ export function parseNotifyReply(bytes: Uint8Array): NotifyResult {
     }
   } catch (err) {
     return new NotifyResult();
+  }
+  if (out.code !== 0 || !dataSeen) {
+    if (out.code === 0) { out.code = -1; out.message = '通知响应缺少数据'; }
+    out.items = []; out.hasMore = false; out.agreeHasMore = false; out.nextAgreeId = 0;
   }
   return out;
 }
@@ -265,6 +353,7 @@ export function parseNotifyReply(bytes: Uint8Array): NotifyResult {
  */
 export function parseNotifyAgree(bytes: Uint8Array): NotifyResult {
   const out: NotifyResult = new NotifyResult();
+  let dataSeen: boolean = false;
   try {
     const root: ProtoReader = new ProtoReader(bytes);
     while (root.hasMore()) {
@@ -272,6 +361,7 @@ export function parseNotifyAgree(bytes: Uint8Array): NotifyResult {
       if (field === 1 && root.wireType === WireType.LENGTH_DELIMITED) {
         readError(root.readMessageView(), out);
       } else if (field === 2 && root.wireType === WireType.LENGTH_DELIMITED) {
+        dataSeen = true;
         readAgreeData(root.readMessageView(), out);
       } else {
         root.skipField();
@@ -280,17 +370,16 @@ export function parseNotifyAgree(bytes: Uint8Array): NotifyResult {
   } catch (err) {
     return new NotifyResult();
   }
-  // 游标 = 最后一条的 AgreeList.id（readAgreeItem 把它暂存在 postId 里）
-  for (let i = out.items.length - 1; i >= 0; i--) {
-    const candidate: number = out.items[i].postId;
-    if (candidate > 0) {
-      out.nextAgreeId = candidate;
-      break;
+  // 仅使用末条真实游标，不回退到较早记录或舍入 64 位值。
+  if (out.items.length > 0) {
+    out.nextAgreeId = safeId(out.items[out.items.length - 1].agreeIdText);
+    if (out.agreeHasMore && out.nextAgreeId === 0) {
+      out.code = -1; out.message = '点赞通知分页标识无效或超出支持范围';
     }
   }
-  // 展示层不需要这个暂存值，清掉
-  for (let i = 0; i < out.items.length; i++) {
-    out.items[i].postId = 0;
+  if (out.code !== 0 || !dataSeen) {
+    if (out.code === 0) { out.code = -1; out.message = '通知响应缺少数据'; }
+    out.items = []; out.hasMore = false; out.agreeHasMore = false; out.nextAgreeId = 0;
   }
   return out;
 }

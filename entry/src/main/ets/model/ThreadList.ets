@@ -12,7 +12,7 @@
 import {
   RawAbstractItem, RawFeed, RawFeedBizItem, RawFeedBizMap, RawFeedComponent, RawFeedHead, RawFeedItem,
   RawFeedPic, RawFeedSocial, RawFeedTextBlock, RawFeedTextInner, RawForum, RawForumThemeColor,
-  RawForumThemeVariant, RawFrsPage, RawFrsTab, RawListUser, RawPage, RawThread
+  RawForumThemeVariant, RawFrsMenu, RawFrsPage, RawFrsTab, RawListUser, RawPage, RawThread
 } from '../api/RawFrsPage';
 
 import { rememberFeedImage } from './HomeFeedPresentation';
@@ -129,9 +129,21 @@ export class ForumTab {
   id: number = 0;
   name: string = '';
   isVideo: boolean = false;
+  isGeneral: boolean = false;
+  isHelp: boolean = false;
+  /** 官方普通最新分区，且导航明确提供回复/发布排序。 */
+  isLatest: boolean = false;
+  /** 当前吧的官方导航明确提供回复(0)/发布(1)菜单。 */
+  supportsPostOrder: boolean = false;
+  type: number = 0;
 }
 
 export class ThreadBrief {
+  isHelp: boolean = false;
+  answerPreview: string = '';
+  answerPid: number = 0;
+  answerIsHighQuality: boolean = false;
+  answerAvatars: string[] = [];
   /** 回复推荐的稳定条目身份，不能用于详情请求；普通主题为0。 */
   feedItemId: number = 0;
   /** 回复推荐对应的楼层；详情加载失败或目标已删时保留原帖入口。 */
@@ -255,6 +267,15 @@ export class ThreadListResult {
       tab.id = num(rawTab.tab_id);
       tab.name = str(rawTab.tab_name);
       tab.isVideo = tabType === 3 && num(rawTab.tab_type) === 100;
+      tab.type = num(rawTab.tab_type);
+      tab.isGeneral = tabType === 3 && flag(rawTab.is_general_tab);
+      const sortMenu: RawFrsMenu[] = Array.isArray(rawTab.sort_menu) ? rawTab.sort_menu : [];
+      tab.supportsPostOrder = sortMenu.some((menu: RawFrsMenu): boolean => menu?.text === '回复' &&
+        (menu.source_id === undefined || menu.source_id === 0 || menu.source_id === '0')) &&
+        sortMenu.some((menu: RawFrsMenu): boolean => menu?.text === '发布' && (menu.source_id === 1 || menu.source_id === '1'));
+      tab.isLatest = tabType === 1 && tab.type === 14 && tab.supportsPostOrder;
+      tab.isHelp = tab.isGeneral && tab.type === 15 &&
+        (rawTab.partition_menu ?? []).some((menu) => num(menu.source_id) === 1 && menu.text === '未回答');
       result.tabs.push(tab);
     }
     const preferredTabId: number = num(raw.frs_tab_default);
@@ -315,6 +336,27 @@ export class ThreadListResult {
     const t: ThreadBrief = new ThreadBrief();
     t.video = parseVideoClip(raw.video_info);
     t.isVideo = raw.video_info !== undefined && raw.video_info !== null || num(raw.thread_type) === 40;
+    t.isHelp = num(raw.thread_type) === 71;
+    const shown = raw.show_post_content;
+    if (shown !== undefined && shown !== null && !Array.isArray(shown)) {
+      t.answerPreview = joinAbstract(shown.text);
+      t.answerPid = num(shown.post_id);
+      t.answerIsHighQuality = num(shown.type) === 1;
+    }
+    t.answerAvatars = (raw.show_user_list ?? []).filter((user: RawListUser): boolean =>
+      user !== null && user !== undefined && str(user.portrait).length > 0)
+      .slice(0, 5).map((user: RawListUser): string => listPortraitUrl(str(user.portrait)));
+    if (Array.isArray(raw.media)) {
+      for (const pic of raw.media) {
+        if (pic === undefined || pic === null || num(pic.type) !== 3) { continue; }
+        const url: string = str(pic.src_pic) || str(pic.big_pic) || str(pic.origin_pic);
+        if (url.length === 0) { continue; }
+        t.images.push(url);
+        rememberFeedImage(url, num(pic.width), num(pic.height), flag(pic.is_long_pic),
+          str(pic.origin_pic) || str(pic.src_pic));
+      }
+      t.coverImage = t.images.length > 0 ? t.images[0] : '';
+    }
 
     // tid 与 id 实测相等，优先取 tid，缺失时退回 id
     const tid: number = num(raw.tid);
@@ -329,6 +371,7 @@ export class ThreadListResult {
     // reply_num 是本端点的真值；万一服务端哪天改成只给 comment_num，这里兜住
     const replies: number = num(raw.reply_num);
     t.replyCount = replies > 0 ? replies : num(raw.comment_num);
+    if (t.isHelp && raw.reply_num === undefined && raw.comment_num === undefined) { t.replyCount = -1; }
     t.viewCount = num(raw.view_num);
     t.shareCount = num(raw.share_num);
 
@@ -441,6 +484,7 @@ export class ThreadListResult {
 
     const map: RawFeedBizMap | undefined = feed.business_info_map;
     t.viewCount = ThreadListResult.bizNumber(feed.business_info, 'view_num', map);
+    t.isHelp = ThreadListResult.bizNumber(feed.business_info, 'thread_type', map) === 71;
     // 新版卡片实测不带这些标记，保持默认值而不是猜
     t.isGood = false;
     t.isTop = false;
@@ -525,6 +569,7 @@ export class ThreadListResult {
     if (key === 'forum_name') { return str(map.forum_name); }
     if (key === 'create_time') { return str(map.create_time); }
     if (key === 'view_num') { return str(map.view_num); }
+    if (key === 'thread_type') { return str(map.thread_type); }
     return '';
   }
 

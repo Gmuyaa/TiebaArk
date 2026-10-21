@@ -32,7 +32,7 @@ export struct TailsPane {
 
   build() {
     Column() {
-      SettingsNote({ text: '仅查看：新增、编辑、删除与启用尚未开放。' })
+      SettingsNote({ text: '仅查看，回复暂不附加小尾巴。' })
       SettingsCard({
         content: (): void => { this.TailRows() }
       })
@@ -46,7 +46,6 @@ export struct TailsPane {
           }
         })
       }
-      SettingsNote({ text: '本应用回复暂不自动附加小尾巴。' })
     }
     .width('100%')
   }

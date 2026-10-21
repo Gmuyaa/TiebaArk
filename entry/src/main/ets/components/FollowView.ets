@@ -17,9 +17,14 @@ import { NavigationService } from '../navigation/AppNavigation';
 import { SignStrategyStore, signStrategyStore } from '../common/appearance/SignStrategyStore';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { UiLayout } from '../common/appearance/UiLayout';
+import { ForumSquareView } from './ForumSquareView';
 
 @ComponentV2
 export struct FollowView {
+  @Local squareSelected: boolean = false;
+  @Local squareVisited: boolean = false;
+  private pageSwiper: SwiperController = new SwiperController();
   @Param active: boolean = true;
   @Local foreground: ForegroundRefresh = foregroundRefresh;
   private foregroundRevision: number = foregroundRefresh.revision;
@@ -102,6 +107,50 @@ export struct FollowView {
   aboutToDisappear(): void { this.vm.dispose(); }
 
   build() {
+    Column() {
+      RootPageHeader({ titleContent: (): void => { this.PageTabs(); },
+        actions: (): void => { this.HeaderActions(); } })
+      Swiper(this.pageSwiper) {
+        Column() { this.FollowContent() }.width('100%').height('100%')
+        Column() {
+          if (this.squareVisited) {
+            ForumSquareView({ bottomBarOcclusion: this.bottomBarOcclusion,
+              active: this.active && this.squareSelected })
+          }
+        }.width('100%').height('100%')
+      }
+      .indicator(false).loop(false).cachedCount(1)
+      .onAnimationStart((_index: number, targetIndex: number): void => {
+        if (targetIndex === 1) { this.squareVisited = true; }
+      })
+      .onChange((index: number): void => { this.squareSelected = index === 1; })
+      .width('100%').layoutWeight(1)
+    }.width('100%').height('100%')
+  }
+
+  @Builder
+  PageTabs() {
+    Row({ space: 20 }) {
+      this.PageTab('我的关注', false)
+      this.PageTab('吧广场', true)
+    }
+  }
+
+  @Builder
+  PageTab(title: string, square: boolean) {
+    Text(title).fontSize(UiLayout.ROOT_TITLE)
+      .fontWeight(this.squareSelected === square ? FontWeight.Bold : FontWeight.Regular)
+      .fontColor(this.squareSelected === square ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
+      .constraintSize({ minHeight: 44 }).maxLines(1)
+      .accessibilitySelected(this.squareSelected === square)
+      .onClick((): void => {
+        if (square) { this.squareVisited = true; }
+        this.pageSwiper.changeIndex(square ? 1 : 0, true);
+      })
+  }
+
+  @Builder
+  FollowContent() {
     if (!authSession.snapshot.isLoggedIn()) {
       // 未登录：沿用 Index 原空态的引导组件（登录返回后切 Tab 重建自然刷新）
       LoginEmptyView({
@@ -120,6 +169,7 @@ export struct FollowView {
   /** 头部：左「我的关注」标题 + 右侧沉浸光感「签」圆按钮。 */
   @Builder
   HeaderActions() {
+    if (!this.squareSelected && authSession.snapshot.isLoggedIn()) {
         GlassCircleButton({
           label: this.vm.signingAll ? '…' : '签', diameter: 40, iconSize: 22, iconOffsetX: -2.5, labelOffsetY: 0.5,
           accessibilityLabel: this.vm.signingAll ? '正在签到' :
@@ -132,13 +182,12 @@ export struct FollowView {
             });
           }
         }).enabled(!this.vm.signingAll && this.vm.forums.length > 0)
+    }
   }
 
   @Builder
   FollowPage() {
     Column() {
-      RootPageHeader({ title: '我的关注', actions: (): void => { this.HeaderActions(); } })
-
       if (this.vm.loading && !this.vm.loadedOnce) {
         PageState({ fillRemaining: true, loading: true, message: '正在加载关注的吧…' }).layoutWeight(1)
       } else if (this.vm.forums.length === 0 && this.vm.errorText.length > 0) {
@@ -181,30 +230,29 @@ export struct FollowView {
     .divider({
       strokeWidth: 0.5,
       color: AppTheme.DIVIDER,
-      startMargin: 80,
+      startMargin: 66,
       endMargin: 16
     })
   }
 
   @Builder
   FollowRow(item: FollowForumItem) {
-    Row({ space: 12 }) {
+    Row({ space: 10 }) {
 
       ForumAvatarImage({ url: item.avatar, forumName: item.fname,
-        avatarSize: 52, radius: 52 * 14 / 64 })
+        avatarSize: 40, radius: 40 * 14 / 64 })
 
-      Column({ space: 4 }) {
+      Column({ space: 3 }) {
         Text(item.fname.endsWith('吧') ? item.fname : `${item.fname}吧`)
-          .fontSize(16)
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppTheme.TEXT_MAIN)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        Row({ space: 8 }) {
+        Row({ space: 6 }) {
           ForumLevelBadge({ level: item.level, levelName: item.levelName }).flexShrink(0)
-          Text(`连签 ${item.continuousCount >= 0 ? item.continuousCount : '--'} 天 · ` +
-            `累计 ${item.totalCount >= 0 ? item.totalCount : '--'} 次`)
+          Text(`连签 ${item.continuousCount >= 0 ? item.continuousCount : '--'} 天`)
             .fontSize(10).fontColor(AppTheme.TEXT_SUB)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
@@ -218,7 +266,7 @@ export struct FollowView {
       this.SignButton(item)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
     .alignItems(VerticalAlign.Center)
 
     .onVisibleAreaChange([0.01], (visible: boolean) => {
@@ -240,19 +288,19 @@ export struct FollowView {
   SignButton(item: FollowForumItem) {
     Text(!item.signKnown ? '读取中…' : item.isSigned ? '已签到'
       : (this.vm.signingFname === item.fname ? '签到中…' : '签到'))
-      .fontSize(13)
+      .fontSize(12)
       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      .constraintSize({ minHeight: 40, minWidth: 64, maxWidth: 96 }).flexShrink(0)
+      .constraintSize({ minHeight: 32, minWidth: 56, maxWidth: 88 }).flexShrink(0)
       .textAlign(TextAlign.Center)
       .fontColor(item.isSigned ? AppTheme.TEXT_MUTED : AppTheme.ACCENT_DARK)
       .backgroundColor(item.isSigned ? Color.Transparent : AppTheme.ACCENT_LIGHT)
       .border({ width: item.isSigned ? 0.5 : 0, color: AppTheme.DIVIDER })
-      .borderRadius(14)
+      .borderRadius(12)
       .padding({
-        left: 12,
-        right: 12,
-        top: 5,
-        bottom: 5
+        left: 10,
+        right: 10,
+        top: 4,
+        bottom: 4
       })
       .onClick(() => {
         if (!item.signKnown) { void this.vm.load(this.hostContext(), true); return; }

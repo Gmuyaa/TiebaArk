@@ -7,6 +7,8 @@ import { DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
 import { ThreadAuthorBadge } from './ThreadAuthorBadge';
+import { ForumLevelBadge } from './ForumLevelBadge';
+import { UserGrowthBadge } from './UserGrowthBadge';
 import { ReplyMetaBar } from './ReplyMetaBar';
 import { CommentMetadata } from './CommentMetadata';
 import { SubReplyPreviewBox } from './SubReplyPreviewBox';
@@ -98,10 +100,16 @@ export struct ReplyItem {
           Row({ space: 6 }) {
             Text(this.item.author.displayName)
               .fontSize(COMMENT_NICKNAME_SIZE)
+              .flexShrink(1)
               .fontColor(DetailTheme.COMMENT_NICKNAME)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => { openUserByIdentity(this.item.author.id, this.item.author.portraitUrl, this.item.author.displayName, this.getUIContext()); })
+            UserGrowthBadge({ level: this.item.author.growthLevel })
+            if (this.item.author.level > 0) {
+              ForumLevelBadge({ level: this.item.author.level, levelName: this.item.author.levelName })
+                .flexShrink(0).accessibilityText(`吧内等级 ${this.item.author.level} ${this.item.author.levelName}`)
+            }
             if (this.isThreadAuthor) {
               ThreadAuthorBadge();
             }

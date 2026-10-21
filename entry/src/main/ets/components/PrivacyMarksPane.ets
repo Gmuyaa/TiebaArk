@@ -45,7 +45,7 @@ export struct PrivacyMarksPane {
           }
         })
       }
-      SettingsNote({ text: '这里只表示标记是否显示，不代表账号拥有吧务权限。修改尚未开放。' })
+      SettingsNote({ text: '仅查看标记显示状态，不代表吧务权限。' })
     }
     .width('100%')
   }

@@ -1,3 +1,5 @@
+import { visualThemeStore, VisualThemeStore } from '../common/appearance/VisualThemeStore';
+import { PaperLayout } from '../common/appearance/VisualTheme';
 /**
  * 应用外壳：HdsNavigation 承载共享内容栈，HdsTabs 承载首页、关注、消息和我的。
  * 底栏使用自定义 tabBuilder 绘制图标与文字，背景和沉浸材质由 HDS 提供。
@@ -95,12 +97,13 @@ struct Index {
   @Local homeSelectedChannel: string = '推荐';
   /** HDS builder 的显式响应桥：同时覆盖冷启动异步读偏好与设置页即时切换。 */
   @Local topNavPreferences: HomeTopNavStore = homeTopNavStore;
+  @Local visualPreferences: VisualThemeStore = visualThemeStore;
   @Local homeTopNavRowH: number = 54;
   @Local homeTopNavStyle: HomeTopNavStyle = homeTopNavStore.style;
 
-  @Monitor('topNavPreferences.style')
+  @Monitor('topNavPreferences.style', 'visualPreferences.theme')
   private syncHomeTopNavStyle(): void {
-    this.homeTopNavStyle = this.topNavPreferences.style;
+    this.homeTopNavStyle = visualThemeStore.isPaper ? HomeTopNavStyle.OFFICIAL_DUAL_ROW : this.topNavPreferences.style;
   }
   @Local homeStatusBarH: number = 39;
   /** HDS 会将超高的自定义内容居中；额外补 32vp 后频道行回到安全区下方。 */
@@ -148,11 +151,12 @@ struct Index {
     // 只记"外壳页真的回到前台"（含我们页当前页签），用来和状态发布时间对齐。
     avatarTrace('page-visible', 0, `page=index tab=${this.currentIndex}`);
     // 设置页里可能刚换过顶栏样式：回前台时同步一次（值没变则不会触发重绘）
-    this.homeTopNavStyle = homeTopNavStore.style;
+    this.syncHomeTopNavStyle();
     this.refreshMyProfile();
   }
 
   aboutToAppear(): void {
+    this.syncHomeTopNavStyle();
     NavigationService.setStack(this.appNavStack);
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -268,7 +272,8 @@ struct Index {
 
           topNavigationRowHeight: this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
             ? homeTopNavRowHeight(this.homeTopNavStyle, fontSizeScaleOf(fontScaleStore.pref,
-              fontScaleStore.systemScale, fontScaleStore.customSize)) : this.homeTopNavRowH,
+              fontScaleStore.systemScale, fontScaleStore.customSize)) +
+              (visualThemeStore.isPaper ? PaperLayout.BRAND_HEIGHT : 0) : this.homeTopNavRowH,
           topNavigationHidden: this.topNavigationHidden(),
           scrollNavigationHidden: this.homeScrollHidden,
           onScrollNavigationHiddenChange: (hidden: boolean): void => {
@@ -295,7 +300,7 @@ struct Index {
 
       TabContent() {
 
-        MessageView()
+        MessageView({ active: this.pageVisible && this.homeNavVisible && this.currentIndex === 2 })
       }
       .tabBar(this.tabBuilder('消息', 2, this.slots[2]))
 
@@ -311,7 +316,7 @@ struct Index {
     .animationDuration(0)
     .barHeight(this.bottomNavigationHidden() ? 0 : AppTheme.BAR_CONTENT_H)
     .barOverlap(true)
-    /** 底栏使用 HdsTabs 系统沉浸材质，背景保持透明，由系统处理材质渲染。 */
+    /** 底栏保留HDS原生玻璃；纸境只调整导航图标、文字的配色与字重。 */
     .barFloatingStyle({
 
       barSideMargin: this.barSideMargin,
@@ -321,7 +326,7 @@ struct Index {
         mediumWidth: this.bottomNavigationHidden() ? 4 : this.barSideMargin * 4,
         largeWidth: this.bottomNavigationHidden() ? 4 : this.barSideMargin * 4 },
 
-      barBottomMargin: this.bottomNavigationHidden() ? 0 : 28,
+      barBottomMargin: this.bottomNavigationHidden() ? 0 : AppTheme.BAR_SAFE_H,
 
       // 渐变遮罩独立于 barOpacity；收起开始时立即隐藏，展开结束再恢复。
       gradientMask: {
@@ -522,7 +527,7 @@ struct Index {
   }
 
   private slotColor(idx: number): ResourceColor {
-    return idx === this.currentIndex ? AppTheme.ACCENT : AppTheme.ICON;
+    return idx === this.currentIndex ? AppTheme.NAV_SELECTED : AppTheme.NAV_TEXT;
   }
 
   /** 已在首页时，单击回顶；窗口内第二次点击刷新当前频道。 */
@@ -555,6 +560,7 @@ struct Index {
       }
       Text(label)
         .fontSize(10)
+        .fontWeight(visualThemeStore.isPaper ? (index === this.currentIndex ? FontWeight.Bold : FontWeight.Medium) : FontWeight.Normal)
         .maxFontScale(1)
         .fontColor(this.slotColor(index))
     }

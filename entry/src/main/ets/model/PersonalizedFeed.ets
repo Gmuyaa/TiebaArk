@@ -46,6 +46,7 @@ function authorAvatarUrl(portrait: string): string {
 
 /** 官方推荐流里的一条帖子（解析中间态，字段名与 wire 字段一一对应） */
 export class PersonalizedThread {
+  isHelp: boolean = false;
   feedItemId: number = 0;
   targetPid: number = 0;
   isVideo: boolean = false;
@@ -230,6 +231,7 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
       case T_THREAD_TYPE:
         if (reader.wireType === WireType.VARINT) {
           threadType = Number(reader.readVarint()); t.isVideo = threadType === 40 || t.isVideo;
+          t.isHelp = threadType === 71;
         }
         else { reader.skipField(); }
         break;
@@ -240,8 +242,8 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
   }
   // 回复推荐的 id 可能是回复身份；官方 getTid 优先 tid，仅缺省时回退 id。
   if (t.tid === 0) { t.tid = itemId; }
-  // type=81 的回复推荐使用虚拟 tid，pb/page 必须读 origin_thread_info.tid。
-  if (threadType === 81) {
+  // type=79/81 的回复推荐使用虚拟 tid，pb/page 必须读 origin_thread_info.tid。
+  if (threadType === 79 || threadType === 81) {
     t.feedItemId = t.tid;
     t.tid = originTid;
     t.targetPid = Number.isSafeInteger(postId) && postId > 0 ? postId : 0;
@@ -327,6 +329,7 @@ export function personalizedToBrief(t: PersonalizedThread): ThreadBrief {
   b.feedItemId = t.feedItemId;
   b.targetPid = t.targetPid;
   b.isVideo = t.isVideo;
+  b.isHelp = t.isHelp;
   b.title = t.title;
   b.summary = t.summary;
   b.authorId = t.authorId;

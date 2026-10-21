@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ForumSquareData, parseForumSquare } from '../model/ForumSquare';
 import { AddPostResult } from '../model/AddPostResult';
 import { AtCandidateKind, AtCandidates, parseAtCandidates, validAtKind } from '../model/AtCandidates';
 import { parseAtMentions } from '../model/AtMentions';
@@ -179,8 +180,12 @@ interface PassportInfo {
   data?: PassportInfoData;
 }
 
+export class ForumSquareResponse extends ApiResult {
+  data: ForumSquareData = new ForumSquareData();
+}
+
 export class TiebaApi {
-  /** B-04验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。 */
+  /** 验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。 */
   async fetchCreateForumChallenge(device: TiebaDevice, session: TiebaSession): Promise<CreateForumChallengeResponse> {
     const response: CreateForumChallengeResponse = new CreateForumChallengeResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取创建吧验证码'); return response; }
@@ -202,7 +207,7 @@ export class TiebaApi {
     response.ok = true; return response;
   }
 
-  /** E-01独立头像传输准备；accepted不是资料读回成功，尚无UI调用。 */
+  /** 独立头像传输准备；accepted不是资料读回成功，尚无UI调用。 */
   async uploadAvatar(device: TiebaDevice, session: TiebaSession, input: AvatarUploadInput,
     traceId: number = 0): Promise<AvatarUploadResponse> {
     const response: AvatarUploadResponse = new AvatarUploadResponse();
@@ -330,7 +335,7 @@ export class TiebaApi {
     return response;
   }
   /**
-   * 吧务团队**全量**名单（官方 `GetBawuInfo`，cmd 301007，A-01 补）。
+   * 吧务团队**全量**名单（官方 `GetBawuInfo`，cmd 301007，补）。
    *
    * 与 `fetchForumMembers` 的分工：后者给的吧务组**只有预览**（实测 52 人回 5 个），
    * 这个端点给全量并按角色分组。两者都成功时由 `composeMemberGroups()` 用角色组替换预览组。
@@ -357,7 +362,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** C-03：公开语音二进制读取，无凭据/签名，编码由平台实际解析后裁决。 */
+  /** 公开语音二进制读取，无凭据/签名，编码由平台实际解析后裁决。 */
   async fetchVoiceAudio(device: TiebaDevice, id: string): Promise<VoiceAudioResponse> {
     const response: VoiceAudioResponse = new VoiceAudioResponse();
     const source: string = VoiceAudioParams.url(id);
@@ -399,7 +404,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** D-03：候选人读取；普通选人契约，发送文本与界面仍待证实。 */
+  /** 候选人读取；普通选人契约，发送文本与界面仍待证实。 */
   async fetchAtCandidates(device: TiebaDevice, session: TiebaSession, kind: AtCandidateKind,
     word: string = ''): Promise<AtCandidatesResponse> {
     const response: AtCandidatesResponse = new AtCandidatesResponse();
@@ -415,7 +420,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** E-04/G-02：账号吧务隐私标记读取；当前 APK 静态契约，服务端待验收。 */
+  /** /账号吧务隐私标记读取；当前 APK 静态契约，服务端待验收。 */
   async fetchPrivacyMarks(device: TiebaDevice, session: TiebaSession, uid: number): Promise<PrivacyMarksResponse> {
     const response: PrivacyMarksResponse = new PrivacyMarksResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取隐私标记'); return response; }
@@ -432,7 +437,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** E-04/G-02：写契约准备；UI 未开放，动态写/回读取证待执行。 */
+  /** /写契约准备；UI 未开放，动态写/回读取证待执行。 */
   async setPrivacyMark(device: TiebaDevice, session: TiebaSession, field: PrivacyMarkField, value: number): Promise<ApiResult> {
     const response: ApiResult = new ApiResult();
     if (!session.hasBduss() || session.tbs.length === 0 || !validPrivacyMark(field, value)) {
@@ -449,7 +454,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** E-04：账号屏蔽吧读取；当前 APK 静态契约已核对，服务端待验收。 */
+  /** 账号屏蔽吧读取；当前 APK 静态契约已核对，服务端待验收。 */
   async fetchForbiddenForums(device: TiebaDevice, session: TiebaSession, uid: number,
     page: number): Promise<ForbiddenForumsResponse> {
     const response: ForbiddenForumsResponse = new ForbiddenForumsResponse();
@@ -526,7 +531,7 @@ export class TiebaApi {
     return result;
   }
 
-  /** D-08：普通小尾巴读取，静态契约已核对；动态服务端待验收。 */
+  /** 普通小尾巴读取，静态契约已核对；动态服务端待验收。 */
   async fetchTails(device: TiebaDevice, session: TiebaSession): Promise<TailsResponse> {
     const response: TailsResponse = new TailsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取小尾巴'); return response; }
@@ -781,6 +786,41 @@ export class TiebaApi {
     return response;
   }
 
+  /** 当前官方 hybrid-main-bawu/forumSquare：登录态、一级/二级分类与20条分页。 */
+  async fetchForumSquare(device: TiebaDevice, session: TiebaSession, category: string = '推荐',
+    subcategory: string = '全部', page: number = 1): Promise<ForumSquareResponse> {
+    const response: ForumSquareResponse = new ForumSquareResponse();
+    if (category.trim().length === 0 || subcategory.trim().length === 0 || !Number.isInteger(page) || page < 1) {
+      response.failLocal('分类参数无效'); return response;
+    }
+    device.clientVersion = TiebaVersion.SUB_POST;
+    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('class_name', category), new SignParam('second_class_name', subcategory),
+      new SignParam('pn', String(page)), new SignParam('rn', '20'));
+    const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
+    // 与官方原生网络代理一致使用GET；此端点不启用请求选项跟踪，不输出URL或响应凭据。
+    const transport: HttpResult = await this.client.get(
+      `https://${TiebaHost.APP}/c/f/forum/getForumSquare?${TiebaCommonParams.encodeForm(signed)}`);
+    if (!transport.ok) { response.transportError = '广场网络请求失败'; return response; }
+    const text: string = decodeUtf8(transport.bytes);
+    let envelope: ApiEnvelope;
+    try { envelope = JSON.parse(text) as ApiEnvelope; }
+    catch (_) { response.failLocal('广场响应不是合法JSON'); return response; }
+    const code: number = normalizeErrorCode(envelope.error_code);
+    if (code !== ERROR_OK) {
+      response.failBusiness(code, envelope.error_msg ?? ''); return response;
+    }
+    response.data = parseForumSquare(text, category, page);
+    if (response.data.error.length > 0) {
+      hilog.warn(0x0000, 'ForumSquare', 'invalid schema %{public}s', response.data.schema);
+      response.failLocal(response.data.error); return response;
+    }
+    hilog.info(0x0000, 'ForumSquare', 'read class=%{public}s sub=%{public}s page=%{public}d categories=%{public}d forums=%{public}d login=%{public}s',
+      response.data.category, subcategory, page, response.data.categories.length, response.data.forums.length, String(session.hasBduss()));
+    response.ok = true; return response;
+  }
+
   private async postJsonText(path: string, params: SignParam[], out: ApiResult,
     host: string = TiebaHost.APP,
     extraHeaders?: Record<string, string>): Promise<string | undefined> {
@@ -998,8 +1038,12 @@ export class TiebaApi {
   }
 
   async fetchThreadList(device: TiebaDevice, session: TiebaSession, forumName: string,
-    page: number, pageSize: number, tabId: number = 0): Promise<ThreadListResponse> {
+    page: number, pageSize: number, tabId: number = 0, sortType: number = -1): Promise<ThreadListResponse> {
     const response: ThreadListResponse = new ThreadListResponse();
+
+    if (sortType !== -1 && (tabId <= 0 || (sortType !== 0 && sortType !== 1))) {
+      response.failLocal('吧内排序参数无效'); return response;
+    }
 
     if (forumName.length === 0 || forumName.trim().length === 0) {
       response.failLocal('吧名不能为空');
@@ -1022,38 +1066,53 @@ export class TiebaApi {
     if (tabId > 0) {
       params.push(new SignParam('tab_id', String(tabId)));
     }
+    if (sortType >= 0) { params.push(new SignParam('sort_type', String(sortType))); }
 
     const text: string | undefined = await this.postJsonText('/c/f/frs/page', params, response);
     if (text === undefined) {
       return response;
     }
 
+    const raw: RawFrsPage = JSON.parse(text) as RawFrsPage;
+    if (sortType >= 0 && (String(raw.sort_type) !== String(sortType) ||
+      String(raw.page_data_tab_id) !== String(tabId))) {
+      response.failLocal('服务端未确认分类排序'); return response;
+    }
     response.ok = true;
-    response.data = ThreadListResult.fromRaw(JSON.parse(text) as RawFrsPage);
+    response.data = ThreadListResult.fromRaw(raw);
     return response;
   }
 
   /** 吧内视频通用分类；tab_id 来自本吧导航，分页/排序以接口真实字段为准。 */
   async fetchForumVideos(device: TiebaDevice, session: TiebaSession, forum: ForumBrief,
     tab: ForumTab, page: number, sortType: number = 0): Promise<ThreadListResponse> {
+    return this.fetchForumGeneralTab(device, session, forum, tab, page, sortType);
+  }
+
+  /** 通用分类共享接口；互助以 partition_type=0/1 区分全部与未回答。 */
+  async fetchForumGeneralTab(device: TiebaDevice, session: TiebaSession, forum: ForumBrief,
+    tab: ForumTab, page: number, sortType: number = 0, partitionType: number = 0): Promise<ThreadListResponse> {
     const response: ThreadListResponse = new ThreadListResponse();
-    if (!tab.isVideo || tab.id <= 0 || forum.id <= 0 || forum.name.length === 0 || page < 1 || (sortType !== 0 && sortType !== 1)) {
-      response.failLocal('视频分类参数不完整'); return response;
+    if ((!tab.isGeneral && !tab.isVideo) || tab.id <= 0 || forum.id <= 0 || forum.name.length === 0 || page < 1 ||
+      (sortType !== 0 && sortType !== 1) || (partitionType !== 0 && partitionType !== 1) || (!tab.isHelp && partitionType !== 0)) {
+      response.failLocal('分类参数不完整'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('forum_id', String(forum.id)), new SignParam('forum_name', forum.name),
       new SignParam('tab_id', String(tab.id)), new SignParam('tab_name', tab.name),
-      new SignParam('is_general_tab', '1'), new SignParam('is_video_doublerow', '1'),
+      new SignParam('tab_type', String(tab.type)), new SignParam('is_general_tab', '1'),
+      new SignParam('partition_type', String(partitionType)),
       new SignParam('pn', String(page)), new SignParam('rn', '20'), new SignParam('sort_type', String(sortType)));
+    if (tab.isVideo) { params.push(new SignParam('is_video_doublerow', '1')); }
     const text: string | undefined = await this.postJsonText('/c/f/frs/generalTabList', params, response);
     if (text === undefined) { return response; }
     const raw: RawGeneralTabList = JSON.parse(text) as RawGeneralTabList;
     if (!Array.isArray(raw.general_list) || (String(raw.has_more) !== '0' && String(raw.has_more) !== '1')) {
-      response.failLocal('视频分类响应不完整'); return response;
+      response.failLocal('分类响应不完整'); return response;
     }
-    if (Number(raw.sort_type) !== sortType) { response.failLocal('服务端未确认视频排序'); return response; }
+    if (String(raw.sort_type) !== String(sortType)) { response.failLocal('服务端未确认分类排序'); return response; }
     response.data = ThreadListResult.fromRaw({ thread_list: raw.general_list, user_list: raw.user_list });
     response.data.forum = forum; response.data.selectedTabId = tab.id;
     response.data.page.currentPage = page; response.data.page.hasMore = String(raw.has_more) === '1';
@@ -1590,8 +1649,8 @@ export class TiebaApi {
       return response;
     }
 
-    device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    device.clientVersion = TiebaVersion.SUB_POST;
+    this.client.userAgent = `bdtb for Android ${TiebaVersion.SUB_POST}`;
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kz', String(tid)));

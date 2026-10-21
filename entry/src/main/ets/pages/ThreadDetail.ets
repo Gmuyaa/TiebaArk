@@ -1,3 +1,6 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { HelpTag } from '../components/HelpTag';
+import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from '../components/PageState';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { ForumLevelBadge } from '../components/ForumLevelBadge';
@@ -58,7 +61,7 @@ import { AvatarComponent } from '../components/AvatarComponent';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadAuthorBadge } from '../components/ThreadAuthorBadge';
 import { SubReplyDetailSheet } from '../components/SubReplyDetailSheet';
-import { DetailTheme as AppTheme } from '../theme/Theme';
+import { AppTheme as BrandTheme, DetailTheme as AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
@@ -77,7 +80,7 @@ const BODY_EMOJI_SIZE: number = 21;
 
 /** 帖子页底栏支持分离式与弹出式，切换时复用点赞、收藏和回复状态。 */
 
-/** 胶囊内容高（vp）= 首页底栏内容高 `AppTheme.BAR_CONTENT_H` */
+/** 帖子操作胶囊内容高（vp），独立于主界面导航底栏。 */
 const ACTION_PILL_HEIGHT: number = 52;
 /** 左胶囊宽（vp）：现网「回复楼主…」实测 501px ÷ 3.5 */
 const REPLY_PILL_WIDTH: number = 143;
@@ -1328,17 +1331,8 @@ export struct ThreadDetailPage {
             this.JumpDialog();
           }
 
-          if (this.viewerUrl.length > 0) {
-            ImageViewer({
-              imageUrl: this.viewerUrl,
-              imageUrls: this.viewerUrls,
-              initialIndex: this.viewerIndex,
-              onClose: (): void => {
-                this.viewerUrl = '';
-                this.viewerUrls = [];
-                this.viewerIndex = 0;
-              }
-            });
+          if (this.viewerUrl.length > 0 && !this.showSubSheet) {
+            this.ImagePreview();
           }
 
         }
@@ -1355,11 +1349,21 @@ export struct ThreadDetailPage {
         .bindContentCover(this.showSubSheet, this.SubReplySheet(), {
           enableSafeArea: false,
           backgroundColor: AppTheme.BG,
+          onWillDismiss: (action: DismissContentCoverAction): void => {
+            if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
+              this.handleSystemBack();
+              return;
+            }
+            action.dismiss();
+          },
           // 点 X 或系统返回关闭时把状态收回来，
           // 否则开关停在 true 会让下一次"打开"变成无效操作
           onDisappear: (): void => {
             this.showSubSheet = false;
             this.subDetailPid = 0;
+            this.viewerUrl = '';
+            this.viewerUrls = [];
+            this.viewerIndex = 0;
             const user: UserBrief | undefined = this.pendingUser;
             this.pendingUser = undefined;
             if (user !== undefined) {
@@ -1420,6 +1424,33 @@ export struct ThreadDetailPage {
    */
   @Builder
   SubReplySheet() {
+    Stack() {
+      this.SubReplyContent();
+      if (this.viewerUrl.length > 0) {
+        this.ImagePreview();
+      }
+    }
+    .width('100%')
+    .height(LayoutPolicy.matchParent)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  ImagePreview() {
+    ImageViewer({
+      imageUrl: this.viewerUrl,
+      imageUrls: this.viewerUrls,
+      initialIndex: this.viewerIndex,
+      onClose: (): void => {
+        this.viewerUrl = '';
+        this.viewerUrls = [];
+        this.viewerIndex = 0;
+      }
+    });
+  }
+
+  @Builder
+  SubReplyContent() {
     SubReplyDetailSheet({
       tid: this.vm.tid,
       threadTitle: this.vm.detail.title,
@@ -2358,22 +2389,40 @@ export struct ThreadDetailPage {
     .layoutWeight(1)
   }
 
+  @Builder
+  MainThreadTitle(title: string) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Text() {
+        if (this.vm.detail.isHelp) {
+          Span('　　').fontSize(9).fontWeight(FontWeight.Normal)
+          Span('　').fontSize(11).fontWeight(FontWeight.Normal)
+        }
+        Span(title)
+      }.fontSize(visualThemeStore.isPaper ? PaperLayout.READING_TITLE : POST_TITLE_SIZE)
+        .fontWeight(visualThemeStore.isPaper ? FontWeight.Bold : FontWeight.Medium)
+        .fontColor(AppTheme.TEXT_MAIN).lineHeight(visualThemeStore.isPaper ? 32 : 25).width('100%')
+        .accessibilityText(`${this.vm.detail.isHelp ? '求助 ' : ''}${title}`)
+      if (this.vm.detail.isHelp) {
+        HelpTag().margin({ top: visualThemeStore.isPaper ? 9 : 5.5 })
+          .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+      }
+    }.width('100%')
+  }
+
   /** 主帖区域包括作者信息、标题、正文与首帖楼中楼。 */
   @Builder
   ThreadIntro(item: PostItem) {
     Column({ space: 14 }) {
 
+      if (visualThemeStore.isPaper && item.title.length > 0) {
+        this.MainThreadTitle(item.title)
+      }
       this.AuthorBar()
 
       // 标题与正文沿用富文本块之间的 9vp 阅读间距，不叠加额外标题留白。
       Column({ space: 9 }) {
-        if (item.title.length > 0) {
-          Text(item.title)
-            .fontSize(POST_TITLE_SIZE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppTheme.TEXT_MAIN)
-            .lineHeight(25)
-            .width('100%')
+        if (!visualThemeStore.isPaper && item.title.length > 0) {
+          this.MainThreadTitle(item.title)
         }
 
         if (!this.videoMode && this.vm.detail.video !== undefined) {
@@ -2381,7 +2430,8 @@ export struct ThreadDetailPage {
             onFullscreenChange: (shown: boolean): void => { this.videoFullscreen = shown; } })
         }
         this.RichPieces(this.videoMode ? item.contents.filter((piece: ContentPiece): boolean =>
-          !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents)
+          !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents, visualThemeStore.isPaper ? PaperLayout.READING_BODY : POST_BODY_SIZE,
+          visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -2855,11 +2905,57 @@ export struct ThreadDetailPage {
   /** 按已保存偏好显示分离式双胶囊或弹出式单按钮。 */
   @Builder
   BottomActionBar() {
-    if (threadActionBarStore.style === ThreadActionBarStyle.SPLIT_IMMERSIVE) {
+    if (visualThemeStore.isPaper) {
+      this.PaperActionBar()
+    } else if (threadActionBarStore.style === ThreadActionBarStyle.SPLIT_IMMERSIVE) {
       this.SplitImmersiveActionBar()
     } else {
       this.PopupActionBar()
     }
+  }
+
+  /** 纸境单片悬浮操作面，业务操作和键盘处理沿用原入口。 */
+  @Builder
+  PaperActionBar() {
+    HdsTabs({ barPosition: BarPosition.End }) {
+      TabContent() {}.tabBar(this.PaperActionContent())
+    }
+    .barHeight(56).barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
+    .barBackgroundColor(AppTheme.ACCENT_LIGHT).barBackgroundBlurStyle(BlurStyle.NONE)
+    .barFloatingStyle({
+      barWidth: { smallWidth: Math.max(240, this.popupViewportWidth - 24),
+        mediumWidth: Math.max(240, this.popupViewportWidth - 24),
+        largeWidth: Math.max(240, this.popupViewportWidth - 24) },
+      barSideMargin: 0, barBottomMargin: 0, gradientMask: SPLIT_PILL_GRADIENT_MASK,
+      thermoCtrl: true, systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
+    })
+    .width(Math.max(240, this.popupViewportWidth - 24)).height(56).borderRadius(28).clip(true)
+    .border({ width: 0.5, color: AppTheme.DIVIDER })
+    .margin({ bottom: BOTTOM_BAR_BOTTOM_MARGIN })
+    .id('paper-thread-action-bar')
+  }
+
+  @Builder
+  PaperActionContent() {
+    Row({ space: 4 }) {
+      Stack() {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.pencil_line')).fontSize(18).maxFontScale(1).fontColor([BrandTheme.EMPHASIS])
+          Text('写评论').fontSize(14).fontColor(BrandTheme.EMPHASIS).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        }.width('100%').height(36).padding({ left: 10, right: 8 })
+      }.layoutWeight(2.3).height(44)
+        .id('paper-write-comment').accessibilityGroup(true).accessibilityText('写评论')
+        .onClick((): void => { this.openReplyBox(0); })
+      this.BottomReplyCount()
+      this.BottomLikeAction()
+      this.BottomStoreAction()
+      if (this.popupViewportWidth >= 360) {
+        this.BottomAction($r('sys.symbol.share'), '分享', (): void => { this.shareThread(); })
+      }
+    }
+    // HDS内容盒已扣上下各4vp，跟随其可用高度，避免再次撑满整栏而下溢。
+    .width('100%').height('100%')
   }
 
   /** 「分离式」：左右各一个 `HdsTabs`，玻璃全由官方系统材质提供 */
@@ -2920,12 +3016,14 @@ export struct ThreadDetailPage {
       SymbolGlyph(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
         : $r('sys.symbol.hand_thumbsup'))
         .fontSize(22)
-        .fontColor([this.mainLiked() ? AppTheme.ACCENT : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? (this.mainLiked() ? BrandTheme.EMPHASIS : AppTheme.ICON) :
+          (this.mainLiked() ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.mainLikeCount() > 0 ? `${this.mainLikeCount()}` : '点赞')
         .fontSize(10)
-        .fontColor(this.mainLiked() ? AppTheme.ACCENT : AppTheme.TEXT_SUB)
+        .fontColor(this.mainLiked() ? (visualThemeStore.isPaper ? BrandTheme.EMPHASIS : AppTheme.ACCENT) : AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
+    .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
       this.toggleMainLike();
@@ -2957,12 +3055,13 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(this.vm.collected ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
         .fontSize(22)
-        .fontColor([this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? BrandTheme.GOLD : (this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.vm.collected ? '已收藏' : '收藏')
         .fontSize(10)
-        .fontColor(AppTheme.COMMENT_ACTION)
+        .fontColor(visualThemeStore.isPaper && this.vm.collected ? BrandTheme.GOLD : AppTheme.COMMENT_ACTION)
     }
     .layoutWeight(1)
+    .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
       this.toggleMainStore();
@@ -2987,12 +3086,13 @@ export struct ThreadDetailPage {
       // 回复数入口：官方 Symbol `message`（原为字符 ▤）
       SymbolGlyph($r('sys.symbol.message'))
         .fontSize(22)
-        .fontColor([AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? BrandTheme.JADE : AppTheme.TEXT_MAIN])
       Text(`${this.displayedReplyCount()}`)
         .fontSize(10)
         .fontColor(AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
+    .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
 
@@ -3005,12 +3105,13 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(icon)
         .fontSize(22)
-        .fontColor([AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? BrandTheme.JADE : AppTheme.TEXT_MAIN])
       Text(label)
         .fontSize(10)
         .fontColor(AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
+    .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
       onTap();

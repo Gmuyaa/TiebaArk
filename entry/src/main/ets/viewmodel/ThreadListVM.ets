@@ -58,20 +58,59 @@ export class ThreadListVM {
   @Trace threads: ThreadBrief[] = [];
   @Trace tabs: ForumTab[] = [];
   @Trace selectedTabId: number = 0;
-  @Trace videoSort: number = 0;
+  @Trace helpPartition: number = 0;
+  @Trace private categorySorts: Map<number, number> = new Map<number, number>();
+  hasPostOrder(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.supportsPostOrder); }
+  currentSort(): number { return this.sortForTab(this.selectedTabId); }
+  private sortForTab(tabId: number): number { return this.categorySorts.get(tabId) ?? 0; }
+  private setTabSort(tabId: number, sort: number): void {
+    const next: Map<number, number> = new Map<number, number>(this.categorySorts);
+    next.set(tabId, sort); this.categorySorts = next;
+  }
+  isLatestTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isLatest); }
   isVideoTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isVideo); }
+  isHelpTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isHelp); }
   private fetchCategory(device: TiebaDevice, name: string, page: number, tabId: number): Promise<ThreadListResponse> {
     const tab: ForumTab | undefined = this.tabs.find((value: ForumTab): boolean => value.id === tabId);
     if (tab?.isVideo && this.forum.id > 0 && this.forum.name.toLowerCase() === name.toLowerCase()) {
-      return this.api.fetchForumVideos(device, authSession.session(), this.forum, tab, page, this.videoSort);
+      return this.api.fetchForumVideos(device, authSession.session(), this.forum, tab, page, this.sortForTab(tabId));
     }
-    return this.api.fetchThreadList(device, authSession.session(), name, page, REQUEST_PAGE_SIZE, tabId);
+    if (tab?.isGeneral && this.forum.id > 0 && this.forum.name.toLowerCase() === name.toLowerCase()) {
+      return this.api.fetchForumGeneralTab(device, authSession.session(), this.forum, tab, page,
+        this.sortForTab(tabId), tab.isHelp ? this.helpPartition : 0);
+    }
+    return this.api.fetchThreadList(device, authSession.session(), name, page, REQUEST_PAGE_SIZE, tabId,
+      tab?.supportsPostOrder ? this.sortForTab(tabId) : -1);
   }
-  async changeVideoSort(context: common.UIAbilityContext, sort: number): Promise<void> {
-    if (!this.isVideoTab() || this.loading || this.isLoadingMore || this.switchingTab || sort === this.videoSort) { return; }
-    const previous: number = this.videoSort; this.videoSort = sort;
+  async changeSort(context: common.UIAbilityContext, sort: number): Promise<boolean> {
+    if (!this.hasPostOrder() || this.loading || this.isLoadingMore || this.switchingTab ||
+      (sort !== 0 && sort !== 1) || sort === this.currentSort()) { return false; }
+    const tabId: number = this.selectedTabId;
+    const owner: string = this.ownerKey();
+    const previous: number = this.currentSort();
+    this.setTabSort(tabId, sort);
     await this.refresh(context, this.forumName, true);
-    if (this.errorText.length > 0) { this.videoSort = previous; }
+    if (owner !== this.ownerKey()) { return false; }
+    if (this.errorText.length > 0) { this.setTabSort(tabId, previous); return false; }
+    return true;
+  }
+
+  async changeHelpFilter(context: common.UIAbilityContext, partition: number, sort: number): Promise<boolean> {
+    if (!this.isHelpTab() || this.loading || this.isLoadingMore || this.switchingTab ||
+      (partition !== 0 && partition !== 1) || (sort !== 0 && sort !== 1) ||
+      (partition === this.helpPartition && sort === this.currentSort()) ||
+      (sort !== this.currentSort() && !this.hasPostOrder())) { return false; }
+    const tabId: number = this.selectedTabId;
+    const oldPartition: number = this.helpPartition;
+    const owner: string = this.ownerKey();
+    const oldSort: number = this.currentSort();
+    this.helpPartition = partition; this.setTabSort(tabId, sort);
+    await this.refresh(context, this.forumName, true);
+    if (owner !== this.ownerKey()) { return false; }
+    if (this.errorText.length > 0) {
+      this.helpPartition = oldPartition; this.setTabSort(tabId, oldSort); return false;
+    }
+    return true;
   }
 
   @Trace heroHeadline: string = '';
@@ -143,6 +182,7 @@ export class ThreadListVM {
     const owner: string = this.ownerKey();
     const selected: number = this.selectedTabId;
     const sameOwner: boolean = this.tabOwner === this.ownerKey();
+    if (!sameOwner) { this.categorySorts = new Map<number, number>(); this.helpPartition = 0; }
     ++this.tabVersion;
     if (!currentCategoryOnly || !sameOwner) { this.tabSnapshots.clear(); }
     else { this.tabSnapshots.delete(selected); }
@@ -171,7 +211,8 @@ export class ThreadListVM {
           // 分区 ID 来自本吧首包；目标失败或服务端未确认选择时仍显示首包的真实内容。
           try {
             const preferredResponse: ThreadListResponse = await this.api.fetchThreadList(
-              device, authSession.session(), name, 1, REQUEST_PAGE_SIZE, preferredId);
+              device, authSession.session(), name, 1, REQUEST_PAGE_SIZE, preferredId,
+              availableTabs.some((tab: ForumTab): boolean => tab.id === preferredId && tab.supportsPostOrder) ? this.sortForTab(preferredId) : -1);
             if (owner !== this.ownerKey()) { return; }
             if (preferredResponse.ok && preferredResponse.data.forum.id === initialResponse.data.forum.id &&
               (preferredResponse.data.selectedTabId === preferredId || preferredResponse.data.selectedTabId === 0)) {

@@ -14,6 +14,7 @@ import { DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
 import { ThreadAuthorBadge } from './ThreadAuthorBadge';
+import { ForumLevelBadge } from './ForumLevelBadge';
 import { CommentActionHost } from './CommentActionHost';
 import { CommentMetadata } from './CommentMetadata';
 import { ReplyMetaBar } from './ReplyMetaBar';
@@ -61,6 +62,11 @@ export struct SubReplyDetailItem {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .onClick(() => { this.onOpenAuthor(); })
+
+          if (this.sub.author.level > 0) {
+            ForumLevelBadge({ level: this.sub.author.level, levelName: this.sub.author.levelName })
+              .flexShrink(0).accessibilityText(`吧内等级 ${this.sub.author.level} ${this.sub.author.levelName}`)
+          }
 
           if (this.isFloorAuthor) {
             Text('层主')

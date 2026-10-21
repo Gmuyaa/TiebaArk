@@ -1,3 +1,5 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { VisualTheme, PaperLayout, visualThemeLabel } from '../common/appearance/VisualTheme';
 import { homeDualRowHeight, OFFICIAL_DUAL_ROW_HEIGHT } from '../common/appearance/HomeTopNavStyle';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
@@ -203,6 +205,7 @@ struct SettingsPage {
 
   private parentPaneOf(pane: SettingsPane): SettingsPane {
     if (pane === SettingsPane.FORBIDDEN_FORUMS || pane === SettingsPane.BLOCK_MANAGE ||
+      pane === SettingsPane.HIDDEN_THREADS ||
       pane === SettingsPane.APP_PERMISSIONS || pane === SettingsPane.DATA_USE) {
       return SettingsPane.PRIVACY_SETTINGS;
     }
@@ -436,7 +439,7 @@ struct SettingsPage {
         } else {
           // 从入口进入是"新页面"：统一走导航方法（保存父页偏移 + 新页从顶部开始）
           this.navigateTo(entry.pane);
-          // G-03：进缓存清理页**先统计**，行右侧的占用必须是进去那一刻的真实值
+          // 进缓存清理页**先统计**，行右侧的占用必须是进去那一刻的真实值
           if (entry.pane === SettingsPane.CACHE) {
             this.refreshCacheStats();
           }
@@ -769,7 +772,7 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.CacheCardRows() }
     })
-    SettingsNote({ text: '清理后图片等内容会按需重新加载。不会退出登录，也不会删除设置、浏览历史或已保存的图片。系统统计可能稍后更新，正在使用的缓存可能重新生成。' })
+    SettingsNote({ text: '仅清理缓存，不会退出登录或删除设置、浏览历史和已保存的图片。占用可能稍后更新。' })
     this.CacheResultNotes()
   }
 
@@ -1129,6 +1132,8 @@ struct SettingsPage {
       })
     } else if (this.pane === SettingsPane.BLOCK_MANAGE) {
       BlockManagePane()
+    } else if (this.pane === SettingsPane.HIDDEN_THREADS) {
+      BlockManagePane({ hiddenThreads: true })
     } else if (this.pane === SettingsPane.PRIVACY_MARKS) {
       PrivacyMarksPane()
     } else if (this.pane === SettingsPane.IMAGE_WATERMARK) {
@@ -1155,7 +1160,6 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.OtherSettingsEmptyRow() }
     })
-    SettingsNote({ text: '这个分类下暂时还没有设置项。后续新增的设置会先收进这里。' })
   }
 
   @Builder
@@ -1168,9 +1172,9 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.SignSettingsRows() }
     })
-    SettingsNote({ text: signStrategyStore.strategy === 1
-      ? '通过官方批量接口签到，每批最多 50 个吧。普通账号通常支持 7 级及以上的吧，具体以服务端条件为准；未满足条件的吧可切换为逐个签到。'
-      : '逐个签到按关注吧顺序依次提交，可逐项确认结果。' })
+    if (signStrategyStore.strategy === 1) {
+      SettingsNote({ text: '官方签到有等级限制，不符合条件的吧可改用逐个签到。' })
+    }
   }
 
   @Builder
@@ -1197,7 +1201,6 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.AppearanceRows() }
     })
-    this.AppearancePreview()
     Row({ space: 10 }) {
       Text('等级标签预览').fontSize(13).fontColor(AppTheme.TEXT_SUB)
       ForumLevelBadge({ level: 8, levelName: '核心会员' })
@@ -1206,6 +1209,20 @@ struct SettingsPage {
 
   @Builder
   AppearanceRows() {
+    SettingsOptionRow({
+      label: '视觉主题', value: visualThemeLabel(visualThemeStore.theme),
+      popupOpen: this.popupKey === 'visual_theme',
+      items: buildOptions(['经典鸿蒙', '敦煌纸境'], visualThemeStore.theme, 'visual_theme'),
+      onTap: (): void => { this.popupKey = this.popupKey === 'visual_theme' ? '' : 'visual_theme'; },
+      onPick: (index: number): void => {
+        if (index !== 0 && index !== 1) { return; }
+        const saved: boolean = visualThemeStore.setTheme(index as VisualTheme,
+          this.getUIContext().getHostContext() as common.UIAbilityContext);
+        this.closePopup();
+        if (!saved) { this.getUIContext().getPromptAction().showToast({ message: '主题未能保存，请重试' }); }
+      },
+      onPopupClosed: (): void => { this.closePopup(); }
+    })
     SettingsOptionRow({
       label: '深色模式',
       value: themeModeLabel(themeModeStore.pref),
@@ -1244,56 +1261,6 @@ struct SettingsPage {
       onPick: (index: number): void => { this.pickOption(SettingsPane.FORUM_LEVEL, index); },
       onPopupClosed: (): void => { this.closePopup(); }
     })
-  }
-
-  /**
-   * 效果预览：紧凑示意，跟随当前主题与字号（两行文字与两个胶囊都走同一套 token 与 fp），
-   * 胶囊叠 `SHEET` 槽位的玻璃，因此也会随「沉浸光感强度」变化。真机观感仍需人工确认。
-   */
-  @Builder
-  AppearancePreview() {
-    Column() {
-      Text('效果预览')
-        .fontSize(SettingsLayout.SUB_SIZE)
-        .fontColor(AppTheme.NOTE_TEXT)
-        .width('100%')
-        .margin({ bottom: 8 })
-      Column({ space: 6 }) {
-        Text('示例帖子标题，用来观察字号层级')
-          .fontSize(SettingsLayout.LABEL_SIZE)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .width('100%')
-        Text('示例吧 · 示例作者 · 9-30')
-          .fontSize(SettingsLayout.SUB_SIZE)
-          .fontColor(AppTheme.NOTE_TEXT)
-          .width('100%')
-        Row({ space: 8 }) {
-          this.PreviewPill('回复 12')
-          this.PreviewPill('赞 34')
-        }
-        .margin({ top: 6 })
-      }
-      .width('100%')
-      .padding(14)
-      .backgroundColor(AppTheme.CARD)
-      .borderRadius(SettingsLayout.CARD_RADIUS - 6)
-    }
-    .width('100%')
-    .padding(12)
-    .margin({ top: SettingsLayout.GROUP_GAP })
-    .backgroundColor(AppTheme.SURFACE_MUTED)
-    .borderRadius(SettingsLayout.CARD_RADIUS)
-  }
-
-  @Builder
-  PreviewPill(text: string) {
-    Text(text)
-      .fontSize(SettingsLayout.VALUE_SIZE)
-      .fontColor(AppTheme.TEXT_MAIN)
-      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-      .borderRadius(14)
-      .backgroundEffect(materialManager.glassOf(MaterialSlot.SHEET))
-      .systemMaterial(materialManager.officialOf(MaterialSlot.SHEET))
   }
 
   @Builder
@@ -1651,17 +1618,19 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.HarmonyMaterialRow() }
     })
-    SettingsNote({ text: '厚度控制弹层、一体玻璃和吧页按钮；材质等级控制官方沉浸顶栏、搜索框、圆按钮和底部胶囊。两项独立生效。' })
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => { this.HarmonyStyleRows() }
     })
+    if (visualThemeStore.isPaper) {
+      SettingsNote({ text: '切换到经典鸿蒙可自定义顶栏和底栏样式。' })
+    }
     this.HomeTopNavPreview()
     SettingsGroupTitle({ title: '滑动时自动隐藏' })
     SettingsCard({
       content: (): void => { this.HarmonyHideRows() }
     })
-    SettingsNote({ text: '首页上滑时隐藏所选区域，下滑即恢复。' })
+    SettingsNote({ text: '上滑隐藏，下滑恢复。' })
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => { this.HarmonySuperResolutionRow() }
@@ -1712,7 +1681,7 @@ struct SettingsPage {
         .width('100%')
         .opacity(0.55)
         .padding({ left: 12, right: 12, top: 6 })
-        if (homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW) {
+        if (visualThemeStore.isPaper || homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW) {
 
           HomeDualRowTopBar({
             statusBarHeight: 0,
@@ -1737,7 +1706,9 @@ struct SettingsPage {
         }
       }
       .width('100%')
-      .height(homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW
+      .height(visualThemeStore.isPaper
+        ? TOP_NAV_PREVIEW_DUAL_H + PaperLayout.BRAND_HEIGHT
+        : homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW
         ? TOP_NAV_PREVIEW_DUAL_H + homeDualRowHeight(fontSizeScaleOf(fontScaleStore.pref,
           fontScaleStore.systemScale, fontScaleStore.customSize)) - OFFICIAL_DUAL_ROW_HEIGHT
         : Math.max(TOP_NAV_PREVIEW_H, this.previewNavRowH + 28))
@@ -1782,6 +1753,10 @@ struct SettingsPage {
     ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean =>
       entry.pane === SettingsPane.ACTION_BAR || entry.pane === SettingsPane.TOP_NAV),
       (entry: SettingsEntry, index: number) => {
+      if (visualThemeStore.isPaper) {
+        SettingsInfoRow({ label: entry.label,
+          value: entry.pane === SettingsPane.TOP_NAV ? '纸境品牌顶栏' : '纸境悬浮互动栏' })
+      } else {
       SettingsOptionRow({
         label: entry.label,
         value: entry.value,
@@ -1798,6 +1773,7 @@ struct SettingsPage {
           this.closePopup();
         }
       })
+      }
     }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
   }
 

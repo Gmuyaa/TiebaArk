@@ -1,3 +1,5 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from '../components/PageState';
 import { RefreshSpinner, FORUM_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { ForumIdentity } from '../components/ForumIdentity';
@@ -28,6 +30,7 @@ import { ThreadListVM } from '../viewmodel/ThreadListVM';
 import { AppTheme } from '../theme/Theme';
 import { ImageViewer } from '../components/ImageViewer';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { HelpThreadCard } from '../components/HelpThreadCard';
 import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
@@ -55,13 +58,16 @@ class ForumPageState {
 }
 
 const FORUM_PAGE_STATES: Map<string, ForumPageState> = new Map<string, ForumPageState>();
-const FORUM_HERO_HEIGHT: number = 160;
+const FORUM_IDENTITY_MIN_HEIGHT: number = 76;
+const FORUM_IDENTITY_TOP_GAP: number = 12;
+const FORUM_IDENTITY_BOTTOM_GAP: number = 16;
 /** 保留原背景绘制尺寸，使顶部按钮区的头图裁切与渐变采样不变。 */
 const FORUM_HERO_BACKGROUND_HEIGHT: number = 280;
 /** 顶部工具栏内容行高；内容列表视口从其下沿开始。 */
 const FORUM_TOOLBAR_HEIGHT: number = 56;
 const FORUM_TAB_HEIGHT: number = 46;
 const FORUM_TAB_HANDLE_HEIGHT: number = 12;
+const FORUM_POST_ORDER_HEIGHT: number = 28;
 let forumTintSerial: number = 0;
 
 @ComponentV2
@@ -76,7 +82,8 @@ export struct ForumPage {
   @Local pullDistance: number = 0;
   private pullEligible: boolean = false;
   @Local headerRefreshRevision: number = 0;
-  @Local introductionVisible: boolean = false;
+  /** 吧头随签到统计、简介和字号变化，列表占位使用实际内容高度。 */
+  @Local forumIdentityHeight: number = FORUM_IDENTITY_MIN_HEIGHT;
   @Local forumSearchExpanded: boolean = false;
   @Local forumSearchProgress: number = 0;
   @Local forumSearchText: string = '';
@@ -202,7 +209,7 @@ export struct ForumPage {
   }
 
   /**
-   * 打开吧成员页（A-01）。与 `openForumDirectory` 同一前置：`getMemberInfo` 只认 `forum_id`，
+   * 打开吧成员页（）。与 `openForumDirectory` 同一前置：`getMemberInfo` 只认 `forum_id`，
    * 拿不到 fid 就如实提示，不发必然失败的请求；顺手保存滚动位置。
    */
   private openForumMember(): void {
@@ -371,7 +378,11 @@ export struct ForumPage {
   }
 
   private visiblePinnedThreads(items: ThreadBrief[]): ThreadBrief[] {
-    return this.pinnedExpanded || items.length <= 3 ? items : items.slice(0, 3);
+    return this.pinnedExpanded ? items : items.slice(0, 1);
+  }
+
+  private forumTabRowHeight(): number {
+    return this.vm.hasPostOrder() || this.vm.isHelpTab() ? 40 : FORUM_TAB_HEIGHT;
   }
 
   private lightStatusBar(): boolean {
@@ -571,10 +582,16 @@ export struct ForumPage {
           active: this.pageVisible && this.viewerUrls.length === 0,
           refreshRevision: this.headerRefreshRevision, memberCount: this.vm.forum.memberCount,
           threadCount: this.vm.forum.threadCount,
-          onOpenInformation: (): void => { this.openForumDirectory('forum'); },
-          onIntroductionVisible: (visible: boolean): void => { this.introductionVisible = visible; this.syncTabsSticky(); } })
+          onOpenInformation: (): void => { this.openForumDirectory('forum'); } })
           .padding({ left: 16, right: 16 })
-          .margin({ top: 12 })
+          .margin({ top: FORUM_IDENTITY_TOP_GAP })
+          .onAreaChange((_old: Area, area: Area): void => {
+            const height: number = Math.max(FORUM_IDENTITY_MIN_HEIGHT, Math.ceil(Number(area.height)));
+            if (Number.isFinite(height) && height !== this.forumIdentityHeight) {
+              this.forumIdentityHeight = height;
+              this.syncTabsSticky();
+            }
+          })
 
       }
       .width('100%')
@@ -589,11 +606,17 @@ export struct ForumPage {
     .backgroundColor(this.heroPalette().bottomColor)
   }
 
-  private heroHeight(): number { return FORUM_HERO_HEIGHT + (this.introductionVisible ? 54 : 0); }
+  private heroHeight(): number {
+    return FORUM_TOOLBAR_HEIGHT + FORUM_IDENTITY_TOP_GAP + this.forumIdentityHeight + FORUM_IDENTITY_BOTTOM_GAP;
+  }
 
   /** Hero 配色：由协议吧主题色派生。无主题色时返回既有深蓝兜底（见 ForumHeroStyle） */
   private heroPalette(): ForumHeroPalette {
-    return forumHeroPalette(this.vm.forum.heroColor);
+    const palette: ForumHeroPalette = forumHeroPalette(this.vm.forum.heroColor);
+    if (visualThemeStore.isPaper && !palette.hasThemeColor) {
+      palette.topColor = '#2E6B73'; palette.bottomColor = '#193C40';
+    }
+    return palette;
   }
 
   /**
@@ -634,21 +657,72 @@ export struct ForumPage {
                     .borderRadius(2).backgroundColor(AppTheme.ACCENT)
                     .animation({ duration: 220, curve: Curve.EaseOut })
                 }
-                .height(FORUM_TAB_HEIGHT).justifyContent(FlexAlign.Center)
+                .height(this.forumTabRowHeight()).justifyContent(FlexAlign.Center)
                 .onClick(() => { this.selectForumTab(tab, index); })
               }, (tab: ForumTab) => `${tab.id}`)
             }
           }
           .padding({ left: 20, right: 20 }).height('100%').alignItems(VerticalAlign.Center)
         }
-        .width('100%').height(FORUM_TAB_HEIGHT).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+        .width('100%').height(this.forumTabRowHeight()).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
       }
       .width('100%').backgroundColor(AppTheme.FORUM_TAB_BG)
-      .borderRadius({ topLeft: 24 * (1 - this.tabsNavProgress), topRight: 24 * (1 - this.tabsNavProgress) })
+      .borderRadius({ topLeft: (visualThemeStore.isPaper ? PaperLayout.FORUM_RADIUS : 24) * (1 - this.tabsNavProgress), topRight: (visualThemeStore.isPaper ? PaperLayout.FORUM_RADIUS : 24) * (1 - this.tabsNavProgress) })
       .clip(true)
     }
     .width('100%')
-    .height(FORUM_TAB_HEIGHT + FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress))
+    .height(this.forumTabRowHeight() + FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress))
+  }
+
+  private async changePostOrder(sort: number): Promise<void> {
+    const success: boolean = await this.vm.changeSort(this.hostContext(), sort);
+    if (success) {
+      this.scroller.scrollTo({ xOffset: 0,
+        yOffset: Math.min(this.scroller.currentOffset().yOffset, this.heroHeight() - FORUM_TOOLBAR_HEIGHT), animation: false });
+    } else if (this.vm.errorText.length > 0) {
+      promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+    }
+  }
+
+  @Builder
+  PostOrderBar() {
+    Row() {
+      if (this.vm.isHelpTab()) {
+        Row({ space: 20 }) {
+          ForEach(['全部', '未回答'], (label: string, index: number) => {
+            Text(label).fontSize(12).fontColor(this.vm.helpPartition === index ? AppTheme.TEXT_MAIN : AppTheme.TEXT_MUTED)
+              .fontWeight(this.vm.helpPartition === index ? FontWeight.Bold : FontWeight.Normal)
+              .height(FORUM_POST_ORDER_HEIGHT).accessibilityText(`互助筛选 ${label}`)
+              .onClick(() => { void this.changeHelpFilter(index, this.vm.currentSort()); })
+          })
+        }.layoutWeight(1)
+      } else {
+        Text('看帖顺序').fontSize(12).fontColor(AppTheme.TEXT_SUB).layoutWeight(1)
+      }
+      if (this.vm.hasPostOrder()) {
+        Row() {
+          ForEach(['回复', '发布'], (label: string, index: number) => {
+            Text(label).fontSize(11)
+              .fontColor(this.vm.currentSort() === index ? AppTheme.TEXT_MAIN : AppTheme.TEXT_MUTED)
+              .padding({ left: 10, right: 10 }).height(24).borderRadius(12)
+              .backgroundColor(this.vm.currentSort() === index ? AppTheme.CARD : Color.Transparent)
+              .accessibilityText(`${this.vm.isHelpTab() ? '互助' : '吧内'}排序 最新${label}`)
+              .onClick(() => { void this.changePostOrder(index); })
+          })
+        }.borderRadius(12).backgroundColor(AppTheme.BG)
+      }
+    }.width('100%').height(FORUM_POST_ORDER_HEIGHT).padding({ left: 16, right: 16 }).backgroundColor(AppTheme.FORUM_TAB_BG)
+      .enabled(!this.vm.loading && !this.vm.switchingTab && !this.vm.isLoadingMore)
+  }
+
+  private async changeHelpFilter(partition: number, sort: number): Promise<void> {
+    const success: boolean = await this.vm.changeHelpFilter(this.hostContext(), partition, sort);
+    if (success) {
+      this.scroller.scrollTo({ xOffset: 0,
+        yOffset: Math.min(this.scroller.currentOffset().yOffset, this.heroHeight() - FORUM_TOOLBAR_HEIGHT), animation: false });
+    } else if (this.vm.errorText.length > 0) {
+      promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+    }
   }
 
   /**
@@ -708,6 +782,11 @@ export struct ForumPage {
             .hitTestBehavior(HitTestMode.None)
 
             ListItemGroup({ header: this.ForumTabs() }) {
+              if (this.vm.hasPostOrder() || this.vm.isHelpTab()) {
+                ListItem() {
+                  this.PostOrderBar()
+                }
+              }
               // 保留零高度刷新项，收起时高度可连续回弹，不因移除组件而瞬间跳回。
               ListItem() {
                 Row() {
@@ -716,7 +795,7 @@ export struct ForumPage {
                 .width('100%').height(this.pullDistance)
                 .justifyContent(FlexAlign.Center).clip(true)
               }
-              if (this.vm.switchingTab) {
+              if (this.vm.switchingTab || (this.vm.hasPostOrder() && this.vm.loading)) {
                 ListItem() {
                   Column({ space: 12 }) {
                     RefreshSpinner()
@@ -736,7 +815,6 @@ export struct ForumPage {
                     .width('100%').height(Math.max(240, this.contentHeight - FORUM_TAB_HEIGHT - FORUM_TAB_HANDLE_HEIGHT))
                 }
               } else if (this.vm.isVideoTab()) {
-                ListItem() { this.VideoSortBar() }.padding({ left: 12, right: 12 })
                 if (this.videoItems().length === 0) {
                   ListItem() { this.StatusView('这个分类暂无可播放视频') }
                 } else {
@@ -748,12 +826,14 @@ export struct ForumPage {
                         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                       })
                     }.width('100%').alignItems(VerticalAlign.Top)
-                  }.padding({ left: 8, right: 8, top: 8 })
+                  }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+                    top: visualThemeStore.isPaper ? 0 : 8 })
                 }
                 ListItem() { this.PageFooter() }.padding({ left: 8, right: 8 })
               } else if (this.vm.threads.length === 0) {
                 ListItem() {
-                  Column() { this.StatusView('这个吧还没有帖子') }
+                  Column() { this.StatusView(this.vm.isHelpTab() ?
+                    (this.vm.helpPartition === 1 ? '暂时没有未回答的求助' : '这个分类还没有求助帖') : '这个吧还没有帖子') }
                     .width('100%').height(Math.max(240, this.contentHeight - FORUM_TAB_HEIGHT - FORUM_TAB_HANDLE_HEIGHT))
                 }
               } else {
@@ -761,15 +841,26 @@ export struct ForumPage {
                   ListItem() {
                     this.PinnedSection()
                   }
-                  .padding({ left: 8, right: 8, top: 8 })
+                  .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+                    top: visualThemeStore.isPaper ? 0 : 8 })
                   .translate({ x: this.contentShift }).opacity(this.contentOpacity)
                 }
 
                 ForEach(this.regularThreads(), (item: ThreadBrief) => {
                   ListItem() {
-                    this.ThreadCard(item)
+                    if (this.vm.isHelpTab()) {
+                      HelpThreadCard({ item,
+                        onOpenThread: (): void => { this.openThread(item); },
+                        onOpenAnswer: (): void => {
+                          this.saveScrollPosition();
+                          NavigationService.openThreadDetail({ tid: item.tid, forumName: this.forumName,
+                            replyCount: item.replyCount, targetPid: item.answerPid, openComments: item.answerPid <= 0 });
+                        },
+                        onOpenImage: (): void => { this.openImages(item.images, 0); } })
+                    } else { this.ThreadCard(item) }
                   }
-                  .padding({ left: 8, right: 8, top: 8 })
+                  .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+                    top: visualThemeStore.isPaper ? 0 : 8 })
                   .translate({ x: this.contentShift }).opacity(this.contentOpacity)
                 }, (item: ThreadBrief) => `${item.tid}`)
 
@@ -780,7 +871,7 @@ export struct ForumPage {
               }
             }
             .backgroundColor(AppTheme.FORUM_TAB_BG)
-            .borderRadius({ topLeft: 24 * (1 - this.tabsNavProgress), topRight: 24 * (1 - this.tabsNavProgress) })
+            .borderRadius({ topLeft: (visualThemeStore.isPaper ? PaperLayout.FORUM_RADIUS : 24) * (1 - this.tabsNavProgress), topRight: (visualThemeStore.isPaper ? PaperLayout.FORUM_RADIUS : 24) * (1 - this.tabsNavProgress) })
           }
           .width('100%')
           .layoutWeight(1)
@@ -792,7 +883,8 @@ export struct ForumPage {
             .onActionStart((event: GestureEvent) => {
               const offset: number = this.scroller.currentOffset().yOffset;
               const contentTop: number = Math.max(0, this.heroHeight() - FORUM_TOOLBAR_HEIGHT - offset)
-                + FORUM_TAB_HEIGHT + FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress);
+                + this.forumTabRowHeight() + FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress)
+                + (this.vm.hasPostOrder() || this.vm.isHelpTab() ? FORUM_POST_ORDER_HEIGHT : 0);
               this.pullEligible = !this.refreshing && !this.vm.loading && !this.vm.switchingTab
                 && !this.vm.isLoadingMore && offset <= this.heroHeight() - FORUM_TOOLBAR_HEIGHT + 1
                 && event.fingerList.length > 0 && event.fingerList[0].localY - event.offsetY >= contentTop;
@@ -833,27 +925,37 @@ export struct ForumPage {
     .width('100%').height(LayoutPolicy.matchParent)
   }
 
-  /** 置顶为紧凑标题入口，保留服务端顺序、最多三条预览与展开能力。 */
+  /** 收起时保留首条置顶及总数；按钮独立于标题入口，避免误进帖子。 */
   @Builder
   PinnedSection() {
     Column() {
       ForEach(this.visiblePinnedThreads(this.pinnedThreads()), (item: ThreadBrief, index: number) => {
         Row({ space: 8 }) {
-          this.Tag('置顶', false)
-          Text(item.title.length > 0 ? item.title : '（无标题）')
-            .fontSize(15).fontColor(AppTheme.TEXT_MAIN).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          Row({ space: 8 }) {
+            this.Tag('置顶', false)
+            Text(item.title.length > 0 ? item.title : '（无标题）')
+              .fontSize(15).fontColor(AppTheme.TEXT_MAIN).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          }.layoutWeight(1).height('100%').onClick(() => { this.openThread(item); })
+          if (index === 0 && this.pinnedThreads().length > 1) {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 5 }) {
+                Text(this.pinnedExpanded ? '收起' : `共${this.pinnedThreads().length}条`)
+                  .fontSize(12).fontColor(AppTheme.TEXT_SUB)
+                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(10).fontColor([AppTheme.TEXT_SUB])
+                  .rotate({ angle: this.pinnedExpanded ? -90 : 90 })
+              }.height(28).padding({ left: 10, right: 10 }).borderRadius(14)
+                .border({ width: 0.5, color: AppTheme.TEXT_MUTED })
+            }
+              .backgroundColor(Color.Transparent).stateEffect(false).height(44).padding({ left: 0, right: 0 })
+              .accessibilityText(this.pinnedExpanded ? '收起置顶帖' : `展开全部${this.pinnedThreads().length}条置顶帖`)
+              .onClick(() => { this.pinnedExpanded = !this.pinnedExpanded; })
+          }
         }
         .width('100%').height(44).padding({ left: 12, right: 12 }).alignItems(VerticalAlign.Center)
         .border({ width: { bottom: index < this.visiblePinnedThreads(this.pinnedThreads()).length - 1 ? 1 : 0 },
           color: AppTheme.DIVIDER })
-        .onClick(() => { this.openThread(item); })
       }, (item: ThreadBrief) => `${item.tid}`)
-      if (this.pinnedThreads().length > 3) {
-        Text(this.pinnedExpanded ? '收起' : `展开全部 (${this.pinnedThreads().length})`)
-          .fontSize(12).fontColor(AppTheme.ACCENT_DARK).height(32).width('100%').textAlign(TextAlign.End)
-          .padding({ right: 12 }).onClick(() => { this.pinnedExpanded = !this.pinnedExpanded; })
-      }
     }
     .width('100%').borderRadius(12).backgroundColor(AppTheme.CARD).padding({ top: 4, bottom: 4 })
   }
@@ -876,19 +978,6 @@ export struct ForumPage {
       columns[target].push(item); heights[target] += width / this.videoRatio(item) + 94;
     }
     return columns[side];
-  }
-  @Builder
-  VideoSortBar() {
-    Row({ space: 10 }) {
-      Text('看帖排序').fontSize(13).fontColor(AppTheme.TEXT_SUB).layoutWeight(1)
-      ForEach([0, 1], (sort: number) => {
-        Text(sort === 0 ? '回复' : '发布').fontSize(13)
-          .fontColor(this.vm.videoSort === sort ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
-          .padding({ left: 14, right: 14, top: 8, bottom: 8 }).borderRadius(18)
-          .backgroundColor(this.vm.videoSort === sort ? AppTheme.CARD : Color.Transparent)
-          .onClick(() => { void this.vm.changeVideoSort(this.hostContext(), sort); })
-      })
-    }.height(48).width('100%')
   }
   @Builder
   VideoCard(item: ThreadBrief) {
@@ -922,7 +1011,7 @@ export struct ForumPage {
       authorName: item.authorName, authorAvatar: item.authorAvatar,
       postedTime: formatPostTime(item.postedMs, Date.now()), title: item.title, summary: item.summary,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),
-      isTop: item.isTop, isGood: item.isGood,
+      isTop: item.isTop, isGood: item.isGood, isHelp: item.isHelp,
       agreeCount: item.agreeCount, replyCount: item.replyCount,
       shareCount: item.shareCount,
       onToggleLike: (state: ThreadCardActionState): void => {

@@ -66,7 +66,7 @@ export interface UserPageParams {
 }
 
 /**
- * 通知列表页（F-01）的唯一路由参数。
+ * 通知列表页（）的唯一路由参数。
  *
  * `reply`＝回复我，`agree`＝赞我，`at`＝表单/JSON @我；未知值由页面回退到 reply。
  */
@@ -82,7 +82,7 @@ export interface DirectoryPageParams {
 }
 
 /**
- * 吧成员页（A-01）的唯一路由参数。
+ * 吧成员页（）的唯一路由参数。
  *
  * `forumId` 是**必需**的：官方 `getMemberInfo` 只认 `forum_id`，不认吧名，
  * 所以入口必须先把 fid 拿到（吧页的 `vm.forum.id`）。缺失时页面如实报"拿不到吧 id"，
@@ -191,7 +191,7 @@ export class NavigationService {
   }
 
   /**
-   * 打开吧成员页（A-01）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
+   * 打开吧成员页（）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
    * 日志只带 fid 与吧名（都不是凭据），便于复核"入口有没有把 fid 正确带进来"。
    */
   static openForumMember(params: ForumMemberPageParams): void {
@@ -204,7 +204,7 @@ export class NavigationService {
   }
 
   /**
-   * 打开通知列表页（F-01）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
+   * 打开通知列表页（）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
    */
   static openNotifyList(params: NotifyListParams): void {
     const stack: NavPathStack | null = NavigationService.stack;

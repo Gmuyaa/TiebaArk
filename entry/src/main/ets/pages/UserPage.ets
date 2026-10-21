@@ -9,6 +9,10 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { PageHeader } from '../components/PageHeader';
 import { PostContentInline } from '../components/PostContentInline';
+import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { ImageViewer } from '../components/ImageViewer';
+import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
+import { formatPostTime } from '../model/HomeFeedPresentation';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
 import { profilePortrait } from '../model/PageDirectory';
 import { ContentPiece, portraitUrl } from '../model/ThreadDetail';
@@ -55,6 +59,19 @@ export struct UserPage {
     this.vm.refresh(this.context());
   }
   private tabs: string[] = ['帖子', '回复', '关注的吧'];
+  private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
+  private cardImageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
+  @Local viewerImages: string[] = [];
+  @Local viewerIndex: number = 0;
+
+  private imageScroller(tid: number): ListScroller {
+    let scroller: ListScroller | undefined = this.cardImageScrollers.get(tid);
+    if (scroller === undefined) {
+      scroller = new ListScroller();
+      this.cardImageScrollers.set(tid, scroller);
+    }
+    return scroller;
+  }
 
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -104,6 +121,7 @@ export struct UserPage {
 
   build() {
     HdsNavDestination() {
+      Stack() {
       Column() {
         PageHeader({ title: '个人主页', onBack: (): void => { NavigationService.back(); } })
         Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
@@ -144,7 +162,10 @@ export struct UserPage {
               }, (forum: ProfileForum) => `${forum.name}-${forum.avatar}`)
             } else {
               ForEach(this.vm.items, (item: UserPostItem) => {
-                ListItem() { this.PostCard(item) }
+                ListItem() {
+                  if (this.vm.tab === 0) { this.ThreadCard(item) }
+                  else { this.PostCard(item) }
+                }
               }, (item: UserPostItem) => this.vm.tab === 1 ? userReplyKey(item) : String(item.tid))
             }
             if ((this.vm.tab === 2 ? this.vm.forums.length : this.vm.items.length) === 0) {
@@ -177,7 +198,17 @@ export struct UserPage {
       .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, ratio: number): void => {
         if (isVisible && ratio > 0) { avatarTrace('page-visible', 0, 'page=user'); }
       })
+      if (this.viewerImages.length > 0) {
+        ImageViewer({ imageUrl: this.viewerImages[this.viewerIndex], imageUrls: this.viewerImages,
+          initialIndex: this.viewerIndex, onClose: (): void => { this.viewerImages = []; } })
+      }
+      }.width('100%').height('100%')
     }.hideTitleBar(true)
+    .onBackPressed((): boolean => {
+      if (this.viewerImages.length === 0) { return false; }
+      this.viewerImages = [];
+      return true;
+    })
     .onShown(() => {
       this.pageVisible = true;
       if (authSession.isLoggedIn() && this.routeParams?.uid === authSession.snapshot.uid) {
@@ -227,6 +258,43 @@ export struct UserPage {
       Text(this.statCount(index)).fontSize(20).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
       Text(label).fontSize(12).fontColor(AppTheme.TEXT_SUB)
     }.layoutWeight(1).padding({ top: 6, bottom: 6 }).onClick(onTap)
+  }
+
+  @Builder
+  ThreadCard(item: UserPostItem) {
+    ThreadPreviewCard({
+      authorName: item.authorName || this.name(),
+      authorAvatar: item.authorPortrait.length > 0 ? portraitUrl(item.authorPortrait) : this.avatarUrl(),
+      forumName: item.forumName, forumAvatar: this.vm.postForumAvatars.get(item.forumId) || '',
+      postedTime: formatPostTime(item.createTimeMs, Date.now()),
+      title: item.title, summary: item.content, contentPieces: item.pieces,
+      onActivateContent: (piece: ContentPiece): void => { openContentPiece(piece, this.getUIContext()); },
+      agreeCount: item.agreeNum, replyCount: item.replyNum, shareCount: item.shareNum,
+      images: item.images, imageScroller: this.imageScroller(item.tid),
+      onOpenImage: (index: number): void => {
+        this.viewerIndex = Math.max(0, Math.min(index, item.originImages.length - 1));
+        this.viewerImages = item.originImages;
+      },
+      canOpenForum: item.forumName.length > 0,
+      onOpenForum: (): void => { NavigationService.openForum({ forumName: item.forumName }); },
+      onOpenThread: (): void => { this.openPost(item); },
+      onOpenComments: (): void => {
+        NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName,
+          replyCount: item.replyNum, openComments: true });
+      },
+      onToggleLike: (state: ThreadCardActionState): void => {
+        void this.cardActions.toggleLike(state, this.context(), item.tid, item.forumName)
+          .then((reason: string): void => { this.showCardActionResult(reason); });
+      },
+      onShare: (): void => {
+        void this.cardActions.share(this.context(), item.tid, item.title)
+          .then((reason: string): void => { this.showCardActionResult(reason); });
+      }
+    })
+  }
+
+  private showCardActionResult(reason: string): void {
+    if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
   }
 
   @Builder

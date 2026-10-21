@@ -1,5 +1,6 @@
 {
   "color": [
+    { "name": "help_answer_tag", "value": "#D7BD6C" },
     {
       "name": "detail_comment_nickname",
       "value": "#A8AFB9"
@@ -267,6 +268,274 @@
     {
       "name": "detail_float_shadow",
       "value": "#00000000"
+    },
+    {
+      "name": "paper_app_bg",
+      "value": "#1D2825"
+    },
+    {
+      "name": "paper_app_card",
+      "value": "#27352E"
+    },
+    {
+      "name": "paper_app_text_main",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_app_text_sub",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_app_icon",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_app_text_muted",
+      "value": "#BCAD91"
+    },
+    {
+      "name": "paper_app_divider",
+      "value": "#4C594C"
+    },
+    {
+      "name": "paper_app_surface_muted",
+      "value": "#354137"
+    },
+    {
+      "name": "paper_app_accent",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_app_accent_light",
+      "value": "#34473E"
+    },
+    {
+      "name": "paper_app_accent_dark",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_app_tab_pill_text",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_app_tab_underline_text",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_app_link_hint",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_app_search_hint",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_app_meta_text",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_app_bar_tab_text",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_app_text_row",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_app_text_caption",
+      "value": "#BCAD91"
+    },
+    {
+      "name": "paper_app_arrow_row",
+      "value": "#D8BA88"
+    },
+    {
+      "name": "paper_app_arrow_list",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_app_value_text",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_app_chevron_tint",
+      "value": "#D8BA88"
+    },
+    {
+      "name": "paper_app_danger_text",
+      "value": "#E1AE90"
+    },
+    {
+      "name": "paper_app_popup_line",
+      "value": "#4C594C"
+    },
+    {
+      "name": "paper_app_note_text",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_app_avatar_bg",
+      "value": "#464132"
+    },
+    {
+      "name": "paper_app_forum_tab_bg",
+      "value": "#27352E"
+    },
+    {
+      "name": "paper_app_nav_fade",
+      "value": "#1D2825"
+    },
+    {
+      "name": "paper_app_nav_fade_clear",
+      "value": "#001D2825"
+    },
+    {
+      "name": "paper_app_bottom_mask",
+      "value": "#331D2825"
+    },
+    {
+      "name": "paper_detail_comment_nickname",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_detail_comment_body",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_detail_comment_meta",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_detail_comment_action",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_detail_sub_reply_body",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_detail_sub_reply_name",
+      "value": "#B2D2C5"
+    },
+    {
+      "name": "paper_detail_sub_reply_background",
+      "value": "#34473E"
+    },
+    {
+      "name": "paper_detail_author_badge_text",
+      "value": "#E1AE90"
+    },
+    {
+      "name": "paper_detail_author_badge_background",
+      "value": "#4C3E33"
+    },
+    {
+      "name": "paper_detail_bottom_float_shadow",
+      "value": "#50000000"
+    },
+    {
+      "name": "paper_detail_page_background",
+      "value": "#27352E"
+    },
+    {
+      "name": "paper_detail_content_background",
+      "value": "#27352E"
+    },
+    {
+      "name": "paper_detail_secondary_background",
+      "value": "#354137"
+    },
+    {
+      "name": "paper_detail_text_primary",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_detail_text_secondary",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_detail_text_tertiary",
+      "value": "#BCAD91"
+    },
+    {
+      "name": "paper_detail_divider",
+      "value": "#4C594C"
+    },
+    {
+      "name": "paper_detail_accent",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_detail_accent_background",
+      "value": "#34473E"
+    },
+    {
+      "name": "paper_detail_icon",
+      "value": "#9EC8BF"
+    },
+    {
+      "name": "paper_detail_error",
+      "value": "#E1AE90"
+    },
+    {
+      "name": "paper_detail_bottom_bar_background",
+      "value": "#34473E"
+    },
+    {
+      "name": "paper_detail_float_shadow",
+      "value": "#50000000"
+    },
+    {
+      "name": "paper_app_emoji_panel_text",
+      "value": "#EFE5D0"
+    },
+    {
+      "name": "paper_app_emoji_panel_sub_text",
+      "value": "#CFC2A7"
+    },
+    {
+      "name": "paper_emphasis",
+      "value": "#E1AE90"
+    },
+    {
+      "name": "paper_gold",
+      "value": "#D8BA88"
+    },
+    {
+      "name": "paper_emphasis_light",
+      "value": "#4C3E33"
+    },
+    {
+      "name": "paper_on_emphasis",
+      "value": "#38271F"
+    },
+    {
+      "name": "paper_gold_light",
+      "value": "#464132"
+    },
+    {
+      "name": "paper_jade",
+      "value": "#B8CCA4"
+    },
+    {
+      "name": "paper_jade_light",
+      "value": "#3B4836"
+    },
+    {
+      "name": "paper_header_start",
+      "value": "#2D4038"
+    },
+    {
+      "name": "paper_header_end",
+      "value": "#3E4133"
+    },
+    {
+      "name": "paper_nav_text",
+      "value": "#F0E6CE"
+    },
+    {
+      "name": "paper_nav_selected",
+      "value": "#F2A68C"
     }
   ]
 }

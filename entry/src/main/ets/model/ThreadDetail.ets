@@ -33,6 +33,12 @@ function toNum(value: number | undefined): number {
   return value === undefined ? 0 : value;
 }
 
+function userLevel(value: number | string | undefined, unknown: number): number {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) { return unknown; }
+  const parsed: number = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : unknown;
+}
+
 /** 可空字符串 → 字符串 */
 function toStr(value: string | undefined): string {
   return value === undefined ? '' : value;
@@ -803,6 +809,8 @@ export function parseReplyTarget(pieces: ContentPiece[]): ReplyTargetParse {
   /** 吧内等级 */
   level: number = 0;
   levelName: string = '';
+  /** 个人成长等级；-1表示接口未提供，明确0保留为0。 */
+  growthLevel: number = -1;
   /** IP 归属地，可能为空 */
   ipLocation: string = '';
   /** 是否吧务 */
@@ -823,8 +831,9 @@ export function parseReplyTarget(pieces: ContentPiece[]): ReplyTargetParse {
     const show: string = toStr(raw.name_show);
     u.displayName = show.length > 0 ? show : (u.userName.length > 0 ? u.userName : '匿名用户');
     u.portraitUrl = portraitUrl(toStr(raw.portrait));
-    u.level = toNum(raw.level_id);
+    u.level = userLevel(raw.level_id, 0);
     u.levelName = toStr(raw.level_name);
+    u.growthLevel = userLevel(raw.user_growth?.level_id, -1);
     u.ipLocation = toStr(raw.ip_address);
     u.isBawu = toFlag(raw.is_bawu);
     const grade = raw.bazhu_grade;
@@ -851,6 +860,7 @@ export function mergeAuthorFallback(primary: UserBrief, fallback: UserBrief | un
   out.portraitUrl = primary.portraitUrl.length > 0 ? primary.portraitUrl : fallback.portraitUrl;
   out.level = primary.level > 0 ? primary.level : fallback.level;
   out.levelName = primary.levelName.length > 0 ? primary.levelName : fallback.levelName;
+  out.growthLevel = primary.growthLevel >= 0 ? primary.growthLevel : fallback.growthLevel;
   out.ipLocation = primary.ipLocation.length > 0 ? primary.ipLocation : fallback.ipLocation;
   out.isBawu = primary.isBawu || fallback.isBawu;
   out.bawuTitle = primary.bawuTitle.length > 0 ? primary.bawuTitle : fallback.bawuTitle;
@@ -1045,6 +1055,7 @@ export class SubPostItem {
 
 /** 一次详情请求的完整结果 */
 export class ThreadDetail {
+  isHelp: boolean = false;
   video: VideoClip | undefined = undefined;
   tid: number = 0;
   title: string = '';
@@ -1115,6 +1126,7 @@ export class ThreadDetail {
     if (thread !== undefined) {
       d.video = parseVideoClip(thread.video_info);
       d.title = toStr(thread.title);
+      d.isHelp = thread.thread_type === 71 || thread.thread_type === '71';
       // `/c/f/pb/page` 的 thread.reply_num 包含 1 楼主帖，列表页 reply_num 不包含。
       // 详情页统一展示真正的回复数，因此扣除主帖并钳制为非负数。
       d.replyCount = Math.max(0, toNum(thread.reply_num) - 1);
