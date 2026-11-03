@@ -1,4 +1,4 @@
-/** 系统声明与授权状态；未声明、未授权、读取失败分别表达。 */
+/** G-02：系统声明与授权状态；未声明、未授权、读取失败分别表达。 */
 export class AppPermission {
   name: string = '';
   label: string = '';

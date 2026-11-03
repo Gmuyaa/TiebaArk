@@ -6,7 +6,6 @@ import { FollowForumItem } from '../model/FollowForum';
 import { TiebaDevice } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { authSession } from '../auth/AuthSession';
-import { signStatsLabel } from '../model/SignStats';
 import { OfficialSignItem } from '../model/OfficialSign';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 
@@ -170,13 +169,16 @@ export class FollowVM {
     this.signingFname = item.fname;
     const account: string = signOwner();
     if (account.length === 0) { this.signingFname = ''; return new SignAttempt('请先登录'); }
+    const day: number = Math.floor((Date.now() + 28800000) / 86400000);
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (this.disposed) { return new SignAttempt('页面已关闭，签到未继续'); }
       if (account !== signOwner()) { return new SignAttempt('账号已变化，签到已停止'); }
+      if (day !== Math.floor((Date.now() + 28800000) / 86400000)) { return new SignAttempt('日期已变化，签到已停止，请刷新确认'); }
       const response = await this.api.signForum(device, authSession.session(), item.fname);
       if (this.disposed) { return new SignAttempt('页面已关闭，请重新读取签到结果'); }
       if (account !== signOwner()) { return new SignAttempt('账号已变化，签到结果未用于当前账号'); }
+      if (day !== Math.floor((Date.now() + 28800000) / 86400000)) { return new SignAttempt('日期已变化，请刷新确认签到结果'); }
       if (!response.ok) {
         return new SignAttempt(response.describeFailure());
       }
@@ -205,9 +207,8 @@ export class FollowVM {
       if (response.alreadySigned) {
         return new SignAttempt('今天已经签过啦', true);
       }
-      const summary: string = signStatsLabel(response.stats);
       const message: string = response.bonusPoint.length > 0 ? `签到成功 +${response.bonusPoint} 经验` : '签到成功';
-      return new SignAttempt(summary.length > 0 ? `${message} · ${summary}` : message, true);
+      return new SignAttempt(message, true);
     } catch (err) {
       const e: Error = err as Error;
       return new SignAttempt(`签到失败：${e.message}`);
@@ -228,6 +229,7 @@ export class FollowVM {
     await signStrategyStore.load(context);
     if (this.disposed || this.signingAll || this.signingFname.length > 0) { return ''; }
     const official: boolean = signStrategyStore.strategy === 1;
+    const mixed: boolean = signStrategyStore.strategy === 2;
     if (this.loading) { return '正在读取关注吧，请稍后重试'; }
     this.signingAll = true;
     const account: string = signOwner();
@@ -243,7 +245,7 @@ export class FollowVM {
       }
       const targets: FollowForumItem[] = this.forums.filter((f: FollowForumItem): boolean => !f.isSigned);
       if (targets.length === 0) { return '关注的吧今天都已签到'; }
-      if (official) { return await this.signOfficial(context, targets, account); }
+      if (official || mixed) { return await this.signOfficial(context, targets, account, mixed); }
       for (const target of targets) {
         if (this.disposed) { return `页面已关闭，一键签到已停止；已确认成功 ${successCount} 个`; }
         if (account.length === 0 || account !== signOwner()) { return `账号已变化，一键签到已停止；已确认成功 ${successCount} 个`; }
@@ -266,12 +268,13 @@ export class FollowVM {
     return `一键签到完成：成功 ${successCount} 个`;
   }
 
-  private async signOfficial(context: common.UIAbilityContext, targets: FollowForumItem[], account: string): Promise<string> {
+  private async signOfficial(context: common.UIAbilityContext, targets: FollowForumItem[], account: string,
+    mixed: boolean = false): Promise<string> {
     let success: number = 0;
     let failed: number = 0;
     const day: number = Math.floor((Date.now() + 28800000) / 86400000);
     const uid: number = authSession.snapshot.uid;
-    const summary = (): string => `官方签到：已确认成功 ${success} 个，失败 ${failed} 个，未确认 ${targets.length - success - failed} 个`;
+    const summary = (): string => `${mixed ? '混合签到' : '官方签到'}：已确认成功 ${success} 个，失败 ${failed} 个，未确认 ${targets.length - success - failed} 个`;
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (this.disposed || account !== signOwner()) { return `${summary()}；账号或页面已变化，已停止`; }
@@ -280,15 +283,35 @@ export class FollowVM {
         return `${summary()}；账号、页面或日期已变化，已停止，请刷新确认`;
       }
       if (!capability.ok) { return `${capability.describeFailure()}；未发送签到请求`; }
-      // 只对官方明确返回且达到门槛的吧提交；不猜测缺失条目，不自动降级为逐个签到。
+      // 混合方案按最新官方等级分流，列表缺项时仅用完整关注列表中的已知等级。
+      // level=0 在关注列表模型中也可能是缺字段，不将其猜为低等级。
+      const levelOf = (target: FollowForumItem): number => {
+        const officialLevel: number = capability.data.forums.find((forum): boolean => forum.fid === String(target.fid))?.level ?? -1;
+        return officialLevel >= 0 ? officialLevel : (target.level > 0 ? target.level : -1);
+      };
+      const sequential: FollowForumItem[] = mixed ? targets.filter((target: FollowForumItem): boolean =>
+        levelOf(target) >= 0 && levelOf(target) < 7) : [];
+      // 不对未确认的官方资格补发写请求，也不将官方失败自动降级为逐个签到。
       const eligible: FollowForumItem[] = targets.filter((target: FollowForumItem): boolean =>
+        (!mixed || levelOf(target) >= 7) &&
         capability.data.forums.some((forum): boolean => forum.fid === String(target.fid) &&
           (capability.data.canUseAll || forum.level >= capability.data.minimumLevel)));
-      const skipped: number = targets.length - eligible.length;
-      if (eligible.length === 0) {
+      const skipped: number = targets.length - eligible.length - sequential.length;
+      if (!mixed && eligible.length === 0) {
         return `官方签到要求吧等级至少 ${capability.data.minimumLevel} 级，当前 ${targets.length} 个未签到吧均未确认满足条件；可改用逐个签到`;
       }
       const suffix: string = skipped > 0 ? `；另 ${skipped} 个未满足或未确认官方条件，可改用逐个签到` : '';
+      for (const target of sequential) {
+        if (this.disposed || account !== signOwner() || day !== Math.floor((Date.now() + 28800000) / 86400000)) {
+          return `${summary()}；账号、页面或日期已变化，已停止，请刷新确认`;
+        }
+        const attempt: SignAttempt = await this.signOne(context, target);
+        if (this.disposed || account !== signOwner() || day !== Math.floor((Date.now() + 28800000) / 86400000)) {
+          return `${summary()}；账号、页面或日期已变化，已停止，请刷新确认`;
+        }
+        if (attempt.success) { success++; }
+        else if (attempt.message.length > 0) { failed++; }
+      }
       for (let start: number = 0; start < eligible.length; start += 50) {
         if (this.disposed || account !== signOwner() || day !== Math.floor((Date.now() + 28800000) / 86400000)) {
           return `${summary()}；账号、页面或日期已变化，已停止，请刷新确认`;
@@ -300,9 +323,11 @@ export class FollowVM {
           return `${summary()}；账号、页面或日期已变化，已停止，请刷新确认`;
         }
         if (!response.ok) { return `${summary()}；${response.describeFailure()}，已停止，请刷新确认`; }
+        let confirmedCount: number = 0;
         for (const target of batch) {
           const item: OfficialSignItem | undefined = response.data.items.find((value: OfficialSignItem): boolean => value.fid === String(target.fid));
           if (!item || !item.confirmed) { continue; }
+          confirmedCount++;
           if (!item.signed) { failed++; continue; }
           success++;
           confirmForumSign(target.fname, item.stats, target.fid);
@@ -319,7 +344,7 @@ export class FollowVM {
           if (updated) { this.ensureExperience(context, updated, true); }
         }
         // 缺项、重复项或不明确的结果不能重试写入或被当作失败/成功；留给用户刷新核对。
-        if (success + failed < start + batch.length) { return `${summary()}；部分结果不完整，已停止，请刷新确认`; }
+        if (confirmedCount < batch.length) { return `${summary()}；部分结果不完整，已停止，请刷新确认`; }
       }
       return summary() + suffix;
     } catch (_) { return `${summary()}；请求异常，已停止，请刷新确认`; }

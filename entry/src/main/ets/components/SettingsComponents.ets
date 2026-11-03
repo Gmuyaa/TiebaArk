@@ -311,6 +311,7 @@ export struct SettingsSwitchRow {
   @Param label: string = '';
   @Param sub: string = '';
   @Param checked: boolean = false;
+  @Param interactionEnabled: boolean = true;
   @Param showDivider: boolean = true;
   @Event onToggle: (next: boolean) => void = (_next: boolean): void => {};
 
@@ -318,13 +319,14 @@ export struct SettingsSwitchRow {
     RowShell({
       tall: this.sub.length > 0,
       showDivider: this.showDivider,
+      clickable: this.interactionEnabled,
       onTap: (): void => {
-        this.onToggle(!this.checked);
+        if (this.interactionEnabled) { this.onToggle(!this.checked); }
       },
       content: (): void => {
         this.switchContent();
       }
-    })
+    }).enabled(this.interactionEnabled).opacity(this.interactionEnabled ? 1 : 0.4)
   }
 
   @Builder
@@ -345,6 +347,7 @@ export struct SettingsSwitchRow {
     .alignItems(HorizontalAlign.Start)
 
     Toggle({ type: ToggleType.Switch, isOn: this.checked })
+      .enabled(this.interactionEnabled)
       .selectedColor(AppTheme.ACCENT)
       // 触摸交给整行处理；开关仍随 isOn 响应式变化（防止"点开关又触发行点击"的双触发）
       .hitTestBehavior(HitTestMode.None)

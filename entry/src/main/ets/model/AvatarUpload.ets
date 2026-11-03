@@ -1,4 +1,4 @@
-/** 普通头像：调用方必须提供已裁剪/解码确认的960×960 JPEG。 */
+/** E-01 普通头像：调用方必须提供已裁剪/解码确认的960×960 JPEG。 */
 export class AvatarUploadInput {
   bytes: Uint8Array = new Uint8Array(0);
   width: number = 0;

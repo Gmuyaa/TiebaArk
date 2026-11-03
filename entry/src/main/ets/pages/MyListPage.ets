@@ -18,6 +18,8 @@ import { ContentPiece } from '../model/ThreadDetail';
 
 /** 已删除帖子的左下角提示（标题同色灰显，见 `CardItem`） */
 const DELETED_LABEL: string = '该帖子已被删除';
+/** 发帖时选了「个人主页不可见」的标签，与官方「我的帖子」右上角一致 */
+const HIDE_FROM_PROFILE_LABEL: string = '主页不可见';
 
 @ComponentV2
 export struct MyListPage {
@@ -165,7 +167,7 @@ export struct MyListPage {
               this.CardItem(item)
             }
             .margin({ left: 12, right: 12, top: 5, bottom: 5 })
-          }, (item: MyListItem) => `${item.tid}-${item.title}-${item.forumAvatar}-${item.isDeleted}`)
+          }, (item: MyListItem) => `${item.tid}-${item.title}-${item.forumAvatar}-${item.isDeleted}-${item.hideFromProfile}`)
         }
         .width('100%')
         .layoutWeight(1)
@@ -348,6 +350,21 @@ export struct MyListPage {
       // ⚠️ 不能用 Blank() 撑开：constraintSize 的 minHeight 不参与子节点测量，
       // Blank 量到 0，吧信息会贴在标题下面。用 SpaceBetween 把两个子节点顶到两端。
       Column() {
+        if (item.hideFromProfile && !item.isDeleted) {
+          // 官方「我的帖子」把可见范围标在条目右上角；这里放进左列顶部右对齐，
+          // 避免和右侧封面图抢位置。
+          Row() {
+            Text(HIDE_FROM_PROFILE_LABEL)
+              .fontSize(11)
+              .fontColor(AppTheme.TEXT_SUB)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(AppTheme.BG)
+              .borderRadius(4)
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End)
+          .margin({ bottom: 6 })
+        }
         Text(item.title)
           .fontSize(16)
           // 已删除：整行灰显（与正文主色区分开，一眼看出点不开）

@@ -1,3 +1,4 @@
+import { UploadedPostImage, uploadedImageToken } from './ImageUpload';
 
 
 /** 响应里的单个收藏/DIY 表情（`GetCloudFaceGroupMessage.parseData` 的元素） */
@@ -48,6 +49,8 @@ export class MemeEmojiData {
   picUpdateTime: number = 0;
   /** 收藏表情列表（云端为空时是空数组，不是错误） */
   pics: MemePicItem[] = [];
+  /** 只有显式完整数组且每条ID可信时，才允许全量收藏写入。 */
+  collectionComplete: boolean = false;
   /** DIY 表情最后更新时间（毫秒） */
   diyUpdateTime: number = 0;
   /** DIY 表情列表（与收藏同构；一期不消费，解析留着对账） */
@@ -89,6 +92,10 @@ export class MemeEmojiData {
     }
     out.picUpdateTime = MemeEmojiData.numOr0(data['pic_update_time']);
     out.pics = MemeEmojiData.parsePics(data['pic_ids']);
+    const rawPics: Object | undefined = data['pic_ids'];
+    out.collectionComplete = Array.isArray(rawPics) && rawPics.length === out.pics.length &&
+      (rawPics as Record<string, Object>[]).every((entry: Record<string, Object>) =>
+        typeof entry['pic_id'] === 'string' && validMemeId(entry['pic_id'] as string));
     out.diyUpdateTime = MemeEmojiData.numOr0(data['diy_pic_update_time']);
     out.diyPics = MemeEmojiData.parsePics(data['diy_pic_ids']);
     out.packageIds = MemePicItem.textOrEmpty(data['package_ids']);
@@ -96,39 +103,24 @@ export class MemeEmojiData {
   }
 }
 
-export const MEME_TOKEN_SALT: string = '7S6wbXjEKL9N';
-
-/**
- * 发帖 token 的正文段（`#(` 与 `)` 之间、不含尾部 md5）。
- *
- * 证据（`GetCloudFaceGroupMessage.parseCollectData`，n95.h = "meme,collect_"）：
- *   - 有包：`meme,collect_<pkgId>_<picId>,<w>,<h>,`
- *   - 无包（收藏散图 pkgId 为空）：`meme,,<w>,<h>,`
- */
-export function memeEmojiHashBody(pkgId: string, picId: string, width: number,
-  height: number): string {
-  const core: string = pkgId.length > 0 ? `collect_${pkgId}_${picId}` : '';
-  return `meme,${core},${width},${height},`;
+/** 收藏条目引用已在图床上的图片，发送复用普通图片通道；包ID仅供云端分类。 */
+export function memeImageToken(item: MemePicItem): string {
+  const image: UploadedPostImage = new UploadedPostImage();
+  image.id = item.picId; image.width = item.width; image.height = item.height;
+  return uploadedImageToken(image);
 }
 
-/**
- * md5 的输入串 = 正文去掉 `collect_` 前缀段 + 盐（官方原样：replace 恰好把
- * 两种前缀都归一到 `meme,` 开头，DIY 同理）。调用方对它做
- * `MD5(输入 + MEME_TOKEN_SALT)` 小写 hex。
- */
-export function memeEmojiHashInput(pkgId: string, picId: string, width: number,
-  height: number): string {
-  return memeEmojiHashBody(pkgId, picId, width, height).replace('collect_', '');
+export function validMemeId(id: string): boolean {
+  return id.length > 0 && id !== 'null' && id !== 'undefined' && !/[\s,()\u0000-\u001f\u007f]/.test(id);
 }
-
-/**
- * 完整发帖 token：`#(<正文><md5小写hex>)`。
- *
- * `md5LowerHex` 由调用方传入：`CryptoUtil.md5(memeEmojiHashInput(...) +
- * MEME_TOKEN_SALT)`（平台 MD5 异步，模型层不碰 @kit）。
- * 服务端认这个签名文本直接把 content 渲染成图——发帖不传图片。
- */
-export function memeEmojiToken(pkgId: string, picId: string, width: number, height: number,
-  md5LowerHex: string): string {
-  return `#(${memeEmojiHashBody(pkgId, picId, width, height)}${md5LowerHex})`;
+interface MemeCollectItem { pic_id: string; }
+/** 全量目标仅序列化云端ID，绝不从可展示的过滤列表反推。 */
+export function memeCollectionPayload(pics: MemePicItem[]): string {
+  if (pics.some((item: MemePicItem) => !validMemeId(item.picId))) { return ''; }
+  return pics.length === 0 ? 'all_delete' : JSON.stringify(pics.map((item: MemePicItem): MemeCollectItem => ({ pic_id: item.picId })));
+}
+export function sameMemeCollection(a: MemePicItem[], b: MemePicItem[]): boolean {
+  const ids: string[] = a.map((item: MemePicItem) => item.picId).sort();
+  const other: string[] = b.map((item: MemePicItem) => item.picId).sort();
+  return ids.length === other.length && ids.every((id: string, index: number) => id === other[index]);
 }

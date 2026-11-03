@@ -1,15 +1,10 @@
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { motion } from '@kit.MultimodalAwarenessKit';
 import { curves } from '@kit.ArkUI';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
-import { floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession, HoldingSource } from '../model/SmartReach';
-
-class MotionHoldingSource implements HoldingSource {
-  on(callback: (status: number) => void): void { motion.on('holdingHandChanged', callback); }
-  off(callback: (status: number) => void): void { motion.off('holdingHandChanged', callback); }
-}
+import { floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession } from '../model/SmartReach';
+import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
 
 /** 页面尺寸坐标系内的48vp按钮；握姿只换边，拖拽松手吸附最近侧边，保留高度。 */
 @ComponentV2
@@ -19,6 +14,12 @@ export struct ForumRefreshButton {
   @Param topInset: number = 0;
   @Param active: boolean = true;
   @Param busy: boolean = false;
+  @Param obstacleX: number = 0;
+  @Param obstacleY: number = 0;
+  @Param obstacleWidth: number = 0;
+  @Param obstacleHeight: number = 0;
+  @Event onMoveStart: () => void = (): void => {};
+  @Event onPositionChanged: (x: number, y: number) => void = (): void => {};
   @Event onRefresh: () => void = (): void => {};
   @Local prefs: SmartReachStore = smartReachStore;
   @Local x: number = 16;
@@ -56,6 +57,7 @@ export struct ForumRefreshButton {
       b.minY + this.prefs.yRatio * (b.maxY - b.minY);
     this.left = this.x < this.viewportWidth / 2;
     this.ready = true;
+    this.reportPosition();
     this.scheduleMove();
   }
 
@@ -108,11 +110,47 @@ export struct ForumRefreshButton {
       const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
       const side = this.pendingSide;
       this.pendingSide = 0;
+      this.onMoveStart();
       this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 170, 17) }, (): void => {
         this.left = side === -1;
         this.x = this.left ? b.minX : b.maxX;
+        this.avoidTabs();
       });
     }, 400);
+  }
+
+  @Monitor('x', 'y')
+  reportPosition(): void { if (this.ready && this.alive) { this.onPositionChanged(this.x, this.y); } }
+
+  private avoidTabs(): void {
+    if (this.obstacleWidth <= 0 || this.obstacleHeight <= 0) { return; }
+    const gap: number = 8;
+    if (this.x >= this.obstacleX + this.obstacleWidth + gap || this.x + 48 + gap <= this.obstacleX ||
+      this.y >= this.obstacleY + this.obstacleHeight + gap || this.y + 48 + gap <= this.obstacleY) { return; }
+    const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
+    const xs: number[] = [this.obstacleX - 48 - gap, this.obstacleX + this.obstacleWidth + gap, this.x, this.x];
+    const ys: number[] = [this.y, this.y, this.obstacleY - 48 - gap, this.obstacleY + this.obstacleHeight + gap];
+    let bestX: number = this.x;
+    let bestY: number = this.y;
+    let distance: number = Number.MAX_VALUE;
+    for (let index: number = 0; index < xs.length; index++) {
+      if (xs[index] < b.minX || xs[index] > b.maxX || ys[index] < b.minY || ys[index] > b.maxY) { continue; }
+      const nextDistance: number = Math.pow(xs[index] - this.x, 2) + Math.pow(ys[index] - this.y, 2);
+      if (nextDistance < distance) { distance = nextDistance; bestX = xs[index]; bestY = ys[index]; }
+    }
+    this.x = bestX; this.y = bestY;
+  }
+
+  private finishMove(): void {
+    this.dragging = false; this.pressed = false; this.suppressClickUntil = Date.now() + 300;
+    this.cancelPending();
+    const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+      this.x = dockFloatingX(this.x, b);
+      this.avoidTabs();
+    });
+    this.left = this.x < this.viewportWidth / 2;
+    this.savePosition();
   }
 
   private savePosition(): void {
@@ -150,6 +188,7 @@ export struct ForumRefreshButton {
       .priorityGesture(PanGesture({ direction: PanDirection.All, distance: 8 })
         .onActionStart((): void => {
           this.dragging = true; this.cancelPending(); this.originX = this.x; this.originY = this.y;
+          this.onMoveStart();
         })
         .onActionUpdate((event: GestureEvent): void => {
           const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
@@ -157,14 +196,7 @@ export struct ForumRefreshButton {
           this.y = clampFloating(this.originY + event.offsetY, b.minY, b.maxY);
         })
         .onActionEnd((): void => {
-          this.dragging = false; this.pressed = false; this.suppressClickUntil = Date.now() + 300;
-          // 拖拽期间收到的握姿不能在松手后把用户刚选的位置抢走。
-          this.cancelPending();
-          const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
-          this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
-            this.x = dockFloatingX(this.x, b);
-          });
-          this.savePosition();
+          this.finishMove();
         })
         .onActionCancel((): void => {
           this.dragging = false; this.pressed = false; this.suppressClickUntil = Date.now() + 300;

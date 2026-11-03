@@ -1,4 +1,4 @@
-/** 当前原生创建与验证码契约；类型值域未确认，不提供挑战完成判定。 */
+/** B-04 当前原生创建与验证码契约；类型值域未确认，不提供挑战完成判定。 */
 interface ChallengeExtra { textimg?: string; slideimg?: string; endpoint?: string; successimg?: string; slideendpoint?: string; }
 interface ChallengeInfo { vcode_md5?: string; vcode_pic_url?: string; vcode_type?: string | number; vcode_extra?: ChallengeExtra; }
 /** 只保留当前kp6字段，不推断字段是URL、答案或完成状态，不自动访问。 */

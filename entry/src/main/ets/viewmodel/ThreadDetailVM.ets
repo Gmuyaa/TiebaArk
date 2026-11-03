@@ -3,16 +3,16 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  AgreeResponse, MemeEmojiResponse, ReplyResponse, StoreOpResponse, SubPostResponse,
+  AgreeResponse, ReplyResponse, StoreOpResponse, SubPostResponse,
   ThreadDetailResponse, TiebaApi
 } from '../api/TiebaApi';
 import {
   copyPostItem, isAgreeSupported, PostItem, ReplySortType, resolveAgreeCount, resolveAgreeLiked,
   resolveForumName, SubPostItem, SubPostThreadState, ThreadDetail, syncSubPostThreadStates, unsupportedAgreeTip
 } from '../model/ThreadDetail';
-import { MEME_TOKEN_SALT, memeEmojiHashInput, memeEmojiToken, MemePicItem } from '../model/MemeEmoji';
+import { MemePicItem } from '../model/MemeEmoji';
+import { EmojiPickerVM } from './EmojiPickerVM';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
-import { CryptoUtil } from '../utils/CryptoUtil';
 import { AddPostTarget, AgreeObjType, TiebaDevice, TiebaSession } from '../net/TiebaParams';
 import { authSession } from '../auth/AuthSession';
 
@@ -134,83 +134,15 @@ export class ThreadDetailVM {
    */
   @Trace isSwitchingSort: boolean = false;
 
-  /** 收藏表情列表（云端为空 = 空数组，不是错误） */
-  @Trace memePics: MemePicItem[] = [];
-  /** '' = 已就绪/未开始；'loading' = 在途；其它 = 面板展示的失败文案 */
-  @Trace memeStateText: string = '';
-  private memeLoadedOnce: boolean = false;
-  /** 发帖 token 映射：显示 URL（thumbnail 优先）→ `#(meme,collect_...)` 完整 token。
-   * Map 不是 @Trace：界面渲染读 memePics，token 只在镜像提取时查表。 */
-  private memeTokens: Map<string, string> = new Map<string, string>();
-
-  /** 面板格子的显示 URL：缩略图优先，缺则原图 */
-  memeDisplayUrl(item: MemePicItem): string {
-    return item.thumbnail.length > 0 ? item.thumbnail : item.picUrl;
-  }
-
-  /** 镜像提取（richEditorReplyText）用的 token 查表 */
-  memeTokenFor(url: string): string {
-    const hit: string | undefined = this.memeTokens.get(url);
-    return hit === undefined ? '' : hit;
-  }
-
-  /** token 查表入口（页面镜像函数只传 Map，不感知 VM） */
-  memeTokenTable(): Map<string, string> {
-    return this.memeTokens;
-  }
-
-  memeUrlFor(token: string): string {
-    let found: string = '';
-    this.memeTokens.forEach((value: string, key: string) => {
-      if (found.length === 0 && value === token) {
-        found = key;
-      }
-    });
-    return found;
-  }
-
-  /** 失败重试：清掉"只拉一次"的闸再走同一条加载路径 */
-  async retryMemePics(context: common.UIAbilityContext): Promise<void> {
-    this.memeLoadedOnce = false;
-    this.memeStateText = '';
-    await this.loadMemePics(context);
-  }
-
-  /** 首次拉取收藏表情 + 预计算每个条目的发帖 token 映射 */
-  async loadMemePics(context: common.UIAbilityContext): Promise<void> {
-    if (this.memeLoadedOnce || this.memeStateText === 'loading') {
-      return;
-    }
-    this.memeStateText = 'loading';
-    try {
-      const device: TiebaDevice = await DeviceIdentity.ensure(context);
-      const response: MemeEmojiResponse =
-        await this.api.fetchAllMeme(device, this.currentSession());
-      if (!response.ok) {
-        this.memeStateText = response.describeFailure();
-        return;
-      }
-      // token 全部算完才放列表：先放列表后补映射会有"点到了但 token 没算完"的窗口
-      const tokens: Map<string, string> = new Map<string, string>();
-      const pics: MemePicItem[] = response.data.pics;
-      for (let i = 0; i < pics.length; i++) {
-        const p: MemePicItem = pics[i];
-        if (p.picId.length === 0) {
-          continue; // 缺 pic_id 的条目发不出合法 token，面板里也不该给它位置
-        }
-        const hash: string = await CryptoUtil.md5(
-          memeEmojiHashInput(p.pkgId, p.picId, p.width, p.height) + MEME_TOKEN_SALT);
-        const token: string = memeEmojiToken(p.pkgId, p.picId, p.width, p.height, hash);
-        tokens.set(this.memeDisplayUrl(p), token);
-      }
-      this.memeTokens = tokens;
-      this.memePics = pics;
-      this.memeLoadedOnce = true;
-      this.memeStateText = '';
-    } catch (err) {
-      this.memeStateText = `收藏表情加载失败：${(err as Error).message}`;
-    }
-  }
+  @Trace emojiPicker: EmojiPickerVM = new EmojiPickerVM();
+  get memePics(): MemePicItem[] { return this.emojiPicker.memePics; }
+  get memeStateText(): string { return this.emojiPicker.memeStateText; }
+  memeDisplayUrl(item: MemePicItem): string { return this.emojiPicker.memeDisplayUrl(item); }
+  memeTokenFor(url: string): string { return this.emojiPicker.memeTokenFor(url); }
+  memeTokenTable(): Map<string, string> { return this.emojiPicker.memeTokenTable(); }
+  memeUrlFor(token: string): string { return this.emojiPicker.memeUrlFor(token); }
+  async retryMemePics(context: common.UIAbilityContext): Promise<void> { await this.emojiPicker.retryMemePics(context); }
+  async loadMemePics(context: common.UIAbilityContext): Promise<void> { await this.emojiPicker.loadMemePics(context); }
 
   private api: TiebaApi = new TiebaApi();
   /**

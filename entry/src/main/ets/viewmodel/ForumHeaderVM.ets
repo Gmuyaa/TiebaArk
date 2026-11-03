@@ -91,7 +91,7 @@ export class ForumHeaderVM {
   /** 简介是公共资料，未登录也可读取；切吧、切账号和销毁后的响应不得回填。 */
   async ensureIntroduction(context: common.UIAbilityContext, retry: boolean = false): Promise<void> {
     if (this.disposed || this.forumId <= 0 || this.owner !== ownerKey() ||
-      !this.follow.known || (this.follow.following && !this.follow.pending) ||
+      !this.follow.known ||
       this.introductionLoading || (this.introductionLoaded && !retry)) { return; }
     const sequence: number = ++this.introductionSequence;
     const id: number = this.forumId;
@@ -129,8 +129,14 @@ export class ForumHeaderVM {
     if (this.disposed || this.owner.length === 0 || this.owner !== ownerKey() || this.forumId <= 0 ||
       !this.follow.known || !this.follow.following || this.follow.pending || this.reading || this.signing) { return; }
     const day: string = forumSignDay();
+    const confirmedContinuous: number = this.confirmedDay === day ? this.membership.continuousCount : -1;
+    const confirmedTotal: number = this.confirmedDay === day ? this.membership.totalCount : -1;
     const cached = cachedForumMembership(this.forumName, this.forumId);
-    if (cached !== undefined) { this.membership = cached; }
+    if (cached !== undefined) {
+      if (!(cached.continuousCount >= 0)) { cached.continuousCount = confirmedContinuous; }
+      if (!(cached.totalCount >= 0)) { cached.totalCount = confirmedTotal; }
+      this.membership = cached;
+    }
     if (!retry && forumReadFresh(this.forumName) && cached?.signed !== undefined) {
       this.readDay = day; return;
     }
@@ -190,7 +196,12 @@ export class ForumHeaderVM {
         }
       }
       // 本次签到的业务成功优先于 forumGuide 可能过期的 is_sign。
-      if (this.confirmedDay === day) { membership.signed = true; }
+      if (this.confirmedDay === day) {
+        membership.signed = true;
+        // 当天已确认的计数不被后续缺字段响应抹掉；有新值仍按服务端值更新。
+        if (!(membership.continuousCount >= 0)) { membership.continuousCount = confirmedContinuous; }
+        if (!(membership.totalCount >= 0)) { membership.totalCount = confirmedTotal; }
+      }
       this.membership = membership;
       this.readDay = day;
       hilog.info(0x0000, 'ForegroundRefresh', 'forum state applied sign=%{public}d',
@@ -216,8 +227,10 @@ export class ForumHeaderVM {
     if (!this.follow.following) { return '关注'; }
     if (this.signing) { return '签到中…'; }
     if (this.readDay !== forumSignDay() || this.membership.signed === undefined) { return '重试签到状态'; }
-    return this.membership.signed ? '已签到' :
-      (this.membership.missedDays > 0 ? `漏签${this.membership.missedDays}天` : '签到');
+    if (this.membership.signed) {
+      return this.membership.continuousCount >= 0 ? `连签 ${this.membership.continuousCount} 天` : '已签到';
+    }
+    return this.membership.missedDays > 0 ? `漏签${this.membership.missedDays}天` : '签到';
   }
 
   async activate(context: common.UIAbilityContext): Promise<string> {

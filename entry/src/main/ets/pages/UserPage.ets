@@ -11,6 +11,7 @@ import { PageHeader } from '../components/PageHeader';
 import { PostContentInline } from '../components/PostContentInline';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ImageViewer } from '../components/ImageViewer';
+import { ImageTransitionSource, animateImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { formatPostTime } from '../model/HomeFeedPresentation';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
@@ -63,6 +64,7 @@ export struct UserPage {
   private cardImageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
   @Local viewerImages: string[] = [];
   @Local viewerIndex: number = 0;
+  private avatarTransition: ImageTransitionSource = new ImageTransitionSource();
 
   private imageScroller(tid: number): ListScroller {
     let scroller: ListScroller | undefined = this.cardImageScrollers.get(tid);
@@ -140,7 +142,7 @@ export struct UserPage {
                     .fontColor(this.vm.tab === index ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
                     .layoutWeight(1).textAlign(TextAlign.Center).padding({ top: 16, bottom: 16 })
                     .onClick(() => { this.vm.selectTab(this.context(), index); })
-                })
+                }, (label: string) => label)
               }.width('100%').backgroundColor(AppTheme.CARD).borderRadius(AppTheme.CARD_RADIUS)
             }
             if (this.vm.error.length > 0) {
@@ -206,7 +208,7 @@ export struct UserPage {
     }.hideTitleBar(true)
     .onBackPressed((): boolean => {
       if (this.viewerImages.length === 0) { return false; }
-      this.viewerImages = [];
+      animateImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
       return true;
     })
     .onShown(() => {
@@ -222,8 +224,21 @@ export struct UserPage {
   ProfileCard() {
     Column({ space: 18 }) {
       Row({ space: 16 }) {
-        AvatarComponent({ url: this.avatarUrl(),
-          avatarSize: 72, fallbackName: this.name(), traceTag: this.ownAvatarTraceTag() })
+        Stack() {
+          AvatarComponent({ url: this.avatarUrl(),
+            avatarSize: 72, fallbackName: this.name(), traceTag: this.ownAvatarTraceTag() })
+        }.width(72).height(72).borderRadius(36).clip(true)
+          .geometryTransition(this.avatarTransition.id(this.avatarUrl()), { follow: true })
+          .renderFit(RenderFit.RESIZE_FILL)
+          .accessibilityText('查看头像')
+          .onClick((): void => {
+            const url: string = this.avatarUrl();
+            if (url.length === 0) { return; }
+            this.avatarTransition.open(this.getUIContext(), url, url, (): void => {
+              this.viewerIndex = 0;
+              this.viewerImages = [url];
+            });
+          })
         Column({ space: 8 }) {
           Text(this.name()).fontSize(23).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN)
             .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -270,7 +285,7 @@ export struct UserPage {
       title: item.title, summary: item.content, contentPieces: item.pieces,
       onActivateContent: (piece: ContentPiece): void => { openContentPiece(piece, this.getUIContext()); },
       agreeCount: item.agreeNum, replyCount: item.replyNum, shareCount: item.shareNum,
-      images: item.images, imageScroller: this.imageScroller(item.tid),
+      images: item.images, originImages: item.originImages, imageScroller: this.imageScroller(item.tid),
       onOpenImage: (index: number): void => {
         this.viewerIndex = Math.max(0, Math.min(index, item.originImages.length - 1));
         this.viewerImages = item.originImages;

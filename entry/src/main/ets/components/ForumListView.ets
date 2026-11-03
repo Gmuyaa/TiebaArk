@@ -119,6 +119,20 @@ export struct ForumListView {
   // 顶部频道是 UI 状态，不与 vm.mode（指定吧浏览状态）绑定。
   @Local selectedChannel: string = '推荐';
   private imageScrollers: Map<number, ListScroller> = new Map();
+  /** 只保留当前两份数据集的横滑位置；离屏不删除，刷新移除且另一频道也不再引用时释放。 */
+  @Monitor('vm.threads', 'followVm.threads')
+  pruneImageScrollers(): void {
+    const retained: Set<number> = new Set();
+    for (const item of this.vm.threads) { retained.add(item.tid); }
+    for (const item of this.followVm.threads) { retained.add(item.tid); }
+    this.imageScrollers.forEach((_scroller: ListScroller, tid: number): void => {
+      if (!retained.has(tid)) { this.imageScrollers.delete(tid); }
+    });
+  }
+
+  aboutToDisappear(): void {
+    this.imageScrollers.clear();
+  }
   @Event onOpenImages: (urls: string[], index: number) => void =
     (_urls: string[], _index: number): void => {};
 
@@ -146,6 +160,7 @@ export struct ForumListView {
   /** 玻璃头实测总高（含状态栏区），用作列表首位透明占位项的高度。0 = 尚未实测。 */
   @Local headerH: number = 0;
 
+  /** 普通 ThreadBrief 字段不单独触发更新；此状态触发 key 重算，各卡仍只按自己的 avatarStamp 重建。 */
   @Local avatarEpoch: number = 0;
 
   private avatarQueue: ForumAvatarQueue | undefined = undefined;
@@ -327,13 +342,10 @@ export struct ForumListView {
     } else if (this.vm.errorText.length > 0 && this.vm.threads.length === 0) {
       this.ErrorView(this.vm.errorText)
     } else if (this.visibleRecommendThreads.length === 0) {
-      Column({ space: 16 }) {
-        Text('暂无可显示的帖子').fontColor(AppTheme.TEXT_SUB).fontSize(14)
-        if (this.vm.hasMore) {
-          Button(this.vm.loadingMore ? '正在加载…' : '继续加载图文帖').enabled(!this.vm.loadingMore)
-            .onClick(() => { void this.vm.loadMore(this.hostContext(), true); })
-        }
-      }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      PageState({ fillRemaining: true, message: '暂无可显示的帖子', loading: this.vm.loadingMore,
+        actionLabel: this.vm.hasMore ? '继续加载图文帖' : '',
+        onAction: (): void => { void this.vm.loadMore(this.hostContext(), true); } })
+        .padding({ top: this.listSpacerH() - this.statusBarH }).layoutWeight(1)
     } else {
       this.RecommendFeed()
     }
@@ -649,6 +661,7 @@ export struct ForumListView {
 
         const epoch: number = this.avatarEpoch;
 
+        // 读取 epoch 保留响应式依赖；乘零避免一次回填重建所有卡片。不要删读或改成乘一。
         return `${threadBriefIdentity(item)}-${item.avatarStamp + epoch * 0}`;
       })
 
@@ -783,17 +796,10 @@ export struct ForumListView {
 
   @Builder
   RecommendPendingView() {
-    Column({ space: 12 }) {
-      RefreshSpinner()
-      Text('正在加载推荐内容…')
-        .fontSize(14)
-        .fontColor(AppTheme.TEXT_SUB)
-    }
-    .width('100%')
+    PageState({ fillRemaining: true, loading: true, message: '正在加载推荐内容…' })
     // 补玻璃头占位（同 FollowPendingView）
     .padding({ top: this.listSpacerH() - this.statusBarH })
     .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
     .onAppear(() => {
       this.vm.refreshRecommend(this.hostContext());
     })
@@ -869,17 +875,10 @@ export struct ForumListView {
    */
   @Builder
   FollowPendingView() {
-    Column({ space: 12 }) {
-      RefreshSpinner()
-      Text('正在加载关注内容…')
-        .fontSize(14)
-        .fontColor(AppTheme.TEXT_SUB)
-    }
-    .width('100%')
+    PageState({ fillRemaining: true, loading: true, message: '正在加载关注内容…' })
     // 补玻璃头占位（同 StatusView）
     .padding({ top: this.listSpacerH() - this.statusBarH })
     .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
     .onAppear(() => {
       if (this.selectedChannel === '关注') {
         this.followVm.load(this.hostContext());
@@ -907,23 +906,12 @@ export struct ForumListView {
 
   @Builder
   FollowEmptyView() {
-    Column({ space: 8 }) {
-      Text(this.followVm.followedCount === 0 ? '还没有关注的吧' : '关注的吧暂时没有新内容')
-        .fontSize(16)
-        .fontColor(AppTheme.TEXT_MAIN)
-      if (this.followVm.followedCount === 0) {
-        Text('在贴吧客户端里关注几个吧，这里就会显示它们的帖子')
-          .fontSize(13)
-          .fontColor(AppTheme.TEXT_SUB)
-          .textAlign(TextAlign.Center)
-          .padding({ left: 32, right: 32 })
-      }
-    }
-    .width('100%')
+    PageState({ fillRemaining: true,
+      title: this.followVm.followedCount === 0 ? '还没有关注的吧' : '关注的吧暂时没有新内容',
+      message: this.followVm.followedCount === 0 ? '在贴吧客户端里关注几个吧，这里就会显示它们的帖子' : '' })
     // 补玻璃头占位（同 StatusView）
     .padding({ top: this.listSpacerH() - this.statusBarH })
     .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
@@ -931,31 +919,16 @@ export struct ForumListView {
     if (this.hotVm.items.length > 0) {
       this.HotFeed()
     } else if (this.hotVm.errorText.length > 0) {
-      Column({ space: 12 }) {
-        Text(this.hotVm.errorText)
-          .fontSize(14)
-          .fontColor(AppTheme.TEXT_SUB)
-          .textAlign(TextAlign.Center)
-        Text('点击重试')
-          .fontSize(14)
-          .fontColor(AppTheme.ACCENT_DARK)
-          .onClick(() => { this.hotVm.load(true); })
-      }
-      .width('100%')
-      .padding({ top: this.listSpacerH() - this.statusBarH, left: 28, right: 28 })
-      .layoutWeight(1)
-      .justifyContent(FlexAlign.Center)
+      PageState({ fillRemaining: true, title: '加载失败', message: this.hotVm.errorText, actionLabel: '重试',
+        onAction: (): void => { this.hotVm.load(true); } })
+        .padding({ top: this.listSpacerH() - this.statusBarH }).layoutWeight(1)
     } else if (this.hotVm.loadedOnce) {
-      this.StatusView('暂时没有热议话题')
+      PageState({ fillRemaining: true, message: '暂时没有热议话题' })
+        .padding({ top: this.listSpacerH() - this.statusBarH }).layoutWeight(1)
     } else {
-      Column({ space: 12 }) {
-        RefreshSpinner()
-        Text('正在加载热榜…').fontSize(14).fontColor(AppTheme.TEXT_SUB)
-      }
-      .width('100%')
+      PageState({ fillRemaining: true, loading: true, message: '正在加载热榜…' })
       .padding({ top: this.listSpacerH() - this.statusBarH })
       .layoutWeight(1)
-      .justifyContent(FlexAlign.Center)
       .onAppear(() => {
         if (this.selectedChannel === '热榜') {
           this.hotVm.load();

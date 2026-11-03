@@ -266,6 +266,7 @@ export class ThreadListResult {
       const tab: ForumTab = new ForumTab();
       tab.id = num(rawTab.tab_id);
       tab.name = str(rawTab.tab_name);
+      if (tab.id === 301 && num(rawTab.tab_type) === 12) { tab.name = '精华'; }
       tab.isVideo = tabType === 3 && num(rawTab.tab_type) === 100;
       tab.type = num(rawTab.tab_type);
       tab.isGeneral = tabType === 3 && flag(rawTab.is_general_tab);
@@ -278,9 +279,15 @@ export class ThreadListResult {
         (rawTab.partition_menu ?? []).some((menu) => num(menu.source_id) === 1 && menu.text === '未回答');
       result.tabs.push(tab);
     }
+    // 官方精华置首、视频置尾，中间分类保持服务端相对顺序。
+    const essenceIndex: number = result.tabs.findIndex((tab: ForumTab): boolean => tab.id === 301 && tab.type === 12);
+    if (essenceIndex > 0) { result.tabs.unshift(result.tabs.splice(essenceIndex, 1)[0]); }
+    const videoTabs: ForumTab[] = result.tabs.filter((tab: ForumTab): boolean => tab.isVideo);
+    result.tabs = result.tabs.filter((tab: ForumTab): boolean => !tab.isVideo).concat(videoTabs);
     const preferredTabId: number = num(raw.frs_tab_default);
     const fallbackTabId: number = num(raw.page_data_tab_id);
-    result.selectedTabId = preferredTabId > 0 ? preferredTabId : fallbackTabId;
+    // 实际内容分类优先；frs_tab_default 可能只是请求意向，不能证明内容匹配。
+    result.selectedTabId = fallbackTabId > 0 ? fallbackTabId : preferredTabId;
 
     const rawForum: RawForum | undefined = raw.forum;
     if (rawForum !== undefined && rawForum !== null) {

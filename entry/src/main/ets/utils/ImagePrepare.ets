@@ -45,23 +45,23 @@ export class ImagePrepareResult {
 }
 function cancelled(): ImagePrepareResult { const result: ImagePrepareResult = new ImagePrepareResult(); result.cancelled = true; return result; }
 /** 系统选图器授予单个URI读取，不新增整库权限，不保存URI。 */
-export async function pickUploadImage(forumName: string, current: () => boolean): Promise<ImagePrepareResult> {
+export async function pickUploadImage(forumName: string, current: () => boolean, forCollection: boolean = false): Promise<ImagePrepareResult> {
   if (!current()) { return cancelled(); }
   const result: ImagePrepareResult = new ImagePrepareResult();
-  if (forumName.trim().length === 0) { result.message = '图片所属吧未确认'; return result; }
+  if (!forCollection && forumName.trim().length === 0) { result.message = '图片所属吧未确认'; return result; }
   try {
     const picker: photoAccessHelper.PhotoViewPicker = new photoAccessHelper.PhotoViewPicker();
     const selected = await picker.select({ MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE, maxSelectNumber: 1 });
     if (!current() || selected.photoUris.length === 0) { return cancelled(); }
     if (selected.photoUris.length !== 1) { result.message = '请每次选择一张图片'; return result; }
-    return await prepareUploadImage(selected.photoUris[0], forumName, current);
+    return await prepareUploadImage(selected.photoUris[0], forumName, current, forCollection);
   } catch (err) { if (!current()) { return cancelled(); } result.message = '选图失败，请重试'; return result; }
 }
 /** 只读所选图片；每个异步边界检查调用者生命周期，finally释放全部资源。 */
-export async function prepareUploadImage(uri: string, forumName: string, current: () => boolean): Promise<ImagePrepareResult> {
+export async function prepareUploadImage(uri: string, forumName: string, current: () => boolean, forCollection: boolean = false): Promise<ImagePrepareResult> {
   if (!current()) { return cancelled(); }
   const result: ImagePrepareResult = new ImagePrepareResult();
-  if (!uri.startsWith('file://') || forumName.trim().length === 0) { result.message = '所选图片或所属吧无效'; return result; }
+  if (!uri.startsWith('file://') || (!forCollection && forumName.trim().length === 0)) { result.message = '所选图片或所属吧无效'; return result; }
   let file: fileIo.File | undefined = undefined;
   let source: image.ImageSource | undefined = undefined;
   let pixels: image.PixelMap | undefined = undefined;
@@ -94,7 +94,7 @@ export async function prepareUploadImage(uri: string, forumName: string, current
     const frames: number = await source.getFrameCount();
     if (!current()) { result.cancelled = true; return result; }
     if (!Number.isInteger(frames) || frames < 1) { result.message = '图片帧数未确认'; return result; }
-    const input: ImageUploadInput = new ImageUploadInput(); input.forumName = forumName.trim();
+    const input: ImageUploadInput = new ImageUploadInput(); input.forCollection = forCollection; input.forumName = forumName.trim();
     if (frames > 1 || info.mimeType === 'image/gif') {
       if (info.mimeType !== 'image/gif' && info.mimeType !== 'image/png') { result.message = '该动图格式暂未支持'; return result; }
       if (bytes.length > IMAGE_UPLOAD_BYTES || size.width !== info.size.width || size.height !== info.size.height) {

@@ -7,6 +7,7 @@ import { DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
 import { ThreadAuthorBadge } from './ThreadAuthorBadge';
+import { ThreadBawuBadge } from './ThreadBawuBadge';
 import { ForumLevelBadge } from './ForumLevelBadge';
 import { UserGrowthBadge } from './UserGrowthBadge';
 import { ReplyMetaBar } from './ReplyMetaBar';
@@ -70,16 +71,6 @@ export struct ReplyItem {
     return this.subPosts.length > 0 || this.subLoading || this.subErrorText.length > 0;
   }
 
-  @Builder
-  Badge(text: string, filled: boolean) {
-    Text(text)
-      .fontSize(10)
-      .fontColor(filled ? '#FFFFFF' : DetailTheme.ACCENT_DARK)
-      .backgroundColor(filled ? DetailTheme.ACCENT : DetailTheme.ACCENT_LIGHT)
-      .borderRadius(4)
-      .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-  }
-
   build() {
     CommentActionHost({ target: postCommentTarget(this.item, this.tid, this.threadTitle),
       content: (): void => { this.ReplyContent(); } })
@@ -114,7 +105,8 @@ export struct ReplyItem {
               ThreadAuthorBadge();
             }
             if (this.item.author.isBawu) {
-              this.Badge('吧务', false);
+              ThreadBawuBadge({ text: '吧务', textColor: DetailTheme.ACCENT_DARK,
+                backgroundColor: DetailTheme.ACCENT_LIGHT, borderColor: DetailTheme.ACCENT });
             }
           }
           .layoutWeight(1)

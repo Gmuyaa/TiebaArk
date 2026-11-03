@@ -1,4 +1,4 @@
-/** 系统扫码界面提供相机与相册入口，不申请应用相机权限。 */
+/** H-05：系统扫码界面提供相机与相册入口，不申请应用相机权限。 */
 import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { PageHeader } from '../components/PageHeader';

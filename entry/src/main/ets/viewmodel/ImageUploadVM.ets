@@ -23,7 +23,7 @@ export class ImageUploadVM {
   private disposed: boolean = false;
   private current(mine: number): boolean { return !this.disposed && this.epoch === mine && this.account === owner(); }
   contentToken(): string { return this.account === owner() && !this.disposed && this.image !== undefined ? uploadedImageToken(this.image) : ''; }
-  async pickAndUpload(context: common.UIAbilityContext, forumName: string): Promise<void> {
+  async pickAndUpload(context: common.UIAbilityContext, forumName: string, forCollection: boolean = false): Promise<void> {
     if (this.disposed || ((this.busy || this.selecting) && this.account === owner())) { return; }
     const mine: number = ++this.epoch; this.account = owner();
     this.image = undefined; this.error = ''; this.busy = false; this.selecting = false;
@@ -31,7 +31,7 @@ export class ImageUploadVM {
     if (this.account.length === 0) { this.error = '登录后才能上传图片'; return; }
     this.selecting = true;
     try {
-      const result = await pickUploadImage(forumName, () => this.current(mine));
+      const result = await pickUploadImage(forumName, () => this.current(mine), forCollection);
       if (!this.current(mine)) { return; }
       this.selecting = false;
       if (result.cancelled) { return; }
@@ -53,6 +53,7 @@ export class ImageUploadVM {
     const invalid: string = imageUploadInputError(input);
     if (invalid.length > 0) { this.error = invalid; return; }
     const bytes: Uint8Array = input.bytes.slice();
+    const forCollection: boolean = input.forCollection;
     const width: number = input.width; const height: number = input.height; const forumName: string = input.forumName.trim();
     const userName: string = authSession.snapshot.userName;
     this.busy = true; this.totalBytes = bytes.length;
@@ -60,10 +61,14 @@ export class ImageUploadVM {
       const device = await DeviceIdentity.ensure(context);
       if (!this.current(mine)) { return; }
       const session = authSession.session();
-      const watermark = await this.api.fetchImageWatermark(device, session);
-      if (!this.current(mine)) { return; }
-      if (!watermark.ok) { this.error = watermark.describeFailure(); return; }
-      if (watermark.data.type === 1 && (typeof userName !== 'string' || userName.length === 0)) {
+      let watermarkType: number = 0;
+      if (!forCollection) {
+        const watermark = await this.api.fetchImageWatermark(device, session);
+        if (!this.current(mine)) { return; }
+        if (!watermark.ok) { this.error = watermark.describeFailure(); return; }
+        watermarkType = watermark.data.type;
+      }
+      if (watermarkType === 1 && (typeof userName !== 'string' || userName.length === 0)) {
         this.error = '水印账号名未确认，请先刷新账号资料'; return;
       }
       const digest: string = await CryptoUtil.md5OfBytes(bytes);
@@ -81,7 +86,7 @@ export class ImageUploadVM {
         chunk.digest = digest; chunk.totalSize = bytes.length; chunk.chunkSize = chunkSize; chunk.chunkNo = chunkNo;
         chunk.bytes = bytes.slice((chunkNo - 1) * chunkSize, Math.min(chunkNo * chunkSize, bytes.length));
         chunk.width = width; chunk.height = height; chunk.forumName = forumName; chunk.userName = userName;
-        chunk.watermarkType = watermark.data.type;
+        chunk.watermarkType = watermarkType;
         const chunkError: string = imageUploadChunkError(chunk);
         if (chunkError.length > 0) { this.error = chunkError; return; }
         const response = await this.api.uploadImageChunk(device, session, chunk);

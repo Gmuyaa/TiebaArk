@@ -68,7 +68,7 @@ export struct SearchResultPage {
   /** 当前结果分类；默认搜吧。 */
   @Local resultTab: number = TAB_FORUM;
   /**
-   * 吧内搜索范围（）：非空时本页只显示「搜帖子」结果、请求多带 `kw` = 本值。
+   * 吧内搜索范围（A-02）：非空时本页只显示「搜帖子」结果、请求多带 `kw` = 本值。
    * 缺省空串 = 全站搜索。
    */
   @Local scopeForum: string = '';
@@ -334,7 +334,7 @@ export struct SearchResultPage {
   }
 
   /**
-   * 吧内搜索的范围标签（）。取代「搜吧／搜帖子」分段控件的位置 ——
+   * 吧内搜索的范围标签（A-02）。取代「搜吧／搜帖子」分段控件的位置 ——
    * 吧内搜索只有一个结果面，留一个点了也没用的 tab 反而误导。
    * 文案来自 `model/SearchPost.ets#searchScopeLabel`（与请求参数同一处真值源）。
    */

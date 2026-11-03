@@ -27,6 +27,9 @@ import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRef
 import { StoreResult } from '../auth/AuthStore';
 import { AppTheme } from '../theme/Theme';
 import { GlassBackButton } from '../components/GlassBackButton';
+import { GlassCircleButton } from '../components/GlassCircleButton';
+import { GlassPillButton } from '../components/GlassPillButton';
+import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { materialManager } from '../common/material/MaterialManager';
 import { ALL_HDS_LEVELS, hdsLevelLabel } from '../common/material/MaterialStrength';
@@ -192,6 +195,12 @@ struct SettingsPage {
    * 裁剪页盖在最上层时同理：返回键先收裁剪页（等同点「✕」），不退设置页。
    */
   onBackPress(): boolean {
+    if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.executing) {
+      this.forbiddenVm.requestStop(); return true;
+    }
+    if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting && !this.forbiddenVm.actionBusy) {
+      this.forbiddenVm.toggleSelection(); return true;
+    }
     if (this.cropOpen) {
       this.cropOpen = false;
       return true;
@@ -252,6 +261,11 @@ struct SettingsPage {
       lowFlow: lowFlowStore.enabled,
       superResolution: superResolutionStore.enabled,
       smartReach: this.smartReach.enabled,
+      homeComposeSmartReach: this.smartReach.homeComposeEnabled,
+      imageMenuSmartReach: this.smartReach.imageMenuEnabled,
+      imageMenuLongPress: this.smartReach.imageMenuLongPress,
+      forumTabsSmartReach: this.smartReach.forumTabsEnabled,
+      forumTabsFloating: this.smartReach.forumTabsFloating,
       // 入口显示系统应用缓存总量，不再用导出目录大小冒充总量。
       cacheLabel: this.cacheStats.label(),
     };
@@ -279,6 +293,8 @@ struct SettingsPage {
   @Local paneRefreshSeq: number = 0;
   /** 通知分页子页「接近底部」（滚动到底 → 自增；同一时间只允许一个分页请求，由 VM 单飞吸收） */
   @Local paneLoadMoreSeq: number = 0;
+  @Local forbiddenVm: ForbiddenForumsVM = new ForbiddenForumsVM();
+  @Local forbiddenUnblockSeq: number = 0;
   private scroller: Scroller = new Scroller();
 
   private resetScroll(): void {
@@ -305,6 +321,9 @@ struct SettingsPage {
 
   /** 所有页面入口统一走这里：进入前保存当前页偏移，新页从顶部开始。 */
   private navigateTo(next: SettingsPane): void {
+    if (next === SettingsPane.FORBIDDEN_FORUMS && this.pane !== next) {
+      this.forbiddenVm = new ForbiddenForumsVM(); this.forbiddenUnblockSeq = 0;
+    }
     const from: SettingsPane = this.pane;
     if (from !== next) {
       this.rememberScroll(from);
@@ -366,6 +385,12 @@ struct SettingsPage {
 
   /** 顶栏返回：二级页里回列表，列表上才真的退出设置页 */
   private goBack(): void {
+    if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.executing) {
+      this.forbiddenVm.requestStop(); return;
+    }
+    if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting && !this.forbiddenVm.actionBusy) {
+      this.forbiddenVm.toggleSelection(); return;
+    }
     if (this.pane !== SettingsPane.NONE) {
       this.leaveToParent();
       return;
@@ -439,7 +464,7 @@ struct SettingsPage {
         } else {
           // 从入口进入是"新页面"：统一走导航方法（保存父页偏移 + 新页从顶部开始）
           this.navigateTo(entry.pane);
-          // 进缓存清理页**先统计**，行右侧的占用必须是进去那一刻的真实值
+          // G-03：进缓存清理页**先统计**，行右侧的占用必须是进去那一刻的真实值
           if (entry.pane === SettingsPane.CACHE) {
             this.refreshCacheStats();
           }
@@ -481,10 +506,13 @@ struct SettingsPage {
    */
   private optionsFor(pane: SettingsPane): SettingsOptionItem[] {
     if (pane === SettingsPane.SIGN_SETTINGS) {
-      return buildOptions(['逐个签到', '官方签到'], signStrategyStore.strategy, 'sign_strategy');
+      return buildOptions(['逐个签到', '官方签到', '混合签到'], signStrategyStore.strategy, 'sign_strategy');
     }
     if (pane === SettingsPane.FORUM_LEVEL) {
       return buildOptions(['简洁', '官方'], forumLevelStore.style, 'forum_level');
+    }
+    if (pane === SettingsPane.IMAGE_MENU) {
+      return buildOptions(['常显胶囊', '长按显示'], this.smartReach.imageMenuLongPress ? 1 : 0, 'image_menu');
     }
     if (pane === SettingsPane.FORUM_DEFAULT_TAB) {
       return buildOptions(['热门', '最新'], forumDefaultTabStore.value, 'forum_default_tab');
@@ -527,7 +555,7 @@ struct SettingsPage {
   /** 选中弹层里的第 `index` 项：按组分发到对应的单例，然后关掉弹层。 */
   private pickOption(pane: SettingsPane, index: number): void {
     if (pane === SettingsPane.SIGN_SETTINGS) {
-      if (index !== 0 && index !== 1) { return; }
+      if (index !== 0 && index !== 1 && index !== 2) { return; }
       void signStrategyStore.setStrategy(index, this.getUIContext().getHostContext() as common.UIAbilityContext)
         .catch((error: Error) => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       this.closePopup(); return;
@@ -535,6 +563,12 @@ struct SettingsPage {
     if (pane === SettingsPane.FORUM_LEVEL) {
       void forumLevelStore.setStyle(index, this.getUIContext().getHostContext() as common.UIAbilityContext)
         .catch((error: Error) => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.IMAGE_MENU) {
+      if (index !== 0 && index !== 1) { return; }
+      this.smartReach.setImageMenuLongPress(index === 1, this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
       this.closePopup(); return;
     }
     if (pane === SettingsPane.FORUM_DEFAULT_TAB) {
@@ -616,6 +650,24 @@ struct SettingsPage {
 
   /** 旧行渲染器里的开关分发（按稳定 action 串，不比较中文文案）。 */
   private applySwitchEntry(entry: SettingsEntry, checked: boolean): void {
+    if (!entry.enabled) { return; }
+    if (entry.action === 'home_compose_smart_reach') {
+      this.smartReach.setHomeComposeEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+      return;
+    }
+    if (entry.action === 'forum_tabs_smart_reach' || entry.action === 'forum_tabs_floating') {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const saved: Promise<void> = entry.action === 'forum_tabs_smart_reach' ?
+        this.smartReach.setForumTabsEnabled(checked, context) : this.smartReach.setForumTabsFloating(checked, context);
+      saved.catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+      return;
+    }
+    if (entry.action === 'image_menu_smart_reach') {
+      this.smartReach.setImageMenuEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+      return;
+    }
     if (entry.action === 'smart_reach') {
       this.smartReach.setEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
         .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
@@ -828,6 +880,11 @@ struct SettingsPage {
      * 顶栏渐隐的终点**上，所以这里不留任何额外间距。
      */
     Stack({ alignContent: Alignment.TopStart }) {
+      if (this.pane === SettingsPane.FORBIDDEN_FORUMS) {
+        ForbiddenForumsPane({ vm: this.forbiddenVm, scroller: this.scroller, topInset: this.titleBarH(),
+          unblockSeq: this.forbiddenUnblockSeq, refreshSeq: this.paneRefreshSeq,
+          onScrolled: (): void => { this.updateNavGlass(); } })
+      } else {
       Scroll(this.scroller) {
         Column() {
           // 顶栏占位：让首张卡片的顶边与顶栏渐隐终点齐平
@@ -876,18 +933,48 @@ struct SettingsPage {
         this.updateNavGlass();
         this.autoLoadMore(false);
       })
+      }
 
       // 顶栏：悬浮层，最后声明 → 盖在内容层之上
       this.TitleBar()
 
       Row() {
-        GlassBackButton({
-          onTap: (): void => {
-            this.goBack();
-          }
-        })
+        if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting) {
+          GlassCircleButton({ symbol: $r('sys.symbol.xmark'), iconWeight: FontWeight.Regular,
+            accessibilityLabel: this.forbiddenVm.executing ? '停止取消屏蔽' : '退出多选',
+            onTap: (): void => { this.goBack(); } }).enabled(!this.forbiddenVm.actionBusy || this.forbiddenVm.executing)
+        } else {
+          GlassBackButton({ onTap: (): void => { this.goBack(); } })
+        }
       }
       .margin({ left: 14, top: this.statusBarH + 8 })
+
+      if (this.pane === SettingsPane.FORBIDDEN_FORUMS) {
+        Row({ space: 10 }) {
+          if (this.forbiddenVm.selecting) {
+            GlassPillButton({ label: this.forbiddenVm.allSelected() ? '取消全选' : '全选',
+              pillWidth: this.forbiddenVm.allSelected() ? 88 : 64,
+              active: !this.forbiddenVm.actionBusy && !this.forbiddenVm.loading && !this.forbiddenVm.loadingMore,
+              onTap: (): void => { void this.forbiddenVm.toggleAll(this.getUIContext().getHostContext() as common.UIAbilityContext); } })
+          } else {
+            GlassPillButton({ label: '多选', pillWidth: 64,
+              active: !this.forbiddenVm.actionBusy && !this.forbiddenVm.loading && !this.forbiddenVm.loadingMore && this.forbiddenVm.items.length > 0,
+              onTap: (): void => { this.forbiddenVm.toggleSelection(); } })
+          }
+        }.width('100%').justifyContent(FlexAlign.End).padding({ right: 14 })
+          .hitTestBehavior(HitTestMode.Transparent)
+          .margin({ top: this.statusBarH + 8 })
+        if (this.forbiddenVm.selecting) {
+          Row() {
+            GlassCircleButton({ symbol: $r('sys.symbol.trash'), iconWeight: FontWeight.Regular,
+              accessibilityLabel: '取消所选屏蔽', diameter: 56, iconSize: 24, slot: MaterialSlot.BOTTOM_BAR,
+              onTap: (): void => { this.forbiddenUnblockSeq++; } })
+              .enabled(this.forbiddenVm.selectedIds.length > 0 && !this.forbiddenVm.actionBusy && !this.forbiddenVm.loading && !this.forbiddenVm.loadingMore)
+              .opacity(this.forbiddenVm.selectedIds.length > 0 && !this.forbiddenVm.actionBusy ? 1 : 0.4)
+          }.width('100%').justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.Transparent)
+            .position({ x: 0, y: '100%' }).translate({ y: -84 })
+        }
+      }
 
       /*
        * 头像裁剪页：全屏浮层，盖在设置页所有内容之上（含顶栏与返回按钮）。
@@ -1124,12 +1211,6 @@ struct SettingsPage {
       OfficialMessagesPane()
     } else if (this.pane === SettingsPane.TAILS) {
       TailsPane()
-    } else if (this.pane === SettingsPane.FORBIDDEN_FORUMS) {
-      ForbiddenForumsPane({
-        loadMoreSeq: this.paneLoadMoreSeq,
-        onPageStarted: (): void => { if (this.paneContentH <= this.viewportH) { this.autoFillCount++; } },
-        onPageSettled: (): void => { this.autoLoadMore(false); }
-      })
     } else if (this.pane === SettingsPane.BLOCK_MANAGE) {
       BlockManagePane()
     } else if (this.pane === SettingsPane.HIDDEN_THREADS) {
@@ -1174,6 +1255,8 @@ struct SettingsPage {
     })
     if (signStrategyStore.strategy === 1) {
       SettingsNote({ text: '官方签到有等级限制，不符合条件的吧可改用逐个签到。' })
+    } else if (signStrategyStore.strategy === 2) {
+      SettingsNote({ text: '7级及以上使用官方批量签到，低于7级逐个签到；等级或官方条件未确认的吧会跳过并提示。' })
     }
   }
 
@@ -1181,7 +1264,7 @@ struct SettingsPage {
   SignSettingsRows() {
     SettingsOptionRow({
       label: '签到方案',
-      value: signStrategyStore.strategy === 1 ? '官方签到' : '逐个签到',
+      value: signStrategyStore.strategy === 2 ? '混合签到' : (signStrategyStore.strategy === 1 ? '官方签到' : '逐个签到'),
       popupOpen: this.popupKey === 'sign_strategy',
       items: this.optionsFor(SettingsPane.SIGN_SETTINGS),
       onTap: (): void => { this.openPanePopup('sign_strategy', SettingsPane.SIGN_SETTINGS); },
@@ -1625,6 +1708,8 @@ struct SettingsPage {
     if (visualThemeStore.isPaper) {
       SettingsNote({ text: '切换到经典鸿蒙可自定义顶栏和底栏样式。' })
     }
+    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
+      content: (): void => { this.ImageMenuRow() } })
     this.HomeTopNavPreview()
     SettingsGroupTitle({ title: '滑动时自动隐藏' })
     SettingsCard({
@@ -1637,14 +1722,37 @@ struct SettingsPage {
     })
     SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => { this.HarmonySmartReachRow() } })
+    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
+      content: (): void => { this.HarmonyForumTabsFloatingRow() } })
+  }
+
+  @Builder
+  ImageMenuRow() {
+    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'image_menu'),
+      (entry: SettingsEntry) => { SettingsOptionRow({ label: entry.label, value: entry.value,
+        showDivider: false, popupOpen: this.popupKey === entry.key, items: this.optionsFor(entry.pane),
+        onTap: (): void => { this.openPanePopup(entry.key, entry.pane); },
+        onPick: (index: number): void => { this.pickOption(entry.pane, index); },
+        onPopupClosed: (): void => { this.closePopup(); } }) },
+      (entry: SettingsEntry) => settingsEntryRenderKey(entry))
   }
 
   @Builder
   HarmonySmartReachRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'smart_reach'),
+    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean =>
+      entry.key === 'smart_reach' || entry.key === 'home_compose_smart_reach' || entry.key === 'forum_tabs_smart_reach' || entry.key === 'image_menu_smart_reach'),
       (entry: SettingsEntry) => {
         SettingsSwitchRow({ label: entry.label,
-          checked: entry.checked === true, showDivider: false,
+          checked: entry.checked === true, interactionEnabled: entry.enabled, showDivider: entry.key !== 'image_menu_smart_reach',
+          onToggle: (next: boolean): void => { this.applySwitchEntry(entry, next); } })
+      }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
+  }
+
+  @Builder
+  HarmonyForumTabsFloatingRow() {
+    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'forum_tabs_floating'),
+      (entry: SettingsEntry) => {
+        SettingsSwitchRow({ label: entry.label, checked: entry.checked === true, showDivider: false,
           onToggle: (next: boolean): void => { this.applySwitchEntry(entry, next); } })
       }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
   }
@@ -1861,7 +1969,10 @@ struct SettingsPage {
 
       Row() {
         // 分类与内容页更换标题；具体选项仍是弹层，不换页（判据在 settingsPageTitle）。
-        Text(settingsPageTitle(this.pane))
+        Text(this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting ?
+          (this.forbiddenVm.executing ? (this.forbiddenVm.actionMessage === '正在停止…' ? '正在停止…' :
+          `正在取消 ${this.forbiddenVm.processed}/${this.forbiddenVm.preparedCount}`) :
+          (this.forbiddenVm.selectedIds.length > 0 ? `已选择 ${this.forbiddenVm.selectedIds.length} 项` : '未选择')) : settingsPageTitle(this.pane))
           .fontSize(SettingsLayout.TITLE_SIZE)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppTheme.TEXT_MAIN)
@@ -1878,7 +1989,8 @@ struct SettingsPage {
        * `backgroundEffect` backdrop 采不到滚动内容，真机连续 8 帧圆内均值纹丝不动。
        * 这里只负责给标题让出按钮原来的位置。
        */
-      .padding({ left: 64, right: 16, top: this.statusBarH })
+      .padding({ left: 64, right: this.pane === SettingsPane.FORBIDDEN_FORUMS ?
+        (this.forbiddenVm.selecting && this.forbiddenVm.allSelected() ? 102 : 78) : 16, top: this.statusBarH })
     }
     .width('100%')
     .height(this.titleBarH())

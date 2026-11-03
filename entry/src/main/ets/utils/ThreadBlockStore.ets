@@ -140,13 +140,18 @@ export class ThreadBlockStore {
 
   /** 服务端解除屏蔽后从本机镜像里删掉 */
   async forgetBlockedForum(context: common.UIAbilityContext, forumName: string): Promise<void> {
+    await this.forgetBlockedForums(context, [forumName]);
+  }
+
+  /** 批量取消只更新一次内存镜像并落盘一次，避免逐项序列化和flush。 */
+  async forgetBlockedForums(context: common.UIAbilityContext, forumNames: string[]): Promise<void> {
     const session: string = authSession.sessionKey();
     await this.load(context);
     if (session !== authSession.sessionKey()) { return; }
-    const name: string = normalizeForumName(forumName);
+    const names: Set<string> = new Set<string>(normalizeForumNames(forumNames));
     const kept: string[] = [];
     for (const item of this.blockedForums) {
-      if (item !== name) { kept.push(item); }
+      if (!names.has(item)) { kept.push(item); }
     }
     this.blockedForums = kept;
     await this.persist(context, scoped(KEY_FORUMS, ownerKey()),

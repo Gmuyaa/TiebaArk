@@ -118,7 +118,7 @@ export struct DirectoryPage {
                 }
                 ForEach(this.vm.data.rules, (rule: ForumRuleSection) => {
                   ListItem() { this.RuleCard(rule) }
-                })
+                }, (rule: ForumRuleSection) => rule.title)
                 if (this.vm.data.rules.length === 0 && this.vm.error.length === 0) {
                   ListItem() { PageState({ message: '该吧暂未公布吧规' }) }
                 }
@@ -243,8 +243,9 @@ export struct DirectoryPage {
         }.fontSize(14).lineHeight(23).width('100%')
         ForEach(pieces.filter((piece: ContentPiece) => piece.kind === ContentKind.IMAGE), (piece: ContentPiece) => {
           Image(piece.imageUrl).width('100%').objectFit(ImageFit.Contain)
-        })
-      })
+        }, (piece: ContentPiece, index: number) => `${index}:${piece.imageUrl}`)
+      }, (pieces: ContentPiece[], index: number) =>
+        `${index}:${pieces.map((piece: ContentPiece): string => piece.text.length > 0 ? piece.text : piece.imageUrl).join('|')}`)
     }.width('100%').alignItems(HorizontalAlign.Start).padding(18)
     .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
   }

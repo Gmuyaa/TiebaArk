@@ -166,14 +166,16 @@ export struct FollowView {
     }
   }
 
-  /** 头部：左「我的关注」标题 + 右侧沉浸光感「签」圆按钮。 */
+  /** 头部：左「我的关注」标题 + 右侧沉浸光感日历签到圆按钮。 */
   @Builder
   HeaderActions() {
     if (!this.squareSelected && authSession.snapshot.isLoggedIn()) {
         GlassCircleButton({
-          label: this.vm.signingAll ? '…' : '签', diameter: 40, iconSize: 22, iconOffsetX: -2.5, labelOffsetY: 0.5,
+          // 原生 calendar 的墨迹中心比布局中心右偏约 10px（本机 3.5px/vp），单独向左补偿。
+          symbol: $r('sys.symbol.calendar'), diameter: 40, iconSize: 22, iconWeight: FontWeight.Regular,
+          iconOffsetX: -3,
           accessibilityLabel: this.vm.signingAll ? '正在签到' :
-            (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到'),
+            (this.signStrategy.strategy === 2 ? '混合签到' : (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到')),
           onTap: (): void => {
             this.vm.signInAll(this.hostContext()).then((message: string) => {
               if (message.length > 0) {

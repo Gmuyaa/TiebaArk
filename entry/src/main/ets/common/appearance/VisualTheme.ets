@@ -15,8 +15,13 @@ export function visualThemeLabel(theme: VisualTheme): string {
 /** 纸境只改变视觉组合，不改写用户的独立布局偏好。 */
 export class PaperLayout {
   static readonly BRAND_HEIGHT: number = 36;
-  static readonly FORUM_RADIUS: number = 28;
-  static readonly READING_TITLE: number = 22;
+  static readonly CHANNEL_LABEL_SIZE: number = 16;
+  static readonly CARD_TITLE_SIZE: number = 19;
+  static readonly CARD_TITLE_LINE: number = 28;
+  static readonly CARD_CONTENT_GAP: number = 12;
+  static readonly CARD_TEXT_GAP: number = 6;
+  static readonly READING_TITLE: number = 23;
   static readonly READING_BODY: number = 16;
   static readonly READING_LINE: number = 26;
+  static readonly READING_BLOCK_GAP: number = 12;
 }

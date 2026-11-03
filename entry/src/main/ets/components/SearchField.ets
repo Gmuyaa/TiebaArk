@@ -46,7 +46,7 @@ export struct SearchField {
         .scrollable(false)
         .animationDuration(0)
         .barOverlap(true)
-        .barBackgroundColor(visualThemeStore.isPaper ? AppTheme.ACCENT_LIGHT : Color.Transparent)
+        .barBackgroundColor(visualThemeStore.isPaper ? AppTheme.SURFACE_MUTED : Color.Transparent)
         .barBackgroundBlurStyle(BlurStyle.NONE)
         .barFloatingStyle({
           barWidth: { smallWidth: this.fieldWidth, mediumWidth: this.fieldWidth,
@@ -66,13 +66,13 @@ export struct SearchField {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass'))
           .fontSize(20).maxFontScale(1)
-          .fontColor([AppTheme.TAB_UNDERLINE_TEXT])
+          .fontColor([(visualThemeStore.isPaper ? AppTheme.SEARCH_HINT : AppTheme.TAB_UNDERLINE_TEXT)])
         if (this.editable) {
           TextInput({ text: this.text, placeholder: this.placeholder })
             .id(this.inputId)
             .fontSize(16)
             .fontColor(AppTheme.TEXT_MAIN)
-            .placeholderColor(AppTheme.TAB_UNDERLINE_TEXT)
+            .placeholderColor((visualThemeStore.isPaper ? AppTheme.SEARCH_HINT : AppTheme.TAB_UNDERLINE_TEXT))
             .placeholderFont({ size: 16 })
             .height(this.fieldHeight())
             .layoutWeight(1)
@@ -84,7 +84,7 @@ export struct SearchField {
         } else {
           Text(this.placeholder)
             .fontSize(16)
-            .fontColor(AppTheme.TAB_UNDERLINE_TEXT)
+            .fontColor((visualThemeStore.isPaper ? AppTheme.SEARCH_HINT : AppTheme.TAB_UNDERLINE_TEXT))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)

@@ -139,6 +139,16 @@ export interface RawThreadHead {
   collect_num?: number;
   /** 主题收藏状态以 collect_status 非零判断；collect_num 是累计计数，不表示当前收藏状态。 */
   collect_status?: number;
+  /**
+   * 发帖时选的内容声明文案，例如「帖子含AI内容」「帖子原创声明」。
+   * 真机取证：详情响应 `thread.content_statement`（2026-10-25）。
+   */
+  content_statement?: string;
+  /**
+   * 0 / 1 标志位。列表项里同名键的既有注释写的是"内容被折叠"，
+   * 详情里是否为「部分可见（主页不可见）」待真机对照，暂按原样透出。
+   */
+  is_partial_visible?: number;
 }
 
 /** 当前 APK ThreadData.parseJson 的视频元数据；不能从 video_md5 猜下载地址。 */
@@ -185,6 +195,8 @@ export interface RawThreadPage {
   user_list?: RawUser[];
   page?: RawDetailPage;
   forum?: RawDetailForum;
+  /** 内容被折叠时的提示文案；与 `thread.is_partial_visible` 配套 */
+  partial_visible_toast?: string;
 }
 
 /** `/c/f/pb/floor` 响应的分页信息，字段名与详情页又不同 */

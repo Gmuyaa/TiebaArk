@@ -44,7 +44,7 @@ export class TiebaHost {
 
 }
 
-/** 当前原生创建/验证码；创建参数仅准备，无写API/UI调用。 */
+/** B-04当前原生创建/验证码；创建参数仅准备，无写API/UI调用。 */
 export class CreateForumParams {
   static readonly CHALLENGE_PATH: string = '/c/f/anti/vcode';
   static readonly CREATE_PATH: string = '/c/c/forum/create';
@@ -62,7 +62,7 @@ export class CreateForumParams {
   }
 }
 
-/** NetWork.uploadImage：普通头像pic全图，独立于帖子分片。 */
+/** E-01 NetWork.uploadImage：普通头像pic全图，独立于帖子分片。 */
 export class AvatarUploadParams {
   static readonly PATH: string = '/c/c/img/portrait';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -90,7 +90,7 @@ export class AvatarUploadParams {
   }
 }
 
-/** 普通帖图分片，当前 c27/NetWork/f8 契约；不复用头像上传。 */
+/** D-02 普通帖图分片，当前 c27/NetWork/f8 契约；不复用头像上传。 */
 export class ImageUploadParams {
   static readonly PATH: string = '/c/s/uploadPicture';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -768,7 +768,11 @@ export class MemeEmojiParams {
   static buildCollect(device: TiebaDevice, session: TiebaSession, pics: string,
     picUpdateTimeMs: number): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
-    params.push(new SignParam('pics', pics));
+    // 官方UserCollectModel先wp4.t(JSON)再交给签名/表单层；all_delete不变。
+    const encoded: string = pics === MemeEmojiParams.ALL_DELETE ? pics : encodeURIComponent(pics)
+      .replace(/[!'()~]/g, (char: string): string => '%' + char.charCodeAt(0).toString(16).toUpperCase())
+      .replace(/%20/g, '+');
+    params.push(new SignParam('pics', encoded));
     params.push(new SignParam('pic_update_time', String(picUpdateTimeMs)));
     return params;
   }
@@ -895,6 +899,106 @@ export class AddPostTarget {
   replyUid: string = '';
 }
 
+/**
+ * 发**主题帖** `POST /c/c/thread/add` —— 走 **form 表单**通道，与回复用的
+ * protobuf `AddPostParams`（`/c/c/post/add?cmd=309731`）是两条不同的链路。
+ *
+ * 依据：
+ * - 端点与语义：`references/code-audit-2026-10-11/ref-audit/t137458` 的
+ *   `api/TiebaAPI.ets` `addThread`（注释称对齐 Android `MiniTiebaApi.addThreadFlow`）；
+ * - 同一端点的客户端 protobuf 版本（`?cmd=309730`、`AddThreadRequest`、DataReq 90 字段）
+ *   见 `docs/协议/APK分析/023-D-01 发主题帖与 C-02 投票（REA 取证补充）.md`。
+ *
+ * 为什么本项目走表单而不是 protobuf：响应是 JSON（`error_code`/`error_msg`），字段名可读，
+ * 且本站已有 `forumGuide` 这类带 BDUSS/STOKEN Cookie 的表单写接口先例；protobuf 版
+ * 还缺 DataReq 的字段编号取证，且要额外处理 vcode 图片验证码。
+ *
+ * 字段取舍：**只发本项目确有来源的项**。参考实现里的 `z_id`（登录初始化的设备 id）
+ * 本项目没有对应数据源，按回复通道既有结论（缺项照样受理）暂不发；若服务端回报缺参，
+ * 以真实报错为准再补，不凭猜测加字段。
+ */
+export class AddThreadParams {
+  static readonly PATH: string = '/c/c/thread/add';
+
+  static url(): string {
+    return `https://${TiebaHost.APP}${AddThreadParams.PATH}`;
+  }
+
+  /**
+   * 构造**待签名**的表单参数：`TiebaCommonParams` 打底（`_client_type`/`_client_version`/
+   * `_phone_imei`/`from`/`cuid`/`cuid_galaxy2`/`BDUSS`/`STOKEN`/`tbs` 等），再追加发帖字段；
+   * 签名由调用方 `CryptoUtil.appendSign(..., SignSalt.APP)` 追加。
+   *
+   * 为什么不走「web 免签表单」：`/c/c/thread/add` 与 `/c/c/post/add`、`/c/c/agree/opAgree`
+   * 同属 `/c/c/` 写接口。2026-10-25 真机实测（21:12 与 21:36 两次）：只发 Cookie +
+   * `client_user_token` 的免签表单稳定回 `error_code=110001`（项目既有结论里该码为
+   * 参数/签名校验失败，`error_msg` 只有「未知错误」）。因此改走与关注、点赞同一套签名通道。
+   *
+   * @param title     标题；空标题时 `is_ntitle=0`（服务端按无标题帖处理）
+   * @param content   正文纯文本，图片按 `#(pic,<id>,<w>,<h>)` 由调用方拼好
+   * @param fid       吧 id；必须 > 0，`kw` 不参与服务端定吧
+   * @param forumName 吧名（`kw`）
+   * @param nickname  当前账号昵称（`name_show`），空串则不发
+   * @param topicId   话题 id；`0` 表示没选话题，此时不发 `topic_id`
+   * @param isHide    展示范围：`'0'` 全场景可见、`'1'` 个人主页不可见
+   * @param contentStatement 内容声明文案（如「帖子含AI内容」）；空串表示没选，不发
+   */
+  static build(device: TiebaDevice, session: TiebaSession, title: string, content: string,
+    fid: number, forumName: string, nickname: string, topicId: number,
+    isHide: string, contentStatement: string): SignParam[] {
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('content', content));
+    params.push(new SignParam('kw', forumName));
+    params.push(new SignParam('fid', String(fid)));
+    params.push(new SignParam('title', title));
+    params.push(new SignParam('is_hide', isHide));
+    params.push(new SignParam('is_ntitle', title.length > 0 ? '1' : '0'));
+    params.push(new SignParam('is_feedback', '0'));
+    // 参考实现原样发字符串 'null'（不是空串）；服务端按"无回复目标"处理
+    params.push(new SignParam('reply_uid', 'null'));
+    params.push(new SignParam('takephoto_num', '0'));
+    params.push(new SignParam('entrance_type', '1'));
+    params.push(new SignParam('vcode_tag', '12'));
+    params.push(new SignParam('new_vcode', '1'));
+    params.push(new SignParam('anonymous', '1'));
+    params.push(new SignParam('call_from', '2'));
+    params.push(new SignParam('can_no_forum', '0'));
+    params.push(new SignParam('cuid_gid', ''));
+    /*
+     * 话题：官方 22.11.1.0 的写帖 Model（`com.baidu.tieba.ps8` / 验证码重发
+     * `write/vcode/oldVcode/VcodeActivity:319`）与 proto `AddThreadRequest.encode`
+     * 都用同一个键名 `topic_id`，值是不带前缀的整数话题 id；只有选了话题才发。
+     */
+    if (topicId > 0) { params.push(new SignParam('topic_id', String(topicId))); }
+    /*
+     * 展示范围与内容声明：2026-10-25 从 PC 发帖页 bundle
+     * `tb3.bdstatic.com/tb/pc/pc-main-core/static/js/publish.<hash>.js` 取证（HAR 内提取）：
+     *   roundList = ['全场景可见', '个人主页不可见']
+     *   handleRoundChange: round = ('全场景可见' === 选项) ? '0' : '1'
+     *   提交体 = { fid, kw, title, content, is_hide: round, is_pictxt: '1',
+     *              content_statement: <声明文案>,
+     *              ext: JSON.stringify({ is_hide: round, needImage: '1',
+     *                                    content_statement: <声明文案> }) }
+     * 声明文案由 `POST /c/f/pc/publishConf` 下发
+     * （`data.config.content_statement.statements`，当前为 ['帖子含AI内容','帖子原创声明']），
+     * 与本项目发帖页的选项文案一致，因此直接传文本本身，不传下标。
+     *
+     * 旧实现把展示范围当成 `is_repost_to_dynamic`（proto 字段，form 通道从不发）——
+     * 该键在官方 form 通道没有任何写入点，已废弃。
+     */
+    const statement: string = contentStatement.trim();
+    if (statement.length > 0) {
+      params.push(new SignParam('content_statement', statement));
+    }
+    const ext: string = statement.length > 0
+      ? `{"is_hide":"${isHide}","needImage":"1","content_statement":${JSON.stringify(statement)}}`
+      : `{"is_hide":"${isHide}","needImage":"1"}`;
+    params.push(new SignParam('ext', ext));
+    if (nickname.length > 0) { params.push(new SignParam('name_show', nickname)); }
+    return params;
+  }
+}
+
 /** PC 吧头图接口返回 activityhead.head_imgs[].img_url。签名前先对 kw 做一次 URL 编码，再对完整表单编码；使用 SignSalt.PC。 */
 export class FrsHeadlineParams {
   static readonly PATH: string = '/c/f/frs/frsBottom_pc';
@@ -972,7 +1076,7 @@ export class ForumMemberParams {
 }
 
 /**
- * 官方 `GetBawuInfo`（补：吧务全量名单）：消息 id 1001705，**API cmd = 301007**。
+ * 官方 `GetBawuInfo`（A-01 补：吧务全量名单）：消息 id 1001705，**API cmd = 301007**。
  * 同样来自反编译：`com/baidu/tieba/forumMember/bawu/BawuTeamRequestMessage` 的 `super(1001705, 301007)`。
  *
  * ⚠️ 字段顺序与 `GetMemberInfo` **相反**：`GetBawuInfo/DataReq{ common=1, forum_id=2 }`
@@ -1255,7 +1359,7 @@ export class TailsParams {
 }
 
 /**
- * 官方「赞我」（）：消息 id 1002211，**API cmd = 309593**。
+ * 官方「赞我」（F-01）：消息 id 1002211，**API cmd = 309593**。
  *
  * 证据：`ij7.java` 静态注册 `ur8.c(309593, 1002211, "c/u/feed/agreeme", …)`；
  * 请求 `AgreeMeRequestMessage.id` = **上一批最后一条的 `AgreeList.id`**（游标分页，

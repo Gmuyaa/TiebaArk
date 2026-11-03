@@ -60,6 +60,11 @@ export class MyListItem {
    * 界面据此灰显标题 + 左下角换「该帖子已被删除」。
    */
   isDeleted: boolean = false;
+  /**
+   * 发帖时选了「个人主页不可见」。界面在列表项右上角显示「主页不可见」，
+   * 与官方「我的帖子」一致；只有主题列表有意义（回复行不带这个标志）。
+   */
+  hideFromProfile: boolean = false;
 }
 
 @ObservedV2
@@ -648,6 +653,7 @@ export class MyListVM {
         parts.push(formatRelativeTime(it.createTimeMs));
       }
       row.meta = parts.join(' · ');
+      row.hideFromProfile = isThread && it.hideFromProfile;
       out.push(row);
     }
     return out;

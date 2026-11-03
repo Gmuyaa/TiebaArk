@@ -2,6 +2,12 @@ import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 
 /** 应用主题颜色与共享尺寸。颜色资源随系统主题切换，玻璃材质由材质配置管理。 */
 export class AppTheme {
+  /** 分类选中胶囊沿用已确定的蓝色光边，独立于页面主题强调色。 */
+  static get FORUM_TAB_GLOW_BORDER(): Resource { return $r('app.color.forum_tab_glow_border'); }
+  static get FORUM_TAB_GLOW_SHADOW(): Resource { return $r('app.color.forum_tab_glow_shadow'); }
+  static get SR_ACTIVE_BACKGROUND(): Resource {
+    return visualThemeStore.isPaper ? $r('app.color.paper_sr_active_background') : $r('app.color.sr_active_background');
+  }
   static get HELP_ANSWER(): Resource { return $r('app.color.help_answer_tag'); }
   /** 强调色：选中态、发布按钮、链接（浅 `#0A59F7` / 深 `#317AF7`，对齐 detail_accent） */
   static get ACCENT(): Resource {
@@ -163,6 +169,9 @@ export class AppTheme {
   }
   static get EMPHASIS_LIGHT(): ResourceColor {
     return visualThemeStore.isPaper ? $r('app.color.paper_emphasis_light') : AppTheme.ACCENT_LIGHT;
+  }
+  static get ON_ACCENT(): ResourceColor {
+    return visualThemeStore.isPaper ? $r('app.color.paper_on_accent') : Color.White;
   }
   static get ON_EMPHASIS(): ResourceColor {
     return visualThemeStore.isPaper ? $r('app.color.paper_on_emphasis') : Color.White;

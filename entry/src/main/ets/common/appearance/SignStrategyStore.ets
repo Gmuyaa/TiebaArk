@@ -1,7 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 
-/** 本机一键签到方案，默认逐个签到；官方方案每批最多 50 个吧。 */
+/** 本机一键签到方案：0逐个、1官方、2混合；默认逐个，官方每批最多50个吧。 */
 @ObservedV2
 export class SignStrategyStore {
   @Trace strategy: number = 0;
@@ -18,7 +18,7 @@ export class SignStrategyStore {
       try {
         const store = await preferences.getPreferences(context, 'tieba_sign_strategy_prefs');
         const value = await store.get('strategy', 0);
-        if (revision === this.revision) { this.strategy = value === 1 ? 1 : 0; }
+        if (revision === this.revision) { this.strategy = value === 1 || value === 2 ? value : 0; }
       } catch (_) { /* 本次会话保留当前选择。 */ }
       finally { this.loaded = true; this.loading = undefined; }
     })();
@@ -26,7 +26,7 @@ export class SignStrategyStore {
   }
 
   async setStrategy(strategy: number, context: common.UIAbilityContext): Promise<void> {
-    const value: number = strategy === 1 ? 1 : 0;
+    const value: number = strategy === 1 || strategy === 2 ? strategy : 0;
     this.revision++;
     this.strategy = value;
     const operation: Promise<void> = this.writes.then(async (): Promise<void> => {

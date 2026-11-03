@@ -2,13 +2,11 @@
 import { AppTheme } from '../theme/Theme';
 import { SettingsLayout } from '../common/appearance/SettingsLayout';
 import { common } from '@kit.AbilityKit';
-import { ApiResult, TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
-import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { ForbiddenForum } from '../model/ForbiddenForums';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
-import { SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
 
 @ComponentV2
 export struct ForbiddenForumsPane {
@@ -18,10 +16,11 @@ export struct ForbiddenForumsPane {
   @Param loadMoreSeq: number = 0;
   @Event onPageStarted: () => void = (): void => {};
   @Event onPageSettled: () => void = (): void => {};
-  @Local vm: ForbiddenForumsVM = new ForbiddenForumsVM();
-  /** 正在解除的那一项（同一时刻只允许一个；空串表示没有在进行） */
-  @Local unblockingId: string = '';
-  private api: TiebaApi = new TiebaApi();
+  @Require @Param vm: ForbiddenForumsVM;
+  @Param unblockSeq: number = 0;
+  @Param scroller: Scroller = new Scroller();
+  @Param topInset: number = 0;
+  @Event onScrolled: () => void = (): void => {};
 
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -47,7 +46,7 @@ export struct ForbiddenForumsPane {
   }
 
   private syncMirror(): void {
-    if (!this.vm.loaded || this.vm.error.length > 0) { return; }
+    if (!this.vm.loaded || this.vm.error.length > 0 || !this.vm.ownsCurrentAccount()) { return; }
     const names: string[] = [];
     for (const item of this.vm.items) {
       if (item.name.length > 0) { names.push(item.name); }
@@ -72,84 +71,105 @@ export struct ForbiddenForumsPane {
     }
   }
 
-  /**
-   * 解除屏蔽：先确认，再写服务端。**只有服务端成功才更新本机镜像**，
-   * 失败时把服务端的话原样带出来（不假装成功）。
-   */
-  private async confirmUnblock(item: ForbiddenForum): Promise<void> {
-    if (this.unblockingId.length > 0) { return; }
+  @Monitor('unblockSeq')
+  onUnblockRequested(): void {
+    if (this.unblockSeq > 0) { void this.confirmUnblock(this.vm.selectedIds); }
+  }
+
+  private async confirmUnblock(ids: string[]): Promise<void> {
+    if (this.vm.prepareItems(ids)) { await this.confirmPrepared(); }
+  }
+
+  private async confirmPrepared(): Promise<void> {
     const owner: string = authSession.sessionKey();
-    const label: string = item.name.length > 0 ? (item.name.endsWith('吧') ? item.name : `${item.name}吧`) : '该吧';
-    const confirm = await this.getUIContext().getPromptAction().showDialog({
-      title: '解除屏蔽',
-      message: `解除后 ${label} 的帖子会重新出现在推荐与关注列表里（会同步到服务端）。`,
-      buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-        { text: '解除', color: $r('app.color.detail_accent') }]
-    });
-    if (owner !== authSession.sessionKey()) { this.toast('账号已变化，请重新确认'); return; }
-    if (confirm.index !== 1) { return; }
-    this.unblockingId = item.id;
+    const context: common.UIAbilityContext = this.context();
     try {
-      if (!authSession.isLoggedIn()) { this.toast('需要登录后才能解除屏蔽'); return; }
-      if (authSession.session().tbs.length === 0) {
-        const refreshed = await authSession.refreshTbs(this.context());
-        if (!refreshed.ok) { this.toast(refreshed.message); return; }
-      }
-      const session = authSession.session();
-      const device = await DeviceIdentity.ensure(this.context());
-      if (!authSession.matchesSession(session, owner)) { this.toast('账号已变化，未继续解除'); return; }
-      const result: ApiResult = await this.api.unblockForum(device, session, item.id);
-      if (!authSession.matchesSession(session, owner)) { this.toast('账号已变化，请在原账号确认结果'); return; }
-      if (!result.ok) { this.toast(result.describeFailure()); return; }
-      await threadBlockStore.forgetBlockedForum(this.context(), item.name);
-      this.toast(`已解除对 ${label} 的屏蔽`);
-      this.reload();
+      const confirm = await this.getUIContext().getPromptAction().showDialog({
+        title: '取消屏蔽',
+        message: `将取消所选 ${this.vm.preparedCount} 个吧的屏蔽，相关帖子会重新出现在推荐与关注列表中，并同步到贴吧账号。`,
+        buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '取消屏蔽', color: AppTheme.DANGER_TEXT }]
+      });
+      if (confirm.index !== 1) { return; }
+      if (!this.vm.ownsCurrentAccount() || owner !== authSession.sessionKey()) { return; }
+      await this.vm.executePrepared(context, async (items: ForbiddenForum[]): Promise<void> => {
+        await threadBlockStore.forgetBlockedForums(context, items.map((item: ForbiddenForum): string => item.name));
+      });
+      if (this.vm.ownsCurrentAccount()) { this.toast(this.vm.actionMessage); }
     } catch (err) {
-      this.toast(`解除屏蔽失败：${(err as Error).message}`);
+      if (this.vm.ownsCurrentAccount()) { this.toast('操作已取消'); }
     } finally {
-      this.unblockingId = '';
+      this.vm.cancelPrepared();
     }
   }
 
   build() {
-    Column() {
-      SettingsCard({
-        content: (): void => { this.ForumRows() }
-      })
-      if (this.vm.error.length > 0) {
-        SettingsStatusLine({
-          kind: SettingsStatusKind.ERROR,
-          message: this.vm.error,
-          retryLabel: '重试',
-          onRetry: (): void => {
-            this.reload();
-          }
-        })
+    List({ scroller: this.scroller }) {
+      ListItem() { Row().height(this.topInset).width('100%') }
+      if (this.vm.items.length === 0 && (this.vm.loading || (this.vm.loaded && this.vm.error.length === 0))) {
+        ListItem() {
+          SettingsInfoRow({ label: this.vm.loading ? '正在读取…' : '账号暂无屏蔽吧', showDivider: false })
+        }.backgroundColor(AppTheme.CARD).borderRadius(SettingsLayout.CARD_RADIUS)
       }
-      this.BottomState()
+      Repeat<ForbiddenForum>(this.vm.items)
+        .each((row: RepeatItem<ForbiddenForum>) => {
+          ListItem() { this.ForumRow(row.item, row.index) }
+            .backgroundColor(AppTheme.CARD)
+            .borderRadius({ topLeft: row.index === 0 ? SettingsLayout.CARD_RADIUS : 0,
+              topRight: row.index === 0 ? SettingsLayout.CARD_RADIUS : 0,
+              bottomLeft: row.index === this.vm.items.length - 1 ? SettingsLayout.CARD_RADIUS : 0,
+              bottomRight: row.index === this.vm.items.length - 1 ? SettingsLayout.CARD_RADIUS : 0 })
+            .clip(true)
+        })
+        .key((item: ForbiddenForum): string => item.id)
+        .virtualScroll({ reusable: false })
+      ListItem() {
+        Column() {
+          if (this.vm.error.length > 0) {
+            SettingsStatusLine({
+              kind: SettingsStatusKind.ERROR,
+              message: this.vm.error,
+              retryLabel: '重试',
+              onRetry: (): void => { this.reload(); }
+            })
+          }
+          this.BottomState()
+          if (this.vm.actionMessage.length > 0) {
+            SettingsStatusLine({ kind: SettingsStatusKind.LOADING, message: this.vm.actionMessage })
+          }
+        }.width('100%').padding({ bottom: SettingsLayout.PAGE_BOTTOM_GAP + (this.vm.selecting ? 84 : 0) })
+      }
     }
-    .width('100%')
+    .width('100%').height('100%').padding({ left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER })
+    .scrollBar(BarState.Off).cachedCount(2)
+    .onScroll(() => { this.onScrolled(); })
+    .onReachEnd(() => {
+      void this.vm.load(this.context(), true, this.onPageStarted, this.onPageSettled).then((): void => { this.syncMirror(); });
+    })
   }
 
   @Builder
-  ForumRows() {
-    if (this.vm.loading && this.vm.items.length === 0) {
-      SettingsInfoRow({ label: '正在读取…', showDivider: false })
-    } else if (this.vm.loaded && this.vm.items.length === 0) {
-      SettingsInfoRow({ label: '账号暂无屏蔽吧', showDivider: false })
-    } else {
-      ForEach(this.vm.items, (item: ForbiddenForum, index: number) => {
-        SettingsEntryRow({
-          label: item.name.length > 0 ? (item.name.endsWith('吧') ? item.name : `${item.name}吧`) : '吧名未返回',
-          summary: this.unblockingId === item.id ? '正在解除…' : '取消屏蔽',
-
-          avatarUrl: item.avatar, avatarName: item.name,
-          showChevron: false,
-          showDivider: index < this.vm.items.length - 1,
-          onTap: (): void => { void this.confirmUnblock(item); }
-        })
-      }, (item: ForbiddenForum) => item.id)
-    }
+  ForumRow(item: ForbiddenForum, index: number) {
+    Row() {
+      SettingsEntryRow({
+        label: item.name.length > 0 ? (item.name.endsWith('吧') ? item.name : `${item.name}吧`) : '吧名未返回',
+        summary: this.vm.selecting ? '' : '取消屏蔽',
+        avatarUrl: item.avatar, avatarName: item.name,
+        showChevron: false,
+        showDivider: index < this.vm.items.length - 1,
+        onTap: (): void => {
+          if (this.vm.selecting) { this.vm.toggleItem(item.id); }
+          else { void this.confirmUnblock([item.id]); }
+        }
+      }).layoutWeight(1)
+      if (this.vm.selecting) {
+        Checkbox().select(this.vm.isSelected(item.id)).width(20).height(20)
+          .margin({ right: 16 }).enabled(!this.vm.actionBusy)
+          .accessibilityText(`选择${item.name}`)
+          .onChange((selected: boolean) => {
+            if (selected !== this.vm.isSelected(item.id)) { this.vm.toggleItem(item.id); }
+          })
+      }
+    }.width('100%').enabled(!this.vm.actionBusy)
   }
 
   @Builder

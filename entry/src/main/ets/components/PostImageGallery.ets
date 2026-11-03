@@ -7,6 +7,7 @@ import {
   BODY_RADIUS, FeedImageBox, FeedImageInfo, bodySingleImageBox, feedImageInfo, rememberMeasuredImage
 } from '../model/HomeFeedPresentation';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageTransitionSource } from './ImageTransition';
 
 /** 详情页内容区左右各留 16vp */
 const PAGE_SIDE_PADDING: number = 32;
@@ -46,6 +47,7 @@ function estimateGalleryWidth(): number {
 
 @ComponentV2
 export struct PostImageGallery {
+  private imageTransition: ImageTransitionSource = new ImageTransitionSource();
   /** 本图集的图片，至少 1 张 */
   @Require @Param images: ContentImage[];
   /** 本图集第一张图在整篇内容图片序列里的下标，用来换算全屏查看器的初始页 */
@@ -195,8 +197,8 @@ export struct PostImageGallery {
             .width('100%').height('100%').textAlign(TextAlign.Center)
         }
         Image(img.imageUrl)
-          .width(this.frame().width)
-          .height(this.frame().height)
+          .width('100%')
+          .height('100%')
           .objectFit(ImageFit.Contain)
           .objectRepeat(ImageRepeat.NoRepeat)
           .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
@@ -210,8 +212,12 @@ export struct PostImageGallery {
     .backgroundColor(this.stateOf(0) === IMAGE_LOADED ? Color.Transparent : AppTheme.SURFACE_MUTED)
     .borderRadius(BODY_RADIUS)
     .clip(true)
+    .geometryTransition(this.imageTransition.id(img.imageUrl), { follow: true })
+    .renderFit(RenderFit.RESIZE_FILL)
     .onClick(() => {
-      this.onOpenImage(this.startIndex);
+      this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
+        (): void => { this.onOpenImage(this.startIndex); }, 0,
+        !lowFlowStore.enabled && this.stateOf(0) === IMAGE_LOADED);
     })
   }
 
@@ -259,8 +265,12 @@ export struct PostImageGallery {
       .borderRadius(BODY_RADIUS)
       .clip(true)
       .flexShrink(0)
+      .geometryTransition(this.imageTransition.id(img.imageUrl, index), { follow: true })
+      .renderFit(RenderFit.RESIZE_FILL)
       .onClick(() => {
-        this.onOpenImage(this.startIndex + index);
+        this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
+          (): void => { this.onOpenImage(this.startIndex + index); }, index,
+          !lowFlowStore.enabled && this.stateOf(index) === IMAGE_LOADED);
       })
   }
 

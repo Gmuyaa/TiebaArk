@@ -1,4 +1,4 @@
-/** 当前 APK ImageUploadResult / UploadedImageInfo 普通帖图契约。
+/** D-02：当前 APK ImageUploadResult / UploadedImageInfo 普通帖图契约。
  * 分片响应即使 error_code=0 也不代表完整图片；不复用头像或表情上传协议。
  */
 interface RawImageDimensions { width?: number | string; height?: number | string; picUrl?: string; }
@@ -40,7 +40,7 @@ export function uploadedImagePreviewUrl(raw: string | undefined): string {
   return typeof raw === 'string' && /^https?:\/\/[^\s/?#@\\]+(?:[/?#][^\s\\]*)?$/i.test(raw) &&
     !/[\u0000-\u001f\u007f]/.test(raw) ? raw : '';
 }
-/** 普通 POST_FORMAT；不套用百家号/GIF或收藏表情的另一套 token。 */
+/** 普通 POST_FORMAT；已上传图片与收藏图片共用，不套用百家号/GIF扩展。 */
 export function uploadedImageToken(image: UploadedPostImage): string {
   if (!validImageId(image.id) || positiveDimension(image.width) === 0 || positiveDimension(image.height) === 0) { return ''; }
   return `#(pic,${image.id},${image.width},${image.height})`;
@@ -107,6 +107,7 @@ export function imageUploadChunkError(chunk: ImageUploadChunk): string {
 }
 
 export class ImageUploadInput {
+  forCollection: boolean = false;
   bytes: Uint8Array = new Uint8Array(0);
   width: number = 0;
   height: number = 0;
@@ -115,6 +116,6 @@ export class ImageUploadInput {
 export function imageUploadInputError(input: ImageUploadInput): string {
   if (input.bytes.length === 0) { return '图片内容为空'; }
   if (positiveDimension(input.width) === 0 || positiveDimension(input.height) === 0) { return '图片尺寸未确认'; }
-  if (input.forumName.trim().length === 0) { return '图片所属吧未确认'; }
+  if (!input.forCollection && input.forumName.trim().length === 0) { return '图片所属吧未确认'; }
   return '';
 }

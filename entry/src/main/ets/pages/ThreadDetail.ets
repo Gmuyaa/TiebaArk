@@ -1,5 +1,7 @@
+import { EmojiPickerPanel, EMOJI_GRID_MIN_HEIGHT } from '../components/EmojiPickerPanel';
+import { CloseIcon } from '../components/CloseIcon';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
-import { HelpTag } from '../components/HelpTag';
+import { TaggedThreadText } from '../components/TaggedThreadText';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from '../components/PageState';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
@@ -46,10 +48,12 @@ import { AgreeState, ThreadDetailVM } from '../viewmodel/ThreadDetailVM';
 import { MyListVM } from '../viewmodel/MyListVM';
 import { ReplyImagesVM } from '../viewmodel/ReplyImagesVM';
 import { UploadedPostImage } from '../model/ImageUpload';
-import { ReplyEditorContent, ReplyEditorSpan, serializeReplyEditor } from '../model/ReplyEditor';
+import { ReplyEditorContent } from '../model/ReplyEditor';
+import { readEmojiEditor } from '../utils/EmojiEditor';
 import { ERRNO_THREAD_DELETED } from '../api/TiebaApi';
 import { AgreeObjType } from '../net/TiebaParams';
 import { ImageViewer } from '../components/ImageViewer';
+import { animateImageTransition } from '../components/ImageTransition';
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassMoreButton } from '../components/GlassMoreButton';
 import { ThreadPopupButton } from '../components/ThreadPopupButton';
@@ -60,6 +64,7 @@ import { ReplyItem } from '../components/ReplyItem';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadAuthorBadge } from '../components/ThreadAuthorBadge';
+import { ThreadBawuBadge } from '../components/ThreadBawuBadge';
 import { SubReplyDetailSheet } from '../components/SubReplyDetailSheet';
 import { AppTheme as BrandTheme, DetailTheme as AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
@@ -114,13 +119,7 @@ const REPLY_PUBLISH_W: number = 92;
 const REPLY_PUBLISH_H: number = 32;
 /** 尚未收到键盘避让区回报时的格子高度；正常打开会按最近一次键盘高度计算。 */
 const REPLY_EMOJI_PANEL_FALLBACK_GRID_H: number = 248;
-/** 表情面板列数：8 列贴齐贴吧客户端面板密度 */
-const REPLY_EMOJI_COLUMNS: string = '1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr';
 
-const REPLY_EMOJI_SIZE: number = 24;
-const REPLY_EMOJI_ROW_GAP: number = 14;
-/** 表情面板 tab 图标底座边长（vp）：圆形白底高亮用（参考图分离式 tab） */
-const REPLY_EMOJI_TAB_SIZE: number = 36;
 /** 输入框内嵌表情的 ImageSpan 尺寸（vp）：≈15 号字两倍行高，与文本基线自然对齐 */
 const REPLY_EMOJI_INLINE: number = 22;
 
@@ -140,19 +139,6 @@ const REPLY_PANEL_TRANSITION_MS: number = 220;
 
 const EMOJI_PANEL_BOTTOM_INSET_COMP: number = 50;
 
-function richEditorReplyText(controller: RichEditorController,
-  memeTokens: Map<string, string>, imageTokens: Map<string, string>): ReplyEditorContent {
-  const adapted: ReplyEditorSpan[] = [];
-  const spans: Array<RichEditorImageSpanResult | RichEditorTextSpanResult> = controller.getSpans();
-  for (const span of spans) {
-    const item: ReplyEditorSpan = new ReplyEditorSpan();
-    item.text = (span as RichEditorTextSpanResult).value ?? '';
-    item.imageSource = String((span as RichEditorImageSpanResult).valueResourceStr ?? '');
-    item.editorLength = span.spanPosition.spanRange[1] - span.spanPosition.spanRange[0];
-    adapted.push(item);
-  }
-  return serializeReplyEditor(adapted, memeTokens, imageTokens);
-}
 function replyImageSize(image: UploadedPostImage): [number, number] {
   const scale: number = Math.min(160 / image.width, 112 / image.height);
   return [Math.max(1, Math.floor(image.width * scale)), Math.max(1, Math.floor(image.height * scale))];
@@ -306,9 +292,11 @@ export struct ThreadDetailPage {
   private handleSystemBack(): boolean {
     if (this.popupMenuShow) { this.popupMenuShow = false; return true; }
     if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
-      this.viewerUrl = '';
-      this.viewerUrls = [];
-      this.viewerIndex = 0;
+      animateImageTransition(this.getUIContext(), (): void => {
+        this.viewerUrl = '';
+        this.viewerUrls = [];
+        this.viewerIndex = 0;
+      });
       return true;
     }
     if (this.videoMode && this.videoComments) { this.videoComments = false; return true; }
@@ -484,14 +472,15 @@ export struct ThreadDetailPage {
 
   /** 表情面板占据最近一次输入法占据的屏幕高度。 */
   private emojiPanelHeight(): number {
-    return this.lastKeyboardVp > 0 ? this.lastKeyboardVp
-      : REPLY_EMOJI_PANEL_FALLBACK_GRID_H + EMOJI_PANEL_TOP_PADDING + EMOJI_PANEL_TAB_H
-        + EMOJI_PANEL_BOTTOM_PADDING + EMOJI_PANEL_VISIBLE_EXTRA_H;
+    const chrome: number = EMOJI_PANEL_TOP_PADDING + EMOJI_PANEL_TAB_H
+      + EMOJI_PANEL_BOTTOM_PADDING + EMOJI_PANEL_VISIBLE_EXTRA_H;
+    return Math.max(EMOJI_GRID_MIN_HEIGHT + chrome, this.lastKeyboardVp > 0 ? this.lastKeyboardVp
+      : REPLY_EMOJI_PANEL_FALLBACK_GRID_H + chrome);
   }
 
   /** 固定 tab 与内边距后，剩余高度全给两类可滚动表情格子。 */
   private emojiGridHeight(): number {
-    return Math.max(160, this.emojiPanelHeight() - EMOJI_PANEL_TOP_PADDING - EMOJI_PANEL_TAB_H
+    return Math.max(EMOJI_GRID_MIN_HEIGHT, this.emojiPanelHeight() - EMOJI_PANEL_TOP_PADDING - EMOJI_PANEL_TAB_H
       - EMOJI_PANEL_BOTTOM_PADDING - EMOJI_PANEL_VISIBLE_EXTRA_H);
   }
 
@@ -1137,22 +1126,29 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 作者行第二行的 `时间 · 地区`。
+   * 作者行第二行的 `时间 · 地区 · 内容声明`。
    *
    * 时间取 1 楼的发布时间（主帖头部要带日期，用 `formatThreadHeadTime`），
    * 地区取作者 IP 归属地（`thread.author` 常缺这个字段，由 `mergeAuthorFallback`
-   * 从 `user_list` 补齐）。缺哪段就只显示另一段，两段都缺返回空串——界面据此整行不渲染。
+   * 从 `user_list` 补齐），声明取 `thread.content_statement`（发帖时选的那一项，
+   * 官方 App 也是把它接在时间、地区之后）。三段都缺返回空串——界面据此整行不渲染。
    */
   private authorMetaLine(): string {
+    const parts: string[] = [];
     const time: string = this.mainPostTimeText();
+    if (time.length > 0) {
+      parts.push(time);
+    }
     const region: string = this.vm.detail.author.ipLocation;
-    if (time.length === 0) {
-      return region;
+    if (region.length > 0) {
+      parts.push(region);
     }
-    if (region.length === 0) {
-      return time;
+    // 没写内容声明的帖子这个字段是空串，不显示（不是所有帖子都有声明）
+    const statement: string = this.vm.detail.contentStatement;
+    if (statement.length > 0) {
+      parts.push(statement);
     }
-    return `${time} · ${region}`;
+    return parts.join(' · ');
   }
 
   /** 主帖（1 楼）的发布时间文案；详情还没回来时为空串 */
@@ -1268,8 +1264,10 @@ export struct ThreadDetailPage {
       if (this.videoComments) {
         Column() {
           Row() {
-            SymbolGlyph($r('sys.symbol.xmark')).fontSize(20).fontColor([AppTheme.TEXT_MAIN])
-              .width(44).height(44).onClick(() => { this.videoComments = false; })
+            Row() {
+              CloseIcon({ iconSize: 20 }).width(20).height(20)
+            }.width(44).height(44).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+              .accessibilityText('关闭回复').onClick(() => { this.videoComments = false; })
             Text(`${this.displayedReplyCount()}条回复`).fontSize(15).fontColor(AppTheme.TEXT_MAIN)
               .layoutWeight(1).textAlign(TextAlign.Center)
             Blank().width(44)
@@ -1321,10 +1319,6 @@ export struct ThreadDetailPage {
           if (!this.videoMode && this.vm.posts.length > 0 && this.viewerUrl.length === 0 && !this.showJump
             && !this.showReply && this.subDetailPid === 0) {
             this.BottomActionBar();
-          }
-
-          if (this.showMore && this.viewerUrl.length === 0 && !this.showJump && !this.showReply) {
-            this.MoreMenuLayer();
           }
 
           if (this.showJump) {
@@ -1593,6 +1587,16 @@ export struct ThreadDetailPage {
           this.onNavTap('更多');
         }
       })
+      .bindPopup(this.showMore, {
+        builder: (): void => { this.MoreMenu(); },
+        placement: Placement.BottomRight, enableArrow: false,
+        width: 120, radius: 16, targetSpace: 8,
+        mask: { color: Color.Transparent }, autoCancel: true,
+        systemMaterial: materialManager.officialOf(MaterialSlot.SHEET),
+        onStateChange: (event: PopupStateChangeParam): void => {
+          this.showMore = event.isVisible;
+        }
+      })
     }
     .width('100%')
 
@@ -1632,8 +1636,9 @@ export struct ThreadDetailPage {
           }
           if (this.vm.detail.author.isBawu) {
             Row() {
-              this.Badge(this.vm.detail.author.bawuTitle.length > 0
-                ? this.vm.detail.author.bawuTitle : '吧务', false)
+              ThreadBawuBadge({ text: this.vm.detail.author.bawuTitle.length > 0
+                ? this.vm.detail.author.bawuTitle : '吧务', textColor: AppTheme.ACCENT_DARK,
+                backgroundColor: AppTheme.ACCENT_LIGHT, borderColor: AppTheme.ACCENT })
             }
             .margin({ right: 6 })
           }
@@ -1685,32 +1690,11 @@ export struct ThreadDetailPage {
   }
 
   @Builder
-  MoreMenuLayer() {
-    Column()
-      .width('100%')
-      .height('100%')
-      .onClick(() => {
-        this.showMore = false;
-      })
-
-    Row() {
-      this.MoreMenu()
-    }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.End)
-    .alignItems(VerticalAlign.Top)
-    // 菜单贴着玻璃顶栏下沿：titleBarH 是 onAreaChange 实测的全高（含状态栏 padding），
-    // 单层化后不再写死「110 + statusBarH」那种两层高度常量；右上角留 14
-    .padding({ top: this.titleBarH + 4, right: 14 })
-    .hitTestBehavior(HitTestMode.None)
-  }
-
-  @Builder
   MoreMenu() {
     Column({ space: 2 }) {
       Text(this.vm.sortType === ReplySortType.ONLY_AUTHOR ? '显示全部回复' : '只看楼主')
         .fontSize(14)
+        .textAlign(TextAlign.Center)
         .fontColor(AppTheme.TEXT_MAIN)
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
@@ -1721,8 +1705,9 @@ export struct ThreadDetailPage {
           this.showMore = false;
         })
 
-      Text('跳转到楼层')
+      Text('跳转楼层')
         .fontSize(14)
+        .textAlign(TextAlign.Center)
         .fontColor(AppTheme.TEXT_MAIN)
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
@@ -1734,6 +1719,7 @@ export struct ThreadDetailPage {
 
       Text('回到顶部')
         .fontSize(14)
+        .textAlign(TextAlign.Center)
         .fontColor(AppTheme.TEXT_MAIN)
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
@@ -1742,18 +1728,9 @@ export struct ThreadDetailPage {
           this.showMore = false;
         })
 
-      Text('搜索')
-        .fontSize(14)
-        .fontColor(AppTheme.TEXT_MAIN)
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .onClick(() => {
-          this.showMore = false;
-          this.toastNotAvailable('搜索');
-        })
-
       Text('分享')
         .fontSize(14)
+        .textAlign(TextAlign.Center)
         .fontColor(AppTheme.TEXT_MAIN)
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
@@ -1762,11 +1739,9 @@ export struct ThreadDetailPage {
           this.shareThread();
         })
     }
-    .width(164)
+    .width(120)
     .padding({ top: 4, bottom: 4 })
-    .borderRadius(16)
-    .backgroundColor(AppTheme.CARD)
-    .shadow({ radius: 18, color: '#26000000', offsetY: 5 })
+    .id('thread-more-menu')
   }
 
   /** 跳层弹层。暗色遮罩点击关闭；输入楼层号后跳转 */
@@ -1774,7 +1749,7 @@ export struct ThreadDetailPage {
   JumpDialog() {
     Stack() {
       Column({ space: 14 }) {
-        Text('跳转到楼层')
+        Text('跳转楼层')
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppTheme.TEXT_MAIN)
@@ -1903,7 +1878,7 @@ export struct ThreadDetailPage {
                 Text('移除').fontSize(12).fontColor(AppTheme.ACCENT)
                   .onClick(() => { if (!this.vm.replyPending) { this.replyImages.remove(index); } })
               }.width('100%')
-            })
+            }, (image: UploadedPostImage, index: number) => image.id.length > 0 ? image.id : `local:${index}`)
             Text('图片按顺序附在回复文字之后')
               .fontSize(11).fontColor(AppTheme.TEXT_MUTED)
           }.width('100%')
@@ -2021,87 +1996,14 @@ export struct ThreadDetailPage {
 
   @Builder
   EmojiSheet() {
-    Column() {
-      Row({ space: 14 }) {
-        Row() {
-          SymbolGlyph($r('sys.symbol.face_smiling'))
-            .fontSize(20)
-            .fontColor([this.emojiTab === 0 ? AppTheme.ACCENT : AppTheme.EMOJI_PANEL_TEXT])
-        }
-        .width(REPLY_EMOJI_TAB_SIZE)
-        .height(REPLY_EMOJI_TAB_SIZE)
-        .borderRadius(REPLY_EMOJI_TAB_SIZE / 2)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.emojiTab === 0 ? '#FFFFFF' : Color.Transparent)
-        .onClick(() => {
-          this.emojiTab = 0;
-        })
-
-        Row() {
-          SymbolGlyph($r('sys.symbol.heart'))
-            .fontSize(20)
-            .fontColor([this.emojiTab === 1 ? AppTheme.ACCENT : AppTheme.EMOJI_PANEL_TEXT])
-        }
-        .width(REPLY_EMOJI_TAB_SIZE)
-        .height(REPLY_EMOJI_TAB_SIZE)
-        .borderRadius(REPLY_EMOJI_TAB_SIZE / 2)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.emojiTab === 1 ? '#FFFFFF' : Color.Transparent)
-        .onClick(() => {
-          this.emojiTab = 1;
-          this.vm.loadMemePics(this.hostContext());
-        })
-
-        Blank()
-
-        Row() {
-          SymbolGlyph($r('sys.symbol.delete_left'))
-            .fontSize(20)
-            .fontColor([AppTheme.EMOJI_PANEL_TEXT])
-        }
-        .width(REPLY_EMOJI_TAB_SIZE)
-        .height(REPLY_EMOJI_TAB_SIZE)
-        .borderRadius(REPLY_EMOJI_TAB_SIZE / 2)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.deleteReplyLastChar();
-        })
-      }
-      .width('100%')
-      .height(EMOJI_PANEL_TAB_H)
-
-      if (this.emojiTab === 0) {
-        Grid() {
-          ForEach(REPLY_EMOTICON_CODES, (code: number) => {
-            // Grid 的子组件必须是 GridItem（ArkTS 编译器强约束），点击区给整格
-            GridItem() {
-              Image(emojiSrc(emojiImageUrl(`image_emoticon${code}`)))
-                .width(REPLY_EMOJI_SIZE)
-                .height(REPLY_EMOJI_SIZE)
-                .objectFit(ImageFit.Contain)
-                // 内置源 90px ≤ 84px 物理像素 1:1 以内：高插值只作保险，不再放大糊化
-                .interpolation(ImageInterpolation.High)
-            }
-            .onClick(() => {
-              this.insertReplyEmoji(code);
-            })
-          }, (code: number) => `emoticon_${code}`)
-        }
-        .columnsTemplate(REPLY_EMOJI_COLUMNS)
-        .rowsGap(REPLY_EMOJI_ROW_GAP)
-        .height(this.emojiGridHeight())
-        .width('100%')
-      } else {
-        this.MemeEmojiGrid()
-      }
-    }
-    .width('100%')
-    .padding({
-      left: 16,
-      right: 16,
-      top: EMOJI_PANEL_TOP_PADDING,
-      bottom: EMOJI_PANEL_BOTTOM_PADDING + this.safeBottomVp
-    })
+    EmojiPickerPanel({ picker: this.vm.emojiPicker, tab: this.emojiTab,
+      gridHeight: this.emojiGridHeight(), safeBottom: this.safeBottomVp,
+      onTabChange: (tab: number): void => { this.emojiTab = tab; },
+      onLoad: (): void => { void this.vm.loadMemePics(this.hostContext()); },
+      onRetry: (): void => { void this.vm.retryMemePics(this.hostContext()); },
+      onBuiltin: (code: number): void => { this.insertReplyEmoji(code); },
+      onMeme: (item: MemePicItem): void => { this.insertMemeEmoji(item); },
+      onDelete: (): void => { this.deleteReplyLastChar(); } })
   }
 
   replyTargetLine(): string {
@@ -2146,7 +2048,7 @@ export struct ThreadDetailPage {
   /** IME/删除/粘贴/插入后提取实际span，更新正文及行内图片引用。 */
   syncReplyMirror(): void {
     if (this.rebuildingReply) { return; }
-    const content: ReplyEditorContent = richEditorReplyText(this.richCtl, this.vm.memeTokenTable(),
+    const content: ReplyEditorContent = readEmojiEditor(this.richCtl, this.vm.memeTokenTable(),
       this.replyImages.inlineTokenTable());
     this.replyText = content.text;
     this.replyImages.reconcileInline(content.imageCounts);
@@ -2180,14 +2082,14 @@ export struct ThreadDetailPage {
   /**
    * 插入收藏表情：ImageSpan 显示缩略图（任意图片，Contain 保比例）。
    *
-   * token 不走 `emojiTokenFromUrl` 的文件名提取（收藏表情的 pkgId/picId/签名
+   * token 不走 `emojiTokenFromUrl` 的文件名提取（收藏表情的 picId/原图尺寸
    * 从 URL 反推不可行），而是镜像提取时查 VM 的映射表——映射在加载完成时
    * 已全量预计算（VM 保证先建表后放列表），这里只管插图。
    */
   private insertMemeEmoji(item: MemePicItem): void {
     if (this.vm.replyPending) { return; }
     const url: string = this.vm.memeDisplayUrl(item);
-    if (url.length === 0) {
+    if (url.length === 0 || this.vm.memeTokenFor(url).length === 0) {
       return;
     }
     this.richCtl.addImageSpan(url, {
@@ -2220,71 +2122,6 @@ export struct ThreadDetailPage {
     const range: RichEditorRange = { start: endPos - 1, end: endPos };
     this.richCtl.deleteSpans(range);
     this.syncReplyMirror();
-  }
-
-  /** 表情面板在 Builder 内直接读取 vm.memePics，以响应 @Trace 数组替换；不经 Builder 参数保存快照。ForEach key 包含 picId 与 URL，避免复用其他表情节点。 */
-  @Builder
-  MemeEmojiGrid() {
-    if (this.vm.memeStateText === 'loading') {
-      Column() {
-        Text('收藏表情加载中…')
-          .fontSize(13)
-          .fontColor(AppTheme.EMOJI_PANEL_TEXT)
-      }
-      .width('100%')
-      .height(this.emojiGridHeight())
-      .justifyContent(FlexAlign.Center)
-    } else if (this.vm.memeStateText.length > 0) {
-      Column() {
-        Text(this.vm.memeStateText)
-          .fontSize(13)
-          .fontColor(AppTheme.EMOJI_PANEL_TEXT)
-          .textAlign(TextAlign.Center)
-        Text('点此重试')
-          .fontSize(13)
-          .fontColor(AppTheme.ACCENT)
-          .margin({ top: 10 })
-          .onClick(() => {
-            this.vm.retryMemePics(this.hostContext());
-          })
-      }
-      .width('100%')
-      .height(this.emojiGridHeight())
-      .justifyContent(FlexAlign.Center)
-    } else if (this.vm.memePics.length === 0) {
-      Column() {
-        Text('还没有收藏表情')
-          .fontSize(14)
-          .fontColor(AppTheme.EMOJI_PANEL_TEXT)
-        Text('在官方贴吧客户端长按表情即可收藏，收藏后这里同步显示')
-          .fontSize(12)
-          .fontColor(AppTheme.EMOJI_PANEL_SUB_TEXT)
-          .margin({ top: 6 })
-          .textAlign(TextAlign.Center)
-      }
-      .width('100%')
-      .height(this.emojiGridHeight())
-      .justifyContent(FlexAlign.Center)
-      .padding({ left: 24, right: 24 })
-    } else {
-      Grid() {
-        ForEach(this.vm.memePics, (item: MemePicItem) => {
-          GridItem() {
-            Image(this.vm.memeDisplayUrl(item))
-              .width(REPLY_EMOJI_SIZE)
-              .height(REPLY_EMOJI_SIZE)
-              .objectFit(ImageFit.Contain)
-          }
-          .onClick(() => {
-            this.insertMemeEmoji(item);
-          })
-        }, (item: MemePicItem) => `meme_${item.picId}_${item.picUrl}`)
-      }
-      .columnsTemplate(REPLY_EMOJI_COLUMNS)
-      .rowsGap(REPLY_EMOJI_ROW_GAP)
-      .height(this.emojiGridHeight())
-      .width('100%')
-    }
   }
 
   /** 主帖 + 回复分组；回复排序栏是普通 ListItem，随内容滚动（不吸顶） */
@@ -2391,22 +2228,21 @@ export struct ThreadDetailPage {
 
   @Builder
   MainThreadTitle(title: string) {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Text() {
-        if (this.vm.detail.isHelp) {
-          Span('　　').fontSize(9).fontWeight(FontWeight.Normal)
-          Span('　').fontSize(11).fontWeight(FontWeight.Normal)
-        }
-        Span(title)
-      }.fontSize(visualThemeStore.isPaper ? PaperLayout.READING_TITLE : POST_TITLE_SIZE)
-        .fontWeight(visualThemeStore.isPaper ? FontWeight.Bold : FontWeight.Medium)
-        .fontColor(AppTheme.TEXT_MAIN).lineHeight(visualThemeStore.isPaper ? 32 : 25).width('100%')
-        .accessibilityText(`${this.vm.detail.isHelp ? '求助 ' : ''}${title}`)
-      if (this.vm.detail.isHelp) {
-        HelpTag().margin({ top: visualThemeStore.isPaper ? 9 : 5.5 })
-          .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
-      }
-    }.width('100%')
+    TaggedThreadText({ text: title, labels: this.vm.detail.isHelp ? ['求助'] : [],
+      textSize: visualThemeStore.isPaper ? PaperLayout.READING_TITLE : POST_TITLE_SIZE,
+      lineSize: visualThemeStore.isPaper ? 34 : 26,
+      weight: visualThemeStore.isPaper ? FontWeight.Bold : FontWeight.Medium,
+      textColor: AppTheme.TEXT_MAIN, lines: Number.MAX_SAFE_INTEGER })
+  }
+
+  /**
+   * 主帖标题 → 正文的堆叠间距。两者都是文本，行盒上下各自留白，按 9vp 给会让标题到正文的
+   * 墨迹间距明显大于正文到图片（真机 20.0vp 对 12.6vp），无视频时收到 2vp 后两者一致。
+   * 有视频时视频框本身没有留白，标题到视频已是 12.9vp，保持 9vp 不动。
+   */
+  private introStackGap(): number {
+    if (visualThemeStore.isPaper) { return 9; }
+    return (!this.videoMode && this.vm.detail.video !== undefined) ? 9 : 2;
   }
 
   /** 主帖区域包括作者信息、标题、正文与首帖楼中楼。 */
@@ -2419,8 +2255,8 @@ export struct ThreadDetailPage {
       }
       this.AuthorBar()
 
-      // 标题与正文沿用富文本块之间的 9vp 阅读间距，不叠加额外标题留白。
-      Column({ space: 9 }) {
+      // 外层标题/视频间距按 introStackGap()；纸境仅对下方主帖富文本内部传入独立块距。
+      Column({ space: this.introStackGap() }) {
         if (!visualThemeStore.isPaper && item.title.length > 0) {
           this.MainThreadTitle(item.title)
         }
@@ -2431,7 +2267,8 @@ export struct ThreadDetailPage {
         }
         this.RichPieces(this.videoMode ? item.contents.filter((piece: ContentPiece): boolean =>
           !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents, visualThemeStore.isPaper ? PaperLayout.READING_BODY : POST_BODY_SIZE,
-          visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24)
+          visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24, AppTheme.TEXT_MAIN,
+          visualThemeStore.isPaper ? PaperLayout.READING_BLOCK_GAP : 9)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -2506,17 +2343,6 @@ export struct ThreadDetailPage {
       })
   }
 
-  @Builder
-  Badge(text: string, filled: boolean) {
-    Text(text)
-      .fontSize(10)
-      .fontColor(filled ? Color.White : AppTheme.ACCENT_DARK)
-      .backgroundColor(filled ? AppTheme.ACCENT : AppTheme.ACCENT_LIGHT)
-      .border({ width: 1, color: AppTheme.ACCENT })
-      .borderRadius(5)
-      .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-  }
-
   /** 正文。主楼与楼中楼共用同一套富文本渲染 */
   @Builder
   RichBody(item: PostItem) {
@@ -2526,8 +2352,8 @@ export struct ThreadDetailPage {
   /** 富文本片段渲染：文本块流式排布，图片块独占一行 */
   @Builder
   RichPieces(pieces: ContentPiece[], fontSize: number = POST_BODY_SIZE, lineHeight: number = 24,
-    textColor: ResourceColor = AppTheme.TEXT_MAIN) {
-    Column({ space: 9 }) {
+    textColor: ResourceColor = AppTheme.TEXT_MAIN, blockGap: number = 9) {
+    Column({ space: blockGap }) {
       ForEach(groupContentBlocks(pieces), (block: ContentBlock, index: number) => {
         if (block.isVoice && block.voice !== undefined) {
           VoicePlayer({ voice: block.voice })
@@ -2921,7 +2747,7 @@ export struct ThreadDetailPage {
       TabContent() {}.tabBar(this.PaperActionContent())
     }
     .barHeight(56).barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
-    .barBackgroundColor(AppTheme.ACCENT_LIGHT).barBackgroundBlurStyle(BlurStyle.NONE)
+    .barBackgroundColor(AppTheme.BOTTOM_BAR).barBackgroundBlurStyle(BlurStyle.NONE)
     .barFloatingStyle({
       barWidth: { smallWidth: Math.max(240, this.popupViewportWidth - 24),
         mediumWidth: Math.max(240, this.popupViewportWidth - 24),
@@ -2940,8 +2766,8 @@ export struct ThreadDetailPage {
     Row({ space: 4 }) {
       Stack() {
         Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.pencil_line')).fontSize(18).maxFontScale(1).fontColor([BrandTheme.EMPHASIS])
-          Text('写评论').fontSize(14).fontColor(BrandTheme.EMPHASIS).maxLines(1)
+          SymbolGlyph($r('sys.symbol.pencil_line')).fontSize(18).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+          Text('写评论').fontSize(14).fontColor(AppTheme.TEXT_SUB).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         }.width('100%').height(36).padding({ left: 10, right: 8 })
       }.layoutWeight(2.3).height(44)
@@ -3016,7 +2842,7 @@ export struct ThreadDetailPage {
       SymbolGlyph(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
         : $r('sys.symbol.hand_thumbsup'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? (this.mainLiked() ? BrandTheme.EMPHASIS : AppTheme.ICON) :
+        .fontColor([visualThemeStore.isPaper ? (this.mainLiked() ? BrandTheme.EMPHASIS : AppTheme.TEXT_SUB) :
           (this.mainLiked() ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.mainLikeCount() > 0 ? `${this.mainLikeCount()}` : '点赞')
         .fontSize(10)
@@ -3055,10 +2881,10 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(this.vm.collected ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? BrandTheme.GOLD : (this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
+        .fontColor([visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.TEXT_SUB) : (this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.vm.collected ? '已收藏' : '收藏')
         .fontSize(10)
-        .fontColor(visualThemeStore.isPaper && this.vm.collected ? BrandTheme.GOLD : AppTheme.COMMENT_ACTION)
+        .fontColor(visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.TEXT_SUB) : AppTheme.COMMENT_ACTION)
     }
     .layoutWeight(1)
     .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
@@ -3086,7 +2912,7 @@ export struct ThreadDetailPage {
       // 回复数入口：官方 Symbol `message`（原为字符 ▤）
       SymbolGlyph($r('sys.symbol.message'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? BrandTheme.JADE : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN])
       Text(`${this.displayedReplyCount()}`)
         .fontSize(10)
         .fontColor(AppTheme.TEXT_SUB)
@@ -3105,7 +2931,7 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(icon)
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? BrandTheme.JADE : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN])
       Text(label)
         .fontSize(10)
         .fontColor(AppTheme.TEXT_SUB)

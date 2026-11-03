@@ -2,13 +2,13 @@ import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { AppTheme } from '../theme/Theme';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
-import { ContentKind, ContentPiece } from '../model/ThreadDetail';
-import { emojiSrc } from '../common/emoji/EmojiSrc';
+import { PaperLayout } from '../common/appearance/VisualTheme';
+import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewImages } from './ThreadPreviewImages';
 import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 import { AvatarComponent } from './AvatarComponent';
 import { PostContentInline } from './PostContentInline';
-import { HelpTag } from './HelpTag';
+import { TaggedThreadText } from './TaggedThreadText';
 
 /** 标准帖子卡：页面传入展示值与动作，组件不发请求、不执行导航。 */
 @ComponentV2
@@ -24,6 +24,7 @@ export struct ThreadPreviewCard {
   @Param contentPieces: ContentPiece[] = [];
   @Event onActivateContent: (piece: ContentPiece) => void = (_piece: ContentPiece): void => {};
   @Param images: string[] = [];
+  @Param originImages: string[] = [];
   @Param isTop: boolean = false;
   @Param isGood: boolean = false;
   @Param isHelp: boolean = false;
@@ -48,12 +49,12 @@ export struct ThreadPreviewCard {
     return ContentPiece.listFromRaw([{ type: 0, text: this.summary }]);
   }
 
-  @Builder
-  Tag(label: string, filled: boolean) {
-    Text(label).fontSize(10)
-      .fontColor(filled ? AppTheme.ON_EMPHASIS : AppTheme.GOLD)
-      .backgroundColor(filled ? AppTheme.EMPHASIS : AppTheme.GOLD_LIGHT)
-      .borderRadius(4).padding({ left: 5, right: 5, top: 2, bottom: 2 })
+  private titleLabels(): string[] {
+    const labels: string[] = [];
+    if (this.isTop) { labels.push('置顶'); }
+    if (this.isGood) { labels.push('精华'); }
+    if (this.isHelp) { labels.push('求助'); }
+    return labels;
   }
 
   private metricCount(label: string): number {
@@ -72,7 +73,7 @@ export struct ThreadPreviewCard {
     const liked: boolean = label === '赞' && (this.actionState?.liked() ?? false);
     if (!visualThemeStore.isPaper) { return liked ? AppTheme.ACCENT : AppTheme.TEXT_SUB; }
     if (liked) { return AppTheme.EMPHASIS; }
-    return label === '评论' ? AppTheme.JADE : (label === '分享' ? AppTheme.GOLD : AppTheme.ACCENT);
+    return AppTheme.TEXT_SUB;
   }
 
   /** 独立动作读取稳定观察态，避免在列表复用时捕获旧计数。 */
@@ -167,26 +168,20 @@ export struct ThreadPreviewCard {
     }
   }
 
-  @Builder
-  Content() {
-    Column({ space: ThreadCardLayout.SECTION_GAP }) {
-      this.IdentityHeader()
+  /** 空阅读组不参与排布，纯图卡只产生一次身份到图片的间距。 */
+  private hasReadingContent(): boolean {
+    return this.title.length > 0 || this.isTop || this.isGood || this.isHelp ||
+      ((this.summary.length > 0 || this.contentPieces.length > 0) && this.summary !== this.title);
+  }
 
+  @Builder
+  ReadingContent() {
+    Column({ space: visualThemeStore.isPaper ? PaperLayout.CARD_TEXT_GAP : ThreadCardLayout.TITLE_BODY_GAP }) {
       if (this.title.length > 0 || this.isTop || this.isGood || this.isHelp) {
-        Column({ space: 5 }) {
-          if (this.isTop || this.isGood || this.isHelp) {
-            Row({ space: 4 }) {
-              if (this.isTop) { this.Tag('置顶', true) }
-              if (this.isGood) { this.Tag('精品', false) }
-              if (this.isHelp) { HelpTag() }
-            }
-          }
-          if (this.title.length > 0) {
-            Text(this.title).fontSize(visualThemeStore.isPaper ? 18 : ThreadCardLayout.BODY_SIZE).fontWeight(FontWeight.Bold)
-              .fontColor(AppTheme.TEXT_MAIN).lineHeight(ThreadCardLayout.LINE_HEIGHT)
-              .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-          }
-        }.width('100%').alignItems(HorizontalAlign.Start)
+        TaggedThreadText({ text: this.title, labels: this.titleLabels(),
+          textColor: AppTheme.TEXT_MAIN,
+          textSize: visualThemeStore.isPaper ? PaperLayout.CARD_TITLE_SIZE : ThreadCardLayout.TITLE_SIZE,
+          lineSize: visualThemeStore.isPaper ? PaperLayout.CARD_TITLE_LINE : ThreadCardLayout.TITLE_LINE })
       }
       if ((this.summary.length > 0 || this.contentPieces.length > 0) && this.summary !== this.title) {
         Text() {
@@ -195,22 +190,28 @@ export struct ThreadPreviewCard {
               accentColor: AppTheme.ACCENT_DARK,
               onActivate: (piece: ContentPiece): void => { this.onActivateContent(piece); } })
           } else {
-          ForEach(this.summaryPieces(), (piece: ContentPiece, index: number) => {
-            if (piece.kind === ContentKind.EMOJI && piece.emojiUrl.length > 0) {
-              ImageSpan(emojiSrc(piece.emojiUrl)).width(20).height(20)
-                .verticalAlign(ImageSpanAlignment.CENTER).objectFit(ImageFit.Contain)
-            } else {
-              Span(piece.text)
-            }
-          }, (piece: ContentPiece, index: number) => `${index}:${piece.text}:${piece.emojiUrl}`)
+            // 仅返回摘要字符串的接口仍需解析官方表情；渲染与正文使用同一组件。
+            PostContentInline({ pieces: this.summaryPieces(), emojiSize: 20, textColor: AppTheme.TEXT_MAIN,
+              accentColor: AppTheme.ACCENT_DARK,
+              onActivate: (piece: ContentPiece): void => { this.onActivateContent(piece); } })
           }
         }.fontSize(ThreadCardLayout.BODY_SIZE).fontColor(AppTheme.TEXT_MAIN)
           .fontWeight(FontWeight.Normal)
           .lineHeight(ThreadCardLayout.LINE_HEIGHT).maxLines(4)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
       }
+    }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  Content() {
+    Column({ space: visualThemeStore.isPaper ? PaperLayout.CARD_CONTENT_GAP : ThreadCardLayout.SECTION_GAP }) {
+      this.IdentityHeader()
+      if (this.hasReadingContent()) {
+        this.ReadingContent()
+      }
       if (this.images.length > 0) {
-        ThreadPreviewImages({ images: this.images, scroller: this.imageScroller,
+        ThreadPreviewImages({ images: this.images, originImages: this.originImages, scroller: this.imageScroller,
           onOpenImage: (index: number): void => { this.onOpenImage(index); } })
       }
 
@@ -231,7 +232,7 @@ export struct ThreadPreviewCard {
         .id('thread-card-metrics')
     }.width('100%').alignItems(HorizontalAlign.Start)
       .padding({ top: ThreadCardLayout.TOP_PADDING, bottom: ThreadCardLayout.BOTTOM_PADDING })
-      .borderRadius(visualThemeStore.isPaper ? 0 : AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+      .borderRadius(ThreadCardLayout.RADIUS).backgroundColor(AppTheme.CARD)
       .border({ width: { bottom: visualThemeStore.isPaper ? 0.5 : 0 }, color: AppTheme.DIVIDER })
   }
 }

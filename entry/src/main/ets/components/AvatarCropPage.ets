@@ -1,3 +1,4 @@
+import { CloseIcon } from './CloseIcon';
 
 import { AvatarCrop, AvatarCropLimits, avatarCropFromViewport, avatarCropOffsetLimits } from '../model/AvatarUpload';
 import { AppTheme } from '../theme/Theme';
@@ -86,11 +87,10 @@ export struct AvatarCropPage {
   @Builder
   private CropBar() {
     Row() {
-      SymbolGlyph($r('sys.symbol.xmark'))
-        .fontSize(20)
-        .fontColor([CROP_BAR_TEXT])
-        .padding(8)
-        .onClick(() => { this.onCancel(); })
+      Row() {
+        CloseIcon({ iconSize: 20, color: CROP_BAR_TEXT }).width(20).height(20)
+      }.width(36).height(36).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+        .accessibilityText('取消裁剪').onClick(() => { this.onCancel(); })
       Text('裁剪')
         .fontSize(18)
         .fontColor(CROP_BAR_TEXT)

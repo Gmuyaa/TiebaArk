@@ -1,8 +1,9 @@
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AppTheme } from '../theme/Theme';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
+import { PaperLayout } from '../common/appearance/VisualTheme';
 
-/** 首页频道与搜索分类共用的文字标签：字重、极值色和小圆点表达选中。 */
+/** 首页频道与搜索分类共用的文字标签：字重与标记表达选中，纸境使用短线、经典保留圆点。 */
 @ComponentV2
 export struct TopLabelItem {
   @Param label: string = '';
@@ -10,6 +11,7 @@ export struct TopLabelItem {
   @Event onTap: () => void = (): void => {};
 
   private labelFontSize(): number {
+    if (visualThemeStore.isPaper) { return PaperLayout.CHANNEL_LABEL_SIZE; }
     return this.selected ? 17 : 16;
   }
   private labelColor(): ResourceColor {
@@ -25,7 +27,7 @@ export struct TopLabelItem {
           .fontWeight(this.selected ? FontWeight.Bold : FontWeight.Normal)
           .fontColor(this.labelColor()).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
-        if (this.selected) { Circle({ width: 5, height: 5 }).fill(this.labelColor()).flexShrink(0) }
+        if (this.selected && !visualThemeStore.isPaper) { Circle({ width: 5, height: 5 }).fill(this.labelColor()).flexShrink(0) }
       }.width('100%').height('100%')
         .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
       if (visualThemeStore.isPaper && this.selected) {

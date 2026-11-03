@@ -150,6 +150,8 @@ const POST_CONTENT: number = 8;
 const POST_USER_NAME: number = 10;
 const POST_REPLY_NUM: number = 17;
 const POST_NAME_SHOW: number = 35;
+/** 「个人主页不可见」标志位；字段号取证见 `UserPostItem.hideFromProfile` 注释 */
+const POST_HIDE_FROM_PROFILE: number = 41;
 
 const CONTENT_POST_CONTENT: number = 1;
 const ABSTRACT_TEXT: number = 2;
@@ -176,6 +178,15 @@ export class UserPostItem {
   /** 同一帖子下的历史回复各自带 pid、时间和内容，不能拼成一条。 */
   replies: UserReplyContent[] = [];
   pieces: ContentPiece[] = [];
+  /**
+   * 发帖时选的「个人主页不可见」：1 = 主页不展示、0 = 全场景可见。
+   *
+   * 字段号 41（wire tag 41 / VARINT）。22.12 的 `tbclient.PostInfoList` 注解里这个
+   * tag 写的是 `is_remain`，但**真机对照是它**：同一条帖子（tid 11136843197）在
+   * 官方 App 里改成「全场景可见」前后各抓一次列表响应，全部字段里只有 41 从 1 变 0
+   * （2026-10-25，用户操作、探针 dump 取证）。界面文案用「主页不可见」。
+   */
+  hideFromProfile: boolean = false;
   isComment: boolean = false;
 }
 
@@ -360,6 +371,13 @@ function readPostInfo(bytes: Uint8Array): UserPostItem {
         break;
       case 39:
         item.shareNum = Math.max(-1, reader.readInt32());
+        break;
+      case POST_HIDE_FROM_PROFILE:
+        if (reader.wireType === WireType.VARINT) {
+          item.hideFromProfile = reader.readInt32() === 1;
+        } else {
+          reader.skipField();
+        }
         break;
       default:
         reader.skipField();

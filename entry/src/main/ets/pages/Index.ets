@@ -21,6 +21,8 @@ import { SearchResultPage } from './SearchResultPage';
 import { SearchPage } from './SearchPage';
 import { ScanPage } from './ScanPage';
 import { VideoFeedPage } from './VideoFeedPage';
+import { ComposePage } from './ComposePage';
+import { HomeComposeButton } from '../components/HomeComposeButton';
 import { MyListPage } from './MyListPage';
 import { HotTopicPage } from './HotTopicPage';
 import { UserPage } from './UserPage';
@@ -43,6 +45,7 @@ import {
   HomeTopNavStyle, homeTopNavRowHeight
 } from '../common/appearance/HomeTopNavStyle';
 import { ImageViewer } from '../components/ImageViewer';
+import { animateImageTransition } from '../components/ImageTransition';
 import { FollowView } from '../components/FollowView';
 
 import { MessageView } from '../components/MessageView';
@@ -105,6 +108,8 @@ struct Index {
   private syncHomeTopNavStyle(): void {
     this.homeTopNavStyle = visualThemeStore.isPaper ? HomeTopNavStyle.OFFICIAL_DUAL_ROW : this.topNavPreferences.style;
   }
+  @Local homeViewportWidth: number = 0;
+  @Local homeViewportHeight: number = 0;
   @Local homeStatusBarH: number = 39;
   /** HDS 会将超高的自定义内容居中；额外补 32vp 后频道行回到安全区下方。 */
   private readonly homeTitleContentOffsetVp: number = 32;
@@ -132,8 +137,10 @@ struct Index {
   /** 首页查看器独占系统返回；普通内容页仍由共享导航栈处理。 */
   onBackPress(): boolean {
     if (this.viewerUrls.length === 0) { return false; }
-    this.viewerUrls = [];
-    this.viewerIndex = 0;
+    animateImageTransition(this.getUIContext(), (): void => {
+      this.viewerUrls = [];
+      this.viewerIndex = 0;
+    });
     return true;
   }
 
@@ -257,7 +264,7 @@ struct Index {
     Stack() {
     // 大图浮层放在整个导航容器之外，覆盖标题栏与系统安全区。
     HdsNavigation(this.appNavStack) {
-      Stack() {
+      Stack({ alignContent: Alignment.BottomEnd }) {
 
     HdsTabs({ controller: this.tabsController }) {
       TabContent() {
@@ -355,7 +362,17 @@ struct Index {
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
       [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(AppTheme.BG)
+      if (this.currentIndex === 0 && this.homeNavVisible && this.viewerUrls.length === 0) {
+        HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
+          topInset: this.homeStatusBarH + this.homeTopNavRowH,
+          active: this.pageVisible,
+          onCompose: (): void => { NavigationService.openCompose(); } })
+      }
       } // Stack
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.homeViewportWidth = Number(area.width);
+        this.homeViewportHeight = Number(area.height);
+      })
     }
     .navDestination(this.PageMap)
     .onNavBarStateChange((isVisible: boolean) => {
@@ -513,6 +530,8 @@ struct Index {
       SearchPage()
     } else if (name === AppRoute.SCAN_PAGE) {
       ScanPage()
+    } else if (name === AppRoute.COMPOSE_PAGE) {
+      ComposePage()
     } else if (name === AppRoute.VIDEO_FEED_PAGE) {
       VideoFeedPage()
     } else if (name === AppRoute.MY_LIST_PAGE) {

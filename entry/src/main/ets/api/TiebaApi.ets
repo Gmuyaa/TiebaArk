@@ -1,6 +1,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ForumSquareData, parseForumSquare } from '../model/ForumSquare';
 import { AddPostResult } from '../model/AddPostResult';
+import { ADD_THREAD_LOCAL, AddThreadResult, parseAddThreadResponse } from '../model/AddThreadResult';
 import { AtCandidateKind, AtCandidates, parseAtCandidates, validAtKind } from '../model/AtCandidates';
 import { parseAtMentions } from '../model/AtMentions';
 import { parseAuthorBlock } from '../model/AuthorBlock';
@@ -44,7 +45,8 @@ import { voicePayloadError } from '../model/VoiceClip';
 import { AgreeTrace } from '../net/AgreeTrace';
 import { HttpClient, HttpResult } from '../net/HttpClient';
 import {
-  AddPostParams, AddPostTarget, AgreeMeParams, AgreeObjType, AgreeParams, AntiSpamParams, AtCandidatesParams,
+  AddPostParams, AddPostTarget, AddThreadParams, AgreeMeParams, AgreeObjType, AgreeParams, AntiSpamParams,
+  AtCandidatesParams,
   AtMentionsParams, AuthorBlockParams, AvatarUploadParams, BawuTeamParams, CancelForbiddenForumParams,
   CreateForumParams, FollowParams, ForbiddenForumsParams, ForumMemberParams, FrsHeadlineParams,
   ImageUploadParams, ImageWatermarkParams, MemeEmojiParams, MessageSettingsParams, OfficialMessagesParams,
@@ -66,7 +68,7 @@ import {
   ThreadListResponse, ThreadDetailResponse, SubPostResponse, StoredThreadsResponse, UserPostsResponse,
   PersonalizedFeedResponse, SearchPostResponse, ForumSearchResponse, HotTopicsResponse, FollowForumsResponse,
   SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, MemeEmojiResponse, MemeCollectResponse,
-  ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse, ForumMemberResponse,
+  AddThreadResponse, ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse, ForumMemberResponse,
   BawuTeamResponse, NotifyResponse, MessageSettingsResponse, PrivacyMarksResponse, AtCandidatesResponse,
   VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse, OfficialMessagesResponse,
   VideoFeedResponse, ForbiddenForumsResponse, ForumBlockResponse, TailsResponse, TailWriteResponse,
@@ -185,7 +187,7 @@ export class ForumSquareResponse extends ApiResult {
 }
 
 export class TiebaApi {
-  /** 验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。 */
+  /** B-04验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。 */
   async fetchCreateForumChallenge(device: TiebaDevice, session: TiebaSession): Promise<CreateForumChallengeResponse> {
     const response: CreateForumChallengeResponse = new CreateForumChallengeResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取创建吧验证码'); return response; }
@@ -207,7 +209,7 @@ export class TiebaApi {
     response.ok = true; return response;
   }
 
-  /** 独立头像传输准备；accepted不是资料读回成功，尚无UI调用。 */
+  /** E-01独立头像传输准备；accepted不是资料读回成功，尚无UI调用。 */
   async uploadAvatar(device: TiebaDevice, session: TiebaSession, input: AvatarUploadInput,
     traceId: number = 0): Promise<AvatarUploadResponse> {
     const response: AvatarUploadResponse = new AvatarUploadResponse();
@@ -335,7 +337,7 @@ export class TiebaApi {
     return response;
   }
   /**
-   * 吧务团队**全量**名单（官方 `GetBawuInfo`，cmd 301007，补）。
+   * 吧务团队**全量**名单（官方 `GetBawuInfo`，cmd 301007，A-01 补）。
    *
    * 与 `fetchForumMembers` 的分工：后者给的吧务组**只有预览**（实测 52 人回 5 个），
    * 这个端点给全量并按角色分组。两者都成功时由 `composeMemberGroups()` 用角色组替换预览组。
@@ -362,7 +364,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 公开语音二进制读取，无凭据/签名，编码由平台实际解析后裁决。 */
+  /** C-03：公开语音二进制读取，无凭据/签名，编码由平台实际解析后裁决。 */
   async fetchVoiceAudio(device: TiebaDevice, id: string): Promise<VoiceAudioResponse> {
     const response: VoiceAudioResponse = new VoiceAudioResponse();
     const source: string = VoiceAudioParams.url(id);
@@ -404,7 +406,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** 候选人读取；普通选人契约，发送文本与界面仍待证实。 */
+  /** D-03：候选人读取；普通选人契约，发送文本与界面仍待证实。 */
   async fetchAtCandidates(device: TiebaDevice, session: TiebaSession, kind: AtCandidateKind,
     word: string = ''): Promise<AtCandidatesResponse> {
     const response: AtCandidatesResponse = new AtCandidatesResponse();
@@ -420,7 +422,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** /账号吧务隐私标记读取；当前 APK 静态契约，服务端待验收。 */
+  /** E-04/G-02：账号吧务隐私标记读取；当前 APK 静态契约，服务端待验收。 */
   async fetchPrivacyMarks(device: TiebaDevice, session: TiebaSession, uid: number): Promise<PrivacyMarksResponse> {
     const response: PrivacyMarksResponse = new PrivacyMarksResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取隐私标记'); return response; }
@@ -437,7 +439,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** /写契约准备；UI 未开放，动态写/回读取证待执行。 */
+  /** E-04/G-02：写契约准备；UI 未开放，动态写/回读取证待执行。 */
   async setPrivacyMark(device: TiebaDevice, session: TiebaSession, field: PrivacyMarkField, value: number): Promise<ApiResult> {
     const response: ApiResult = new ApiResult();
     if (!session.hasBduss() || session.tbs.length === 0 || !validPrivacyMark(field, value)) {
@@ -454,7 +456,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 账号屏蔽吧读取；当前 APK 静态契约已核对，服务端待验收。 */
+  /** E-04：账号屏蔽吧读取；当前 APK 静态契约已核对，服务端待验收。 */
   async fetchForbiddenForums(device: TiebaDevice, session: TiebaSession, uid: number,
     page: number): Promise<ForbiddenForumsResponse> {
     const response: ForbiddenForumsResponse = new ForbiddenForumsResponse();
@@ -531,7 +533,7 @@ export class TiebaApi {
     return result;
   }
 
-  /** 普通小尾巴读取，静态契约已核对；动态服务端待验收。 */
+  /** D-08：普通小尾巴读取，静态契约已核对；动态服务端待验收。 */
   async fetchTails(device: TiebaDevice, session: TiebaSession): Promise<TailsResponse> {
     const response: TailsResponse = new TailsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取小尾巴'); return response; }
@@ -1066,6 +1068,8 @@ export class TiebaApi {
     if (tabId > 0) {
       params.push(new SignParam('tab_id', String(tabId)));
     }
+    // FRS 的 301 精华分类仍需显式筛选；只传 tab_id 会回退热门/最新。
+    if (tabId === 301) { params.push(new SignParam('is_good', '1')); }
     if (sortType >= 0) { params.push(new SignParam('sort_type', String(sortType))); }
 
     const text: string | undefined = await this.postJsonText('/c/f/frs/page', params, response);
@@ -1074,8 +1078,10 @@ export class TiebaApi {
     }
 
     const raw: RawFrsPage = JSON.parse(text) as RawFrsPage;
-    if (sortType >= 0 && (String(raw.sort_type) !== String(sortType) ||
-      String(raw.page_data_tab_id) !== String(tabId))) {
+    if (tabId > 0 && String(raw.page_data_tab_id) !== String(tabId)) {
+      response.failLocal('服务端未确认请求分类'); return response;
+    }
+    if (sortType >= 0 && String(raw.sort_type) !== String(sortType)) {
       response.failLocal('服务端未确认分类排序'); return response;
     }
     response.ok = true;
@@ -1614,7 +1620,8 @@ export class TiebaApi {
     }
 
     response.ok = true;
-    response.data = ThreadDetail.fromRaw(JSON.parse(text) as RawThreadPage, tid, Date.now());
+    const rawPage: RawThreadPage = JSON.parse(text) as RawThreadPage;
+    response.data = ThreadDetail.fromRaw(rawPage, tid, Date.now());
     return response;
   }
 
@@ -1922,10 +1929,9 @@ export class TiebaApi {
   /**
    * 收藏表情全量推送（`POST /c/e/meme/collect`）—— 协议在 `MemeEmojiParams` 注释里。
    *
-   * ⚠️ **全量语义 + 未知响应形状**：调用方必须自己保证 `pics` 是"当前云端收藏
-   * 的完整目标态"。一期只允许 `MemeProbe` 在**空收藏账号**上探测
-   * （`all_delete` 无数据可损）；给真实用户启用增删前，先做"拉取 → 原样推回"
-   * 的不变性验证。
+   * 全量语义：调用方必须提供完整目标态，不得使用面板过滤后的列表。
+   * SavedEmojiManagerVM在用户确认后先做原样推回不变性检查，再执行目标增删，
+   * 写前核对完整云端列表，写后读回确认；未知写结果不自动重试。
    */
   async pushMemeCollect(device: TiebaDevice, session: TiebaSession, pics: string,
     picUpdateTimeMs: number): Promise<MemeCollectResponse> {
@@ -1953,7 +1959,9 @@ export class TiebaApi {
       MemeEmojiParams.COLLECT_PATH, params, response);
 
     if (text !== undefined) {
-      response.ok = true;
+      const raw: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
+      if (raw['error_code'] === 0 || raw['error_code'] === '0') { response.ok = true; }
+      else { response.failLocal('收藏同步响应缺少明确成功结果'); }
     }
     hilog.info(0x0000, 'TiebaApi',
       'meme result: path=%{public}s op=collect picsLen=%{public}d'
@@ -2028,6 +2036,83 @@ export class TiebaApi {
     hilog.info(0x0000, 'TiebaApi',
       'reply accepted tid=%{public}d fid=%{public}d pid=%{public}d targetPid=%{public}s',
       tid, fid, parsed.pid, String(target !== undefined && target.postId.length > 0));
+    return response;
+  }
+
+  /**
+   * 发表**主题帖**，走 form 通道 `POST /c/c/thread/add`（与回复用的 protobuf addPost 是两条链路）。
+   *
+   * 协议依据与字段取舍见 `AddThreadParams` 的类注释。成功判定只看响应 JSON 的结果码：
+   * 拿到响应体且结果码为 0 才算受理；解析不出结果码按失败处理，不当成成功。
+   * 响应里带 tid 时回填给调用方跳转，带不出来也不影响发布判定。
+   */
+  async addThread(device: TiebaDevice, session: TiebaSession, title: string, content: string,
+    fid: number, forumName: string, nickname: string, topicId: number,
+    isHide: string, contentStatement: string): Promise<AddThreadResponse> {
+    const response: AddThreadResponse = new AddThreadResponse();
+    const trimmedTitle: string = title.trim();
+    const trimmedContent: string = content.trim();
+    const forum: string = forumName.trim();
+    if (trimmedTitle.length === 0 && trimmedContent.length === 0) {
+      response.failLocal('标题和正文不能都为空');
+      return response;
+    }
+    if (fid <= 0) {
+      response.failLocal('还没有选择要发布到哪个吧');
+      return response;
+    }
+    if (forum.length === 0) {
+      response.failLocal('吧名缺失，无法发布');
+      return response;
+    }
+    if (!session.hasBduss()) {
+      response.failLocal('需要登录后才能发布');
+      return response;
+    }
+    if (session.tbs.length === 0) {
+      response.failLocal('缺少 tbs，无法发布');
+      return response;
+    }
+    if (session.stoken.length === 0) {
+      response.failLocal('登录态缺少 STOKEN，无法发布');
+      return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0) {
+      response.failLocal(check);
+      return response;
+    }
+
+    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const params: SignParam[] = AddThreadParams.build(device, session, trimmedTitle, trimmedContent,
+      fid, forum, nickname.trim(), topicId, isHide, contentStatement);
+    // 与关注、点赞同一条通道：form + APP 盐签名，BDUSS/STOKEN/tbs 由公共参数进 body。
+    // 免签 web 表单的写法在 110001 上撞过两次（见 AddThreadParams 注释），不再回退。
+    const text: string | undefined = await this.postJsonText(AddThreadParams.PATH, params, response);
+    if (text === undefined) {
+      hilog.warn(0x0000, 'TiebaApi', 'thread add not accepted fid=%{public}d code=%{public}d local=%{public}s',
+        fid, response.errorCode, response.localMessage);
+      return response;
+    }
+
+    const parsed: AddThreadResult = parseAddThreadResponse(text);
+    response.result = parsed;
+    if (!parsed.accepted()) {
+      if (parsed.code === ADD_THREAD_LOCAL) {
+        response.failLocal(parsed.describeFailure());
+      } else {
+        response.failBusiness(parsed.code, parsed.message);
+      }
+      // 服务端文案对定位「参数校验失败」有用，且不含凭证；一并落到 hilog，界面只给一行。
+      hilog.warn(0x0000, 'TiebaApi', 'thread add rejected fid=%{public}d code=%{public}d msg=%{public}s',
+        fid, parsed.code, parsed.message);
+      return response;
+    }
+    // 拿到响应体且结果码为 0 才算受理；必须显式置位
+    response.ok = true;
+    hilog.info(0x0000, 'TiebaApi',
+      'thread add accepted fid=%{public}d titleLen=%{public}d contentLen=%{public}d tidKnown=%{public}s',
+      fid, trimmedTitle.length, trimmedContent.length, String(parsed.tid > 0));
     return response;
   }
 }

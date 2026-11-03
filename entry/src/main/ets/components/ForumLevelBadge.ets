@@ -25,6 +25,7 @@ export struct ForumLevelBadge {
   @Param level: number = -1;
   @Param levelName: string = '';
   @Param onHero: boolean = false;
+  @Param forceOfficial: boolean = false;
   private preference = forumLevelStore;
   @Local titleStretchWidth: number = 0;
 
@@ -57,7 +58,7 @@ export struct ForumLevelBadge {
   }
 
   build() {
-    if (this.preference.style === 1 && this.level >= 1 && this.level <= LEVEL_ICONS.length) {
+    if ((this.forceOfficial || this.preference.style === 1) && this.level >= 1 && this.level <= LEVEL_ICONS.length) {
       if (this.levelName.length > 0) {
         // 移植 TbLevelView：完整 NinePatch 背景承载称号，而非裁图＋另画底色。
         // 固定高13vp，无需纵向拉伸；图形区按86:39原比例缩放。

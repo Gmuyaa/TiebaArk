@@ -123,14 +123,14 @@ export struct ProfileView {
   }
 
   /**
-   * 外观切换按钮的图标：当前档位对应的三态自绘图标（太阳 / 月牙 / 各半 + 斜线）。
+   * 外观切换按钮的图标：当前档位对应的原生图标（太阳 / 月亮 / 左右半实心圆）。
    *
-   * 直接读 `themeModeStore.pref`（`@Trace`）：档位一变，`@ComponentV2` 会重跑这段
+   * 直接读 `themeModeStore.pref` 与 `isDark`（`@Trace`）：档位或系统深浅一变，会重跑这段
    * Builder，图标自动换成新档位那一态 —— 与 `GlassCircleButton` 订阅材质档位同一机制。
    */
   @Builder
   appearanceIcon() {
-    ThemeModeIcon({ mode: themeModeStore.pref, iconSize: HEADER_ICON })
+    ThemeModeIcon({ mode: themeModeStore.pref, isDark: themeModeStore.isDark, iconSize: HEADER_ICON })
   }
 
   private cycleThemeMode(): void {

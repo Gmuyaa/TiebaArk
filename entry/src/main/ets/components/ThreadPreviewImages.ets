@@ -5,6 +5,7 @@ import {
   rememberMeasuredImage, PREVIEW_GAP, PREVIEW_RADIUS
 } from '../model/HomeFeedPresentation';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageTransitionSource } from './ImageTransition';
 
 /** 首页与吧内列表共享的帖子图片预览；按图片数量选择单图或多图布局。 */
 
@@ -16,7 +17,9 @@ interface PreviewImageComplete {
 
 @ComponentV2
 struct ThreadPreviewImage {
+  private imageTransition: ImageTransitionSource = new ImageTransitionSource();
   @Require @Param url: string;
+  @Param origin: string = '';
   /** 在本卡 `images` 里的下标（回报容器高度用） */
   @Param index: number = 0;
   @Param contentWidth: number = 300;
@@ -86,10 +89,18 @@ struct ThreadPreviewImage {
     };
   }
 
+  private errorHandler(url: string): () => void {
+    return (): void => {
+      if (url !== this.url) { return; }
+      this.failed = true;
+      this.loaded = false;
+    };
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       /*
-       * 低流量模式（）：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
+       * 低流量模式（A-08）：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
        * 占位仍可点（外层 onClick 不变），点开查看器照常加载原图。
        */
       if (lowFlowStore.enabled) {
@@ -103,13 +114,14 @@ struct ThreadPreviewImage {
             .width('100%').height('100%').textAlign(TextAlign.Center)
         }
         Image(this.url)
-          .width(this.frame().width)
-          .height(this.frame().height)
+          // 共享转场临时改变外框尺寸时，内容必须跟随外框；固定vp会留下向左上角漂移的小图。
+          .width('100%')
+          .height('100%')
           .objectFit(this.imageFit(this.frame()))
           .objectRepeat(ImageRepeat.NoRepeat)
           .opacity(this.loaded ? 1 : 0)
           .onComplete(this.completeHandler(this.url))
-          .onError(() => { this.failed = true; this.loaded = false; })
+          .onError(this.errorHandler(this.url))
       }
       if (this.frame().long) {
         Text('长图').fontSize(11).fontColor(Color.White)
@@ -121,7 +133,13 @@ struct ThreadPreviewImage {
     .height(this.frame().height)
     .backgroundColor(this.loaded ? Color.Transparent : AppTheme.SURFACE_MUTED)
     .borderRadius(PREVIEW_RADIUS).clip(true)
-    .onClick(() => { this.onOpen(); })
+    .geometryTransition(this.imageTransition.id(this.url), { follow: true })
+    .renderFit(RenderFit.RESIZE_FILL)
+    .onClick(() => {
+      this.imageTransition.open(this.getUIContext(), this.url,
+        this.origin || feedImageInfo(this.url).origin || this.url, (): void => { this.onOpen(); }, 0,
+        !lowFlowStore.enabled && this.loaded);
+    })
 
     .onAreaChange((_old: Area, area: Area) => {
       const height: number = Number(area.height);
@@ -133,6 +151,8 @@ struct ThreadPreviewImage {
 @ComponentV2
 export struct ThreadPreviewImages {
   @Require @Param images: string[];
+  /** 个人主页等入口直接提供的原图序列；其余入口沿用现有图片元数据。 */
+  @Param originImages: string[] = [];
   @Require @Param scroller: ListScroller;
   @Event onOpenImage: (index: number) => void = (_index: number): void => {};
   @Local contentWidth: number = 300;
@@ -174,6 +194,7 @@ export struct ThreadPreviewImages {
     Column() {
       if (this.images.length === 1) {
         ThreadPreviewImage({ url: this.images[0], index: 0, contentWidth: this.contentWidth,
+          origin: this.originImages[0] || '',
           density: this.density,
           onBoxHeight: (index: number, height: number): void => { this.reportBoxHeight(index, height); },
           onOpen: (): void => { this.onOpenImage(0); } })
@@ -182,6 +203,7 @@ export struct ThreadPreviewImages {
           ForEach(this.images, (url: string, index: number) => {
             ListItem() {
               ThreadPreviewImage({ url: url, index: index, contentWidth: this.contentWidth,
+                origin: this.originImages[index] || '',
                 density: this.density, multiple: true,
                 onBoxHeight: (i: number, height: number): void => { this.reportBoxHeight(i, height); },
                 onOpen: (): void => { this.onOpenImage(index); } })

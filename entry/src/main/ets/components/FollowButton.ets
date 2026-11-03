@@ -1,3 +1,4 @@
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { common } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
 import { authSession } from '../auth/AuthSession';
@@ -60,6 +61,19 @@ export struct FollowButton {
     if (this.vm.verifying && !this.vm.known) { return '确认中…'; }
     return this.vm.known ? (this.vm.following ? '已关注' : '关注') : '重试关注状态';
   }
+  private followedAppearance(): boolean {
+    return this.vm.known && this.vm.following;
+  }
+  private foreground(): ResourceColor {
+    if (!visualThemeStore.isPaper) { return Color.White; }
+    return this.followedAppearance() ? AppTheme.TEXT_SUB : AppTheme.ON_ACCENT;
+  }
+  private buttonBackground(): ResourceColor {
+    return visualThemeStore.isPaper && this.followedAppearance() ? AppTheme.SURFACE_MUTED : AppTheme.ACCENT;
+  }
+  private buttonOpacity(): number {
+    return !visualThemeStore.isPaper && this.busy() ? 0.6 : 1;
+  }
   build() {
     if (!this.vm.self && (this.targetId > 0 || this.portrait.length > 0)) {
       if (this.forumStyle) {
@@ -67,9 +81,9 @@ export struct FollowButton {
           onTap: (): void => { void this.activate(); } })
       } else {
       Text(this.label())
-        .fontSize(13).fontColor(Color.White).textAlign(TextAlign.Center).constraintSize({ minHeight: 40 })
-        .padding({ left: 16, right: 16, top: 8, bottom: 8 }).borderRadius(16).backgroundColor(AppTheme.ACCENT)
-        .opacity(this.busy() ? 0.6 : 1).enabled(!this.busy())
+        .fontSize(13).fontColor(this.foreground()).textAlign(TextAlign.Center).constraintSize({ minHeight: 40 })
+        .padding({ left: 16, right: 16, top: 8, bottom: 8 }).borderRadius(16).backgroundColor(this.buttonBackground())
+        .opacity(this.buttonOpacity()).enabled(!this.busy())
         .accessibilityText(this.label())
         .onClick(() => { this.activate(); })
       }

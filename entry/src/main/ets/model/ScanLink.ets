@@ -1,4 +1,4 @@
-/** 扫码只接受可在应用内打开的贴吧帖子/吧链接，不打开其他二维码内容。 */
+/** H-05：扫码只接受可在应用内打开的贴吧帖子/吧链接，不打开其他二维码内容。 */
 import { ContentDestination, ContentDestinationKind, ContentKind, ContentPiece,
   contentDestination } from './ThreadDetail';
 

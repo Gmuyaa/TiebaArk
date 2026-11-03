@@ -1,15 +1,18 @@
 import { ThreadBrief } from '../model/ThreadList';
-import { ContentKind, ContentPiece, formatPostTime } from '../model/ThreadDetail';
+import { formatPostTime } from '../model/ThreadDetail';
 import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
-import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { AvatarComponent } from './AvatarComponent';
-import { HelpTag } from './HelpTag';
+import { TaggedThreadText } from './TaggedThreadText';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
+import { feedImageInfo } from '../model/HomeFeedPresentation';
+import { ImageTransitionSource } from './ImageTransition';
 
 /** 互助卡片只展示服务端返回的回答，不把主帖摘要当作回答。 */
 @ComponentV2
 export struct HelpThreadCard {
+  private imageTransition: ImageTransitionSource = new ImageTransitionSource();
   @Require @Param item: ThreadBrief;
   @Event onOpenThread: () => void = (): void => {};
   @Event onOpenAnswer: () => void = (): void => {};
@@ -26,29 +29,10 @@ export struct HelpThreadCard {
 
   @Builder
   PreviewText(text: string, answer: boolean) {
-    Stack({ alignContent: Alignment.TopStart }) {
-    Text() {
-      // 首行预留标签宽度，后续行仍从段落左边缘排版；标签层不参与行高。
-      if (answer || this.item.isHelp) {
-        Span('　'.repeat(answer && this.item.answerIsHighQuality ? 4 : 2)).fontSize(9).fontWeight(FontWeight.Normal)
-        Span('　').fontSize(11).fontWeight(FontWeight.Normal)
-      }
-      ForEach(ContentPiece.listFromRaw([{ type: 0, text }]), (piece: ContentPiece, index: number) => {
-        if (piece.kind === ContentKind.EMOJI && piece.emojiUrl.length > 0) {
-          ImageSpan(emojiSrc(piece.emojiUrl)).width(18).height(18)
-            .verticalAlign(ImageSpanAlignment.CENTER).objectFit(ImageFit.Contain)
-        } else { Span(piece.text) }
-      }, (piece: ContentPiece, index: number) => `${index}:${piece.text}:${piece.emojiUrl}`)
-    }.fontSize(answer ? 14 : 16).fontWeight(answer ? FontWeight.Normal : FontWeight.Bold)
-      .fontColor(answer ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN).lineHeight(answer ? 23 : 25)
-      .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-      .accessibilityText(`${answer ? (this.item.answerIsHighQuality ? '高赞回答' : '回答') : (this.item.isHelp ? '求助' : '')} ${text}`)
-      if (answer || this.item.isHelp) {
-        HelpTag({ label: answer ? (this.item.answerIsHighQuality ? '高赞回答' : '回答') : '求助',
-          emphasized: answer && this.item.answerIsHighQuality })
-          .margin({ top: answer ? 4.5 : 5.5 }).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
-      }
-    }.width('100%')
+    TaggedThreadText({ text,
+      labels: answer ? [this.item.answerIsHighQuality ? '高赞回答' : '回答'] : (this.item.isHelp ? ['求助'] : []),
+      textSize: answer ? 14 : 16, lineSize: answer ? 23 : 25, weight: answer ? FontWeight.Normal : FontWeight.Bold,
+      textColor: answer ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN, lines: 2 })
   }
 
   build() {
@@ -87,13 +71,19 @@ export struct HelpThreadCard {
           if (lowFlowStore.enabled) {
             Text('查看图片').fontSize(12).fontColor(AppTheme.ACCENT)
           } else {
-            Image(this.item.coverImage).width('100%').height('100%').objectFit(ImageFit.Contain).borderRadius(8)
+            Image(this.item.coverImage).width('100%').height('100%').objectFit(ImageFit.Contain).borderRadius(9)
           }
         }.width(80).height(this.textHeight).justifyContent(FlexAlign.Center)
-          .onClick(() => { this.onOpenImage(); })
+          .geometryTransition(this.imageTransition.id(this.item.coverImage), { follow: true })
+          .renderFit(RenderFit.RESIZE_FILL)
+          .onClick(() => {
+            this.imageTransition.open(this.getUIContext(), this.item.coverImage,
+              feedImageInfo(this.item.coverImage).origin || this.item.coverImage,
+              (): void => { this.onOpenImage(); }, 0, !lowFlowStore.enabled);
+          })
       }
     }.width('100%').alignItems(VerticalAlign.Top).padding(10)
-      .backgroundColor(AppTheme.CARD).borderRadius(visualThemeStore.isPaper ? 0 : AppTheme.CARD_RADIUS)
+      .backgroundColor(AppTheme.CARD).borderRadius(ThreadCardLayout.RADIUS)
       .border({ width: { bottom: visualThemeStore.isPaper ? 0.5 : 0 }, color: AppTheme.DIVIDER })
       .onClick(() => { this.onOpenThread(); })
   }

@@ -49,7 +49,8 @@ export enum SettingsPane {
   /** 吧内分区默认导航：热门或最新，本机偏好。 */
   FORUM_DEFAULT_TAB = 31,
   HDS_MATERIAL = 32,
-  HIDDEN_THREADS = 33
+  HIDDEN_THREADS = 33,
+  IMAGE_MENU = 34
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -122,12 +123,17 @@ export interface SettingsState {
   hideStatusBar: boolean;
   hideTopNavigation: boolean;
   hideBottomNavigation: boolean;
-  /** 低流量模式：不自动加载图片（列表、正文图集、视频流；本机偏好） */
+  /** A-08 低流量模式：不自动加载图片（列表、正文图集、视频流；本机偏好） */
   lowFlow: boolean;
 
   superResolution: boolean;
-  /** 全应用统一智感握姿偏好，默认开；当前用于吧页刷新按钮。 */
+  /** 全应用统一智感握姿偏好，默认开。 */
   smartReach?: boolean;
+  homeComposeSmartReach?: boolean;
+  imageMenuSmartReach?: boolean;
+  imageMenuLongPress?: boolean;
+  forumTabsSmartReach?: boolean;
+  forumTabsFloating?: boolean;
 
   cacheLabel: string;
 }
@@ -138,8 +144,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.88';
-export const SETTINGS_VERSION_CODE: string = '2610087';
+export const SETTINGS_APP_VERSION: string = '1.0.152';
+export const SETTINGS_VERSION_CODE: string = '2611004';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -151,10 +157,10 @@ function paneEntry(key: string, label: string, value: string, pane: SettingsPane
   };
 }
 
-function switchEntry(key: string, label: string, checked: boolean): SettingsEntry {
+function switchEntry(key: string, label: string, checked: boolean, enabled: boolean = true): SettingsEntry {
   return {
     key: key, label: label, value: '', kind: SettingsEntryKind.SWITCH,
-    pane: SettingsPane.NONE, action: key, enabled: true, danger: false, checked: checked
+    pane: SettingsPane.NONE, action: key, enabled: enabled, danger: false, checked: checked
   };
 }
 
@@ -207,7 +213,7 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
   switch (pane) {
     case SettingsPane.BROWSING:
       // 浏览设置：内容加载方式与吧内默认分区。
-      // 低流量模式：打开后不自动加载图片（列表、正文图集、视频流；见 LowFlowStore 头注释）
+      // A-08 低流量模式：打开后不自动加载图片（列表、正文图集、视频流；见 LowFlowStore 头注释）
       return [
         switchEntry('low_flow', '低流量模式', state.lowFlow),
         paneEntry('image_watermark', '图片水印', '', SettingsPane.IMAGE_WATERMARK),
@@ -226,7 +232,13 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
         switchEntry('hide_bottom_navigation', '隐藏底部导航栏', state.hideBottomNavigation),
 
         switchEntry('super_resolution', '图像超分', state.superResolution),
-        switchEntry('smart_reach', '智感握姿', state.smartReach ?? true)
+        switchEntry('smart_reach', '智感握姿', state.smartReach ?? true),
+        switchEntry('home_compose_smart_reach', '首页发帖按钮跟随握姿', state.homeComposeSmartReach ?? true, state.smartReach ?? true),
+        switchEntry('forum_tabs_smart_reach', '分类胶囊跟随握姿', state.forumTabsSmartReach ?? true,
+          state.smartReach ?? true),
+        paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
+        switchEntry('image_menu_smart_reach', '看图胶囊跟随握姿', state.imageMenuSmartReach ?? true, state.smartReach ?? true),
+        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true)
       ];
     case SettingsPane.PERSONALIZATION:
 
@@ -311,6 +323,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '帖子页底栏样式';
     case SettingsPane.TOP_NAV:
       return '首页顶栏样式';
+    case SettingsPane.IMAGE_MENU:
+      return '看图菜单显示方式';
     case SettingsPane.FORUM_DEFAULT_TAB:
       return '吧内分区默认导航';
     case SettingsPane.DARK_MODE:
@@ -391,6 +405,7 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.DARK_MODE:
     case SettingsPane.FONT_SIZE:
     case SettingsPane.FORUM_LEVEL:
+    case SettingsPane.IMAGE_MENU:
     case SettingsPane.FORUM_DEFAULT_TAB:
       return SettingsPanePresentation.POPUP;
     case SettingsPane.ABOUT:

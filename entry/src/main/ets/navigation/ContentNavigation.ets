@@ -11,6 +11,9 @@ export function openContentPiece(piece: ContentPiece, uiContext: UIContext): voi
     NavigationService.openForum({ forumName: target.word });
   } else if (target.kind === ContentDestinationKind.SEARCH) {
     NavigationService.openSearchResult({ word: target.word });
+  } else if (target.kind === ContentDestinationKind.TOPIC) {
+    // 话题留在应用内的热榜话题页，不跳系统浏览器
+    NavigationService.openHotTopic({ topicId: target.topicId, topicName: target.word });
   } else if (target.kind === ContentDestinationKind.WEB) {
     const context: common.UIAbilityContext = uiContext.getHostContext() as common.UIAbilityContext;
     context.openLink(target.url).catch(() => {

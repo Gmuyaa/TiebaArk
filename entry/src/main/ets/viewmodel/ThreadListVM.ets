@@ -52,6 +52,9 @@ export class ThreadListVM {
   /** 是否成功加载过至少一次（用于区分"首次加载"与"刷新"） */
   @Trace loadedOnce: boolean = false;
   @Trace switchingTab: boolean = false;
+  /** 选择可先响应；正文只在目标分类读取成功后替换。 */
+  @Trace pendingTabId: number = 0;
+  targetTabId(): number { return this.pendingTabId > 0 ? this.pendingTabId : this.selectedTabId; }
 
   @Trace forum: ForumBrief = new ForumBrief();
   @Trace page: PageInfo = new PageInfo();
@@ -114,6 +117,7 @@ export class ThreadListVM {
   }
 
   @Trace heroHeadline: string = '';
+  @Trace heroHeadlineSettled: boolean = false;
 
   /** 本 VM 已发起过头图请求的吧名（会话内每吧最多发一次；缓存命中不发） */
   private headlineRequested: Set<string> = new Set<string>();
@@ -124,6 +128,8 @@ export class ThreadListVM {
   private tabOwner: string = '';
   private warmingOwner: string = '';
   private tabVersion: number = 0;
+  /** 切换分类使旧分页、旧切换回包及其 finally 一起失效。 */
+  private contentVersion: number = 0;
 
   private ownerKey(): string { return `${authSession.sessionKey()}:${this.forumName}`; }
 
@@ -184,6 +190,7 @@ export class ThreadListVM {
     const sameOwner: boolean = this.tabOwner === this.ownerKey();
     if (!sameOwner) { this.categorySorts = new Map<number, number>(); this.helpPartition = 0; }
     ++this.tabVersion;
+    ++this.contentVersion;
     if (!currentCategoryOnly || !sameOwner) { this.tabSnapshots.clear(); }
     else { this.tabSnapshots.delete(selected); }
     this.tabOwner = this.ownerKey(); this.tabReads.clear(); this.warmingOwner = '';
@@ -199,6 +206,8 @@ export class ThreadListVM {
       if (!currentCategoryOnly) { await forumDefaultTabStore.load(context); }
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (owner !== this.ownerKey()) { return; }
+      // 与首包并行，允许页面在加载遮罩内提前解码和判断；头图失败不阻塞帖子。
+      if (!currentCategoryOnly) { void this.loadHeroHeadline(context, name); }
       const initialResponse: ThreadListResponse = await this.fetchCategory(device, name, 1, this.selectedTabId);
       if (owner !== this.ownerKey()) { return; }
       let response: ThreadListResponse = initialResponse;
@@ -247,9 +256,7 @@ export class ThreadListVM {
         this.saveTabSnapshot();
       }
       this.loadedOnce = true;
-      // 吧头图是异步锦上添花：不阻塞列表渲染，失败静默（界面回退底纹层）
       if (!currentCategoryOnly) {
-        void this.loadHeroHeadline(context, name);
         this.prefetchAdjacent(context);
       }
     } catch (err) {
@@ -269,14 +276,18 @@ export class ThreadListVM {
     this.isLoadingMore = true;
     this.loadMoreError = '';
     const owner: string = this.ownerKey();
+    const version: number = this.contentVersion;
+    const tabId: number = this.selectedTabId;
+    const name: string = this.forumName;
+    const nextPage: number = this.page.currentPage + 1;
+    const current = (): boolean => version === this.contentVersion && owner === this.ownerKey();
 
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
-      if (owner !== this.ownerKey()) { return; }
-      const nextPage: number = this.page.currentPage + 1;
-      const response: ThreadListResponse = await this.fetchCategory(device, this.forumName, nextPage, this.selectedTabId);
+      if (!current()) { return; }
+      const response: ThreadListResponse = await this.fetchCategory(device, name, nextPage, tabId);
 
-      if (owner !== this.ownerKey()) { return; }
+      if (!current()) { return; }
       if (!response.ok) {
         this.loadMoreError = response.describeFailure();
         return;
@@ -292,57 +303,58 @@ export class ThreadListVM {
       this.page = response.data.page;
       this.saveTabSnapshot();
     } catch (err) {
+      if (!current()) { return; }
       const e: Error = err as Error;
       this.loadMoreError = `加载失败：${e.message}`;
     } finally {
-      this.isLoadingMore = false;
+      if (version === this.contentVersion) { this.isLoadingMore = false; }
     }
   }
 
-  /** 切换真实分类；失败时恢复原列表与选择，避免出现假切换。 */
+  /** 后一次选择优先；读取期间保留原正文，失败时继续显示原分类。 */
   async switchTab(context: common.UIAbilityContext, tabId: number): Promise<boolean> {
-    if (tabId <= 0 || tabId === this.selectedTabId || this.loading || this.switchingTab || this.isLoadingMore
-      || this.forumName.length === 0) {
+    if (tabId <= 0 || tabId === this.targetTabId() || (this.loading && !this.switchingTab)
+      || this.forumName.length === 0 || !this.tabs.some((tab: ForumTab): boolean => tab.id === tabId)) {
       return false;
     }
-    const oldForum: ForumBrief = this.forum;
-    const oldPage: PageInfo = this.page;
-    const oldThreads: ThreadBrief[] = this.threads;
     const oldTabs: ForumTab[] = this.tabs;
-    const oldSelected: number = this.selectedTabId;
     const owner: string = this.ownerKey();
     if (owner !== this.tabOwner) {
       this.tabSnapshots.clear(); this.tabReads.clear();
       this.errorText = '账号已变化，请刷新吧页面'; return false;
     }
-    this.saveTabSnapshot();
+    if (!this.switchingTab) { this.saveTabSnapshot(); }
+    const version: number = ++this.contentVersion;
+    this.isLoadingMore = false;
+    this.pendingTabId = tabId;
+    this.errorText = '';
+    this.loadMoreError = '';
     const cached: ThreadListTabSnapshot | undefined = this.tabSnapshots.get(tabId);
-    this.selectedTabId = tabId;
     if (cached !== undefined) {
       this.forum = cached.forum;
       this.page = cached.page;
       this.threads = cached.threads.slice();
       this.tabs = cached.tabs;
       this.selectedTabId = cached.selectedTabId;
-      this.errorText = '';
-      this.loadMoreError = '';
+      this.pendingTabId = 0;
+      this.loading = false;
+      this.switchingTab = false;
       this.prefetchAdjacent(context);
       return true;
     }
     this.switchingTab = true;
     this.loading = true;
-    this.errorText = '';
     try {
       const response: ThreadListResponse = await this.readTab(context, tabId);
-      if (owner !== this.ownerKey()) { this.selectedTabId = oldSelected; return false; }
+      if (version !== this.contentVersion) { return false; }
+      if (owner !== this.ownerKey()) { this.errorText = '账号已变化，请刷新吧页面'; return false; }
       if (!response.ok) {
-        this.forum = oldForum;
-        this.page = oldPage;
-        this.threads = oldThreads;
-        this.tabs = oldTabs;
-        this.selectedTabId = oldSelected;
         this.errorText = response.describeFailure();
         return false;
+      }
+      if (response.data.forum.id !== this.forum.id ||
+        (response.data.selectedTabId > 0 && response.data.selectedTabId !== tabId)) {
+        this.errorText = '分类返回不匹配，请重试'; return false;
       }
       this.forum = response.data.forum;
       this.page = response.data.page;
@@ -356,17 +368,16 @@ export class ThreadListVM {
       this.prefetchAdjacent(context);
       return true;
     } catch (err) {
-      this.forum = oldForum;
-      this.page = oldPage;
-      this.threads = oldThreads;
-      this.tabs = oldTabs;
-      this.selectedTabId = oldSelected;
+      if (version !== this.contentVersion) { return false; }
       const e: Error = err as Error;
       this.errorText = `加载失败：${e.message}`;
       return false;
     } finally {
-      this.loading = false;
-      this.switchingTab = false;
+      if (version === this.contentVersion) {
+        this.pendingTabId = 0;
+        this.loading = false;
+        this.switchingTab = false;
+      }
     }
   }
 
@@ -392,21 +403,24 @@ export class ThreadListVM {
     }
     const cached: string = getForumHeadline(name);
     if (cached.length > 0) {
-      this.heroHeadline = cached;
+      if (this.forumName === name) { this.heroHeadline = cached; this.heroHeadlineSettled = true; }
       return;
     }
     this.headlineRequested.add(name);
+    this.heroHeadlineSettled = false;
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       const result = await this.api.fetchForumHeadline(device, authSession.session(), name);
       const url: string = result.resolved();
       if (url.length > 0) {
         putForumHeadline(name, url);
-        this.heroHeadline = url;
+        if (this.forumName === name) { this.heroHeadline = url; }
       }
     } catch (err) {
       hilog.warn(0x0000, 'ForumHero', 'headline load failed forum=%{public}s err=%{public}s',
         name, (err as Error).message);
+    } finally {
+      if (this.forumName === name) { this.heroHeadlineSettled = true; }
     }
   }
 }

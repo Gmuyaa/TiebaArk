@@ -4,6 +4,7 @@ import { HdsTabs } from '@kit.UIDesignKit';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
 import { AppTheme } from '../theme/Theme';
+import { CloseIcon } from './CloseIcon';
 
 /** 圆直径默认值（vp）。全站统一 40，顶栏高度 52~60 都能容纳 */
 const DIAMETER: number = 40;
@@ -31,6 +32,9 @@ export struct GlassCircleButton {
   @Param diameter: number = DIAMETER;
   /** 图标字号（vp），默认 24 */
   @Param iconSize: number = ICON_SIZE;
+  @Param iconWeight: FontWeight = FontWeight.Bold;
+  /** 按页面需要关闭额外外阴影，HDS 系统材质保持不变。 */
+  @Param shadowEnabled: boolean = true;
   /** 材质槽位。小型圆形悬浮控件统一用 BACK_BUTTON 档（HDS 通道下各槽位同参数） */
   @Param slot: MaterialSlot = MaterialSlot.BACK_BUTTON;
 
@@ -70,11 +74,13 @@ export struct GlassCircleButton {
           .textAlign(TextAlign.Center)
           .offset({ x: this.iconOffsetX, y: this.labelOffsetY })
           .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : this.label)
+      } else if (this.symbol.id === $r('sys.symbol.xmark').id) {
+        // 关闭图标在材质层外绘制，避免 HDS tabBar 的内部窄内容盒影响居中。
+        Row().width('100%').height('100%')
       } else {
         SymbolGlyph(this.symbol)
           .fontSize(this.iconSize).maxFontScale(1)
-          // 参考图里的图形笔画偏粗，`Bold` 更接近（`Medium` 实测几乎看不出差别）
-          .fontWeight(FontWeight.Bold)
+          .fontWeight(this.iconWeight)
           .fontColor([ICON_COLOR])
           .offset({ x: this.iconOffsetX })
       }
@@ -121,12 +127,25 @@ export struct GlassCircleButton {
       .clip(true)
       .width(this.diameter)
       .height(this.diameter)
+      .hitTestBehavior(!this.useCustomIcon && this.label.length === 0 &&
+        this.symbol.id === $r('sys.symbol.xmark').id ? HitTestMode.None : HitTestMode.Default)
+
+      if (!this.useCustomIcon && this.label.length === 0 && this.symbol.id === $r('sys.symbol.xmark').id) {
+        Row() {
+          CloseIcon({ iconSize: this.iconSize, iconWeight: this.iconWeight, color: ICON_COLOR })
+            .width(this.iconSize).height(this.iconSize).offset({ x: this.iconOffsetX })
+        }.width(this.diameter).height(this.diameter).justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center).accessibilityGroup(true)
+          .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : '关闭')
+          .onClick((): void => { this.onTap(); })
+      }
     }
     .width(this.diameter)
     .height(this.diameter)
     .borderRadius(this.diameter / 2)
 
-    .shadow({ radius: 18, color: '#28000000', offsetX: 0, offsetY: 6 })
+    .shadow({ radius: this.shadowEnabled ? 18 : 0, color: this.shadowEnabled ? '#28000000' : '#00000000',
+      offsetX: 0, offsetY: this.shadowEnabled ? 6 : 0 })
   }
 }
 

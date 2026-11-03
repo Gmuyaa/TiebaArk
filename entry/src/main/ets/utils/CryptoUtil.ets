@@ -66,6 +66,8 @@ export class CryptoUtil {
     if (input.length === 0) {
       return MD5_EMPTY;
     }
+    // 贴吧接口 sign 协议规定 MD5、服务端按同一算法校验，换安全哈希会直接导致签名失败，故按协议保留。
+    // eslint-disable-next-line @security/no-unsafe-hash
     const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
     await md.update({ data: input });
     const digest: cryptoFramework.DataBlob = await md.digest();

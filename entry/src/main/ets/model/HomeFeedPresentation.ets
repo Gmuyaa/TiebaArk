@@ -78,12 +78,12 @@ export const PREVIEW_ROW_H: number = 200;
 export const PREVIEW_SINGLE_MAX_H: number = 280;
 export const PREVIEW_MULTI_MAX_W: number = 240;
 export const PREVIEW_GAP: number = 8;
-export const PREVIEW_RADIUS: number = 11;
+export const PREVIEW_RADIUS: number = 9;
 /** 长图判定：显式标记，或宽高比小于该值（沿用既有口径） */
 export const PREVIEW_LONG_RATIO: number = 0.4;
 
 export const BODY_SINGLE_MAX_H: number = 460;
-export const BODY_RADIUS: number = 12;
+export const BODY_RADIUS: number = 9;
 /** 内容区宽度拿不到时的兜底（vp） */
 export const BODY_MIN_BOX_W: number = 240;
 /**

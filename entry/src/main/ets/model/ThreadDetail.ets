@@ -241,7 +241,8 @@ export enum ContentDestinationKind {
   WEB = 1,
   THREAD = 2,
   FORUM = 3,
-  SEARCH = 4
+  SEARCH = 4,
+  TOPIC = 5
 }
 
 export class ContentDestination {
@@ -249,13 +250,45 @@ export class ContentDestination {
   url: string = '';
   tid: number = 0;
   word: string = '';
+  topicId: number = 0;
+}
+
+/**
+ * 从服务端给话题片段配的链接里取出 `topic_id`。
+ *
+ * 只认贴吧域名：`#话题#` 的 link 若是别处的地址，仍按网页链接处理，不夺走原目标。
+ * 话题在应用内打开（`HotTopicPage`），不再把用户丢给系统浏览器。
+ */
+export function topicIdFromLink(link: string): number {
+  if (!/^https?:\/\/(?:[a-z0-9-]+\.)?tieba\.baidu\.com(?:[/?#]|$)/i.test(link)) {
+    return 0;
+  }
+  const match: RegExpMatchArray | null = link.match(/[?&]topic_id=(\d{1,18})/i);
+  if (match === null) {
+    return 0;
+  }
+  const id: number = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : 0;
 }
 
 /** 阅读入口共用的纯路由判断，可在无设备环境中测试。 */
 export function contentDestination(piece: ContentPiece): ContentDestination {
   const target: ContentDestination = new ContentDestination();
-  if (piece.kind === ContentKind.TOPIC && piece.link.length === 0) {
+  if (piece.kind === ContentKind.TOPIC) {
     target.word = piece.text.replace(/^#+|#+$/g, '').trim();
+    const link: string = webLinkUrl(piece.link);
+    const topicId: number = topicIdFromLink(link);
+    if (topicId > 0) {
+      target.topicId = topicId;
+      target.kind = ContentDestinationKind.TOPIC;
+      return target;
+    }
+    if (link.length > 0) {
+      // 服务端配的不是贴吧话题地址：保留原链接，照常按网页打开
+      target.url = link;
+      target.kind = ContentDestinationKind.WEB;
+      return target;
+    }
     if (target.word.length > 0) {
       target.kind = ContentDestinationKind.SEARCH;
     }
@@ -1082,6 +1115,11 @@ export class ThreadDetail {
    */
   isAgreed: boolean = false;
   createTimeMs: number = 0;
+  /**
+   * 发帖时选的内容声明，来自 `thread.content_statement`（真机取证 2026-10-25，
+   * 样本值「疑似含AI内容」）。没有写声明的帖子此字段为空串，界面整段不渲染。
+   */
+  contentStatement: string = '';
 
   isStored: boolean = false;
   /** 楼主 */
@@ -1136,6 +1174,7 @@ export class ThreadDetail {
       // 主帖定位的权威字段；缺失时为 0，由调用方退到 floor === 1
       d.mainPostId = toNum(thread.post_id);
       d.createTimeMs = toNum(thread.create_time) * 1000;
+      d.contentStatement = toStr(thread.content_statement).trim();
       // 收藏态：collect_status 非 0 即已收藏（实测收藏后=2，不能用 toFlag 的 ===1）
       d.isStored = toNum(thread.collect_status) !== 0;
       d.shareCount = thread.share_num !== undefined && Number.isFinite(thread.share_num) && thread.share_num >= 0 ?

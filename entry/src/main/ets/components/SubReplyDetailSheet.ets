@@ -1,3 +1,4 @@
+import { CloseIcon } from './CloseIcon';
 /** 回复详情内容层，展示锚点回复与楼中楼列表。正文构建器由页面传入，分页状态由 VM 管理；底部回复胶囊浮于列表上方。 */
 
 import { PageState, ListFooter as PagingFooter } from './PageState';
@@ -107,9 +108,7 @@ export struct SubReplyDetailSheet {
 
       // 关闭：官方 Symbol `xmark`；外层 Row 只负责维持原先 40×40 的点击区
       Row() {
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(17)
-          .fontColor([DetailTheme.ICON])
+        CloseIcon({ iconSize: 17, color: DetailTheme.ICON }).width(17).height(17)
       }
       .width(40)
       .height(40)

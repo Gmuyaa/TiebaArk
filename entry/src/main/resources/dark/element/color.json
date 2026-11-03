@@ -1,5 +1,9 @@
 {
   "color": [
+    { "name": "forum_tab_glow_border", "value": "#A0569CFF" },
+    { "name": "forum_tab_glow_shadow", "value": "#60569CFF" },
+    { "name": "sr_active_background", "value": "#CC317AF7" },
+    { "name": "paper_sr_active_background", "value": "#CC9EC8BF" },
     { "name": "help_answer_tag", "value": "#D7BD6C" },
     {
       "name": "detail_comment_nickname",
@@ -271,11 +275,11 @@
     },
     {
       "name": "paper_app_bg",
-      "value": "#1D2825"
+      "value": "#202522"
     },
     {
       "name": "paper_app_card",
-      "value": "#27352E"
+      "value": "#2B302C"
     },
     {
       "name": "paper_app_text_main",
@@ -295,11 +299,11 @@
     },
     {
       "name": "paper_app_divider",
-      "value": "#4C594C"
+      "value": "#4B534A"
     },
     {
       "name": "paper_app_surface_muted",
-      "value": "#354137"
+      "value": "#363D36"
     },
     {
       "name": "paper_app_accent",
@@ -307,7 +311,7 @@
     },
     {
       "name": "paper_app_accent_light",
-      "value": "#34473E"
+      "value": "#344139"
     },
     {
       "name": "paper_app_accent_dark",
@@ -367,7 +371,7 @@
     },
     {
       "name": "paper_app_popup_line",
-      "value": "#4C594C"
+      "value": "#4B534A"
     },
     {
       "name": "paper_app_note_text",
@@ -379,19 +383,19 @@
     },
     {
       "name": "paper_app_forum_tab_bg",
-      "value": "#27352E"
+      "value": "#2B302C"
     },
     {
       "name": "paper_app_nav_fade",
-      "value": "#1D2825"
+      "value": "#202522"
     },
     {
       "name": "paper_app_nav_fade_clear",
-      "value": "#001D2825"
+      "value": "#00202522"
     },
     {
       "name": "paper_app_bottom_mask",
-      "value": "#331D2825"
+      "value": "#33202522"
     },
     {
       "name": "paper_detail_comment_nickname",
@@ -419,7 +423,7 @@
     },
     {
       "name": "paper_detail_sub_reply_background",
-      "value": "#34473E"
+      "value": "#344139"
     },
     {
       "name": "paper_detail_author_badge_text",
@@ -435,15 +439,15 @@
     },
     {
       "name": "paper_detail_page_background",
-      "value": "#27352E"
+      "value": "#2B302C"
     },
     {
       "name": "paper_detail_content_background",
-      "value": "#27352E"
+      "value": "#2B302C"
     },
     {
       "name": "paper_detail_secondary_background",
-      "value": "#354137"
+      "value": "#363D36"
     },
     {
       "name": "paper_detail_text_primary",
@@ -459,7 +463,7 @@
     },
     {
       "name": "paper_detail_divider",
-      "value": "#4C594C"
+      "value": "#4B534A"
     },
     {
       "name": "paper_detail_accent",
@@ -467,7 +471,7 @@
     },
     {
       "name": "paper_detail_accent_background",
-      "value": "#34473E"
+      "value": "#344139"
     },
     {
       "name": "paper_detail_icon",
@@ -479,7 +483,7 @@
     },
     {
       "name": "paper_detail_bottom_bar_background",
-      "value": "#34473E"
+      "value": "#303A33"
     },
     {
       "name": "paper_detail_float_shadow",
@@ -523,11 +527,11 @@
     },
     {
       "name": "paper_header_start",
-      "value": "#2D4038"
+      "value": "#2C3630"
     },
     {
       "name": "paper_header_end",
-      "value": "#3E4133"
+      "value": "#343A31"
     },
     {
       "name": "paper_nav_text",
@@ -536,6 +540,10 @@
     {
       "name": "paper_nav_selected",
       "value": "#F2A68C"
+    },
+    {
+      "name": "paper_on_accent",
+      "value": "#1D2825"
     }
   ]
 }

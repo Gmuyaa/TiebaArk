@@ -104,7 +104,7 @@ export struct SubReplyPreviewBox {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .borderRadius(10)
+    .borderRadius(9)
     .backgroundColor(DetailTheme.SUB_REPLY_BACKGROUND)
     .onClick(() => {
       this.onOpenDetail();

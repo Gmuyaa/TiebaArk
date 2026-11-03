@@ -1,5 +1,9 @@
 {
   "color": [
+    { "name": "forum_tab_glow_border", "value": "#A0569CFF" },
+    { "name": "forum_tab_glow_shadow", "value": "#60569CFF" },
+    { "name": "sr_active_background", "value": "#CC0A59F7" },
+    { "name": "paper_sr_active_background", "value": "#CC31666A" },
     { "name": "help_answer_tag", "value": "#AD913A" },
     {
       "name": "detail_comment_nickname",
@@ -271,11 +275,11 @@
     },
     {
       "name": "paper_app_bg",
-      "value": "#EDE1CC"
+      "value": "#F3EEE4"
     },
     {
       "name": "paper_app_card",
-      "value": "#FCF5E6"
+      "value": "#FBF9F4"
     },
     {
       "name": "paper_app_text_main",
@@ -295,11 +299,11 @@
     },
     {
       "name": "paper_app_divider",
-      "value": "#D8C8AA"
+      "value": "#DDD6CB"
     },
     {
       "name": "paper_app_surface_muted",
-      "value": "#EFE4D1"
+      "value": "#EFEAE0"
     },
     {
       "name": "paper_app_accent",
@@ -327,7 +331,7 @@
     },
     {
       "name": "paper_app_search_hint",
-      "value": "#2D5B5D"
+      "value": "#68645C"
     },
     {
       "name": "paper_app_meta_text",
@@ -367,7 +371,7 @@
     },
     {
       "name": "paper_app_popup_line",
-      "value": "#D8C8AA"
+      "value": "#DDD6CB"
     },
     {
       "name": "paper_app_note_text",
@@ -379,19 +383,19 @@
     },
     {
       "name": "paper_app_forum_tab_bg",
-      "value": "#FCF5E6"
+      "value": "#FBF9F4"
     },
     {
       "name": "paper_app_nav_fade",
-      "value": "#EDE1CC"
+      "value": "#F3EEE4"
     },
     {
       "name": "paper_app_nav_fade_clear",
-      "value": "#00EDE1CC"
+      "value": "#00F3EEE4"
     },
     {
       "name": "paper_app_bottom_mask",
-      "value": "#33EDE1CC"
+      "value": "#33F3EEE4"
     },
     {
       "name": "paper_detail_comment_nickname",
@@ -435,15 +439,15 @@
     },
     {
       "name": "paper_detail_page_background",
-      "value": "#FCF5E6"
+      "value": "#FBF9F4"
     },
     {
       "name": "paper_detail_content_background",
-      "value": "#FCF5E6"
+      "value": "#FBF9F4"
     },
     {
       "name": "paper_detail_secondary_background",
-      "value": "#EFE4D1"
+      "value": "#EFEAE0"
     },
     {
       "name": "paper_detail_text_primary",
@@ -459,7 +463,7 @@
     },
     {
       "name": "paper_detail_divider",
-      "value": "#D8C8AA"
+      "value": "#DDD6CB"
     },
     {
       "name": "paper_detail_accent",
@@ -479,7 +483,7 @@
     },
     {
       "name": "paper_detail_bottom_bar_background",
-      "value": "#DFE7DA"
+      "value": "#EFEAE0"
     },
     {
       "name": "paper_detail_float_shadow",
@@ -523,11 +527,11 @@
     },
     {
       "name": "paper_header_start",
-      "value": "#DCE4D5"
+      "value": "#EEF1EB"
     },
     {
       "name": "paper_header_end",
-      "value": "#E9DFC9"
+      "value": "#F3EEE4"
     },
     {
       "name": "paper_nav_text",
@@ -536,6 +540,10 @@
     {
       "name": "paper_nav_selected",
       "value": "#923F2D"
+    },
+    {
+      "name": "paper_on_accent",
+      "value": "#FFFFFF"
     }
   ]
 }

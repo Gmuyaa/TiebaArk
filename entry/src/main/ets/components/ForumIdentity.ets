@@ -11,6 +11,13 @@ import { ForumActionButton } from './ForumActionButton';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
+const FORUM_AVATAR_SIZE: number = 64;
+const FORUM_AVATAR_FRAME_SIZE: number = 72;
+const FORUM_AVATAR_OVERLAP: number = 32;
+const FORUM_IDENTITY_ROW_GAP: number = 12;
+/** 大吧名行的起点，供宿主按同一布局阈值交接固定工具栏标题。 */
+export const FORUM_IDENTITY_TITLE_TOP: number = FORUM_AVATAR_FRAME_SIZE - FORUM_AVATAR_OVERLAP + FORUM_IDENTITY_ROW_GAP;
+
 /** 吧头身份区：未关注为关注入口，确认关注后同一按钮切换为签到。 */
 @ComponentV2
 export struct ForumIdentity {
@@ -45,7 +52,6 @@ export struct ForumIdentity {
   @Param avatar: string = '';
   @Param refreshRevision: number = 0;
   @Param memberCount: number = 0;
-  @Param threadCount: number = 0;
   @Event onOpenInformation: () => void = (): void => {};
   @Event onIntroductionVisible: (visible: boolean) => void = (visible: boolean): void => {};
   @Local vm: ForumHeaderVM = new ForumHeaderVM();
@@ -90,64 +96,67 @@ export struct ForumIdentity {
     return this.vm.follow.known && (!this.vm.follow.following || this.vm.follow.pending);
   }
   build() {
-    Column({ space: 10 }) {
-      Row({ space: 12 }) {
-        Row({ space: 12 }) {
-
+    Column({ space: FORUM_IDENTITY_ROW_GAP }) {
+      Row() {
+        Stack() {
           ForumAvatarImage({
             url: this.avatar.length > 0 ? this.avatar : cachedForumAvatar(this.forumName, this.forumId),
-            forumName: this.forumName, avatarSize: 64, radius: forumAvatarRadius(64), onHero: true,
+            forumName: this.forumName, avatarSize: FORUM_AVATAR_SIZE, radius: forumAvatarRadius(FORUM_AVATAR_SIZE),
             bgColor: AppTheme.SURFACE_MUTED
           })
-          Column({ space: 6 }) {
-            Text(this.forumName.endsWith('吧') ? this.forumName : `${this.forumName}吧`)
-              .fontSize(22).fontWeight(FontWeight.Bold).fontColor(Color.White)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-            if (!this.showIntroduction() && this.vm.follow.known && this.vm.follow.following && this.vm.membership.level >= 0) {
-              ForumExperience({ currentScore: this.vm.membership.currentScore,
-                nextScore: this.vm.membership.nextScore, level: this.vm.membership.level,
-                levelName: this.vm.membership.levelName, onHero: true })
-            }
-            if (this.showIntroduction()) {
-              Text(`关注 ${formatCount(this.vm.publicMemberCount >= 0 ? this.vm.publicMemberCount : this.memberCount)}    帖子 ${formatCount(this.vm.publicThreadCount >= 0 ? this.vm.publicThreadCount : this.threadCount)}`)
-                .fontSize(13).fontColor('#DDE3ED').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-          }
-          .layoutWeight(1).alignItems(HorizontalAlign.Start)
         }
-        .layoutWeight(1).height(76).onClick(() => { this.onOpenInformation(); })
-        ForumActionButton({ label: this.vm.buttonLabel(),
-          busy: this.vm.signing || (this.vm.reading && this.vm.membership.signed === undefined),
-          disabled: this.forumId <= 0 || this.vm.follow.pending || this.vm.signing || this.vm.reading,
-          onTap: (): void => { void this.activate(); } })
+        .width(FORUM_AVATAR_FRAME_SIZE).height(FORUM_AVATAR_FRAME_SIZE)
+        .backgroundColor(AppTheme.CARD).borderRadius(forumAvatarRadius(FORUM_AVATAR_SIZE) + 4)
+        .border({ width: 1, color: AppTheme.TEXT_MUTED })
+        .translate({ y: -FORUM_AVATAR_OVERLAP }).flexShrink(0)
+        .id('forum-overlap-avatar').onClick(() => { this.onOpenInformation(); })
       }
-      .width('100%').height(76).alignItems(VerticalAlign.Center)
-      if (this.vm.follow.known && this.vm.follow.following &&
-        (this.vm.membership.continuousCount >= 0 || this.vm.membership.totalCount >= 0)) {
-        Text((this.vm.membership.continuousCount >= 0
-          ? `连续签到 ${this.vm.membership.continuousCount} 天` : '') +
-          (this.vm.membership.continuousCount >= 0 && this.vm.membership.totalCount >= 0 ? '  ·  ' : '') +
-          (this.vm.membership.totalCount >= 0 ? `累计签到 ${this.vm.membership.totalCount} 次` : ''))
-          .fontSize(12).fontColor('#DDE3ED')
-          .width('100%')
+      .width('100%').height(FORUM_AVATAR_FRAME_SIZE - FORUM_AVATAR_OVERLAP)
+      .justifyContent(FlexAlign.SpaceBetween).alignItems(VerticalAlign.Top).clip(false)
+      Column({ space: 6 }) {
+        Row({ space: 12 }) {
+          Text(this.forumName.endsWith('吧') ? this.forumName : `${this.forumName}吧`)
+            .fontSize(20).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            .id('forum-identity-name-line').onClick(() => { this.onOpenInformation(); })
+          ForumActionButton({ label: this.vm.buttonLabel(), onHero: false,
+            busy: this.vm.signing || (this.vm.reading && this.vm.membership.signed === undefined),
+            disabled: this.forumId <= 0 || this.vm.follow.pending || this.vm.signing || this.vm.reading,
+            onTap: (): void => { void this.activate(); } })
+            .flexShrink(0).id('forum-identity-action')
+        }.width('100%').alignItems(VerticalAlign.Center).id('forum-identity-title-row')
+        // FRS 的 thread_num 随分区变化；吧头只使用公共资料的全吧 thread_count。
+        Text(`关注 ${formatCount(this.vm.publicMemberCount >= 0 ? this.vm.publicMemberCount : this.memberCount)}    帖子 ${this.vm.publicThreadCount >= 0 ? formatCount(this.vm.publicThreadCount) : (this.vm.introductionError.length > 0 ? '读取失败' : '--')}`)
+          .fontSize(12).fontColor(AppTheme.TEXT_SUB).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .onClick(() => { this.onOpenInformation(); })
+        if (this.vm.follow.known && this.vm.follow.following && this.vm.membership.level >= 0) {
+          ForumExperience({ currentScore: this.vm.membership.currentScore,
+            nextScore: this.vm.membership.nextScore, level: this.vm.membership.level,
+            levelName: this.vm.membership.levelName, compact: true })
+            .id('forum-membership-summary')
+            .onClick(() => { this.onOpenInformation(); })
+        }
       }
+      .width('100%').alignItems(HorizontalAlign.Start)
       if (this.showIntroduction()) {
         Row({ space: 8 }) {
-          Text('吧简介').fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White)
+          Text('吧简介').fontSize(12).fontColor(AppTheme.TEXT_SUB)
           Text(this.vm.introductionLoading ? '正在读取吧简介…' :
-            (this.vm.introductionError || this.vm.introduction || '暂无吧简介'))
-            .fontSize(13).fontColor('#DDE3ED').layoutWeight(1).maxLines(2)
+            (this.vm.introductionError || this.vm.introduction || '暂无简介'))
+            .fontSize(13).fontColor(AppTheme.TEXT_SUB).layoutWeight(1).maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor(['#DDE3ED'])
+          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).fontColor([AppTheme.TEXT_SUB])
         }
-        .width('100%').height(44).alignItems(VerticalAlign.Top)
+        .width('100%').constraintSize({ minHeight: 32 }).alignItems(VerticalAlign.Center)
+        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+        .backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(10).id('forum-introduction-summary')
         .onClick(() => {
           if (this.vm.introductionError.length > 0) { void this.vm.ensureIntroduction(this.context(), true); }
           else { this.onOpenInformation(); }
         })
       }
     }
-    .width('100%')
+    .width('100%').clip(false)
     .onVisibleAreaChange([1], (visible: boolean) => {
       if (visible) { void this.vm.ensureMembership(this.context()); }
     })

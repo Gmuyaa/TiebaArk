@@ -1,32 +1,30 @@
+import { ImageMenuPosition } from './ImageMenuPosition';
+import { smartReachStore } from '../common/appearance/SmartReachStore';
+import { HdsTabs } from '@kit.UIDesignKit';
+import { materialManager } from '../common/material/MaterialManager';
+import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { SavedEmojiManagerVM } from '../viewmodel/SavedEmojiManagerVM';
+import { ImageUploadInput } from '../model/ImageUpload';
+import { ImageTransitionSeed, takeImageTransition, animateImageTransition } from './ImageTransition';
 /** 全屏图片查看器，支持缩放、滑动切换、导出与当前图片超分。 */
 
 import { promptAction, window } from '@kit.ArkUI';
+import { AppTheme } from '../theme/Theme';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { KeyCode } from '@ohos.multimodalInput.keyCode';
 import {
-  copyImageToPasteboard,
   fetchImageBytes,
   imageFileName,
   saveImageToGallery,
   shareImageFile,
   writeImageToCache
 } from '../utils/ImageExport';
-import { srEncodePixelMap } from '../utils/ImageSuperResolution';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import {
-  SR_BUTTON_BASE,
-  SR_BUTTON_ICON,
-  SR_BUTTON_INSET,
-  SR_BUTTON_MARGIN,
-  SR_BUTTON_TOUCH,
-  SrButtonBox,
-  SrStatus,
-  srButtonPosition,
-  srExportFileName,
-  srExportFormat,
-  srFormatExtension
+  SrStatus, SR_BUTTON_BASE, SR_BUTTON_ICON, SR_BUTTON_INSET, SR_BUTTON_MARGIN, SR_BUTTON_TOUCH,
+  SrButtonBox, srButtonPosition
 } from '../model/ImageSuperResolution';
 import {
   ImageSuperResolutionSession,
@@ -38,7 +36,7 @@ const MIN_SCALE: number = 1;
 const MAX_SCALE: number = 4;
 const DOUBLE_TAP_SCALE: number = 2;
 const ANIMATION_DURATION: number = 180;
-/** 导出菜单日志（／真机取证用；只记状态与地址前 60 字符，不含凭据） */
+/** 导出菜单日志（C-06／H-07 真机取证用；只记状态与地址前 60 字符，不含凭据） */
 const EXPORT_DOMAIN: number = 0x0;
 const EXPORT_TAG: string = 'ImageViewerExport';
 
@@ -64,7 +62,7 @@ enum ImageLoadState {
  *
  * 曾经这里挂着一个 `@Observed class PageViewState` + 父组件持有数组 + `@ObjectLink`，
  * 目的是"翻页时不重建页面，同时把离开的那页缩放复位"。实测发现这条路**没有意义**：
- * 本页放大后 `PanGesture`（`ZoomedImage` 上那条，`distance: 5`）会独占横向手势，
+ * 本页放大后 `PanGesture`（`InteractiveImage` 上那条，`distance: 5`）会独占横向手势，
  * `swipe` 与 `fling` 都推不动 `Swiper`（实测页码纹丝不动停在 `1 / 8`）——
  * 也就是说**放大状态下根本切不了页**，"翻页时复位别的页"永远不会发生。
  * 于是退回页内 `@State`：新页在 `aboutToAppear` 里自然回到 1x，够用且少一层状态。
@@ -73,10 +71,11 @@ enum ImageLoadState {
 @Component
 struct ZoomableImagePage {
   imageUrl: string = '';
+  @Prop transitionId: string = '';
+  transitionPreview: string = '';
 
-  onTapImage: () => void = (): void => {};
-  /** 长按画面：打开导出菜单（／） */
   onLongPressImage: () => void = (): void => {};
+  onTapImage: () => void = (): void => {};
 
   @State private zoomScale: number = MIN_SCALE;
   @State private panX: number = 0;
@@ -87,13 +86,13 @@ struct ZoomableImagePage {
   @State private sourceHeight: number = 0;
   @State private loadState: ImageLoadState = ImageLoadState.LOADING;
   @State private retryCount: number = 0;
-  /** 顶部避让区（状态栏）高度 vp：超分按钮不得钻到状态栏底下 */
-  @State private topSafeVp: number = 0;
 
   /** 本页在图片列表里的下标（回调时原样带回，不依赖 `currentIndex` 的时序） */
-  index: number = 0;
-  /** 点超分按钮：由查看器决定语义（起任务 / 关闭 / 只解释原因） */
+  @State private topSafeVp: number = 0;
+  private srTouchActive: boolean = false;
+  private srGuardUntil: number = 0;
   onSuperResolutionToggle: (index: number) => void = (): void => {};
+  index: number = 0;
   /** 解码成功时把**真实像素尺寸**报给查看器：尺寸不合规的图在点击前就能灰显 */
   onImageDecoded: (index: number, width: number, height: number) => void = (): void => {};
   /**
@@ -103,8 +102,6 @@ struct ZoomableImagePage {
    */
   @ObjectLink sr: PageSuperResolutionState;
 
-  private srTouchActive: boolean = false;
-  private srGuardUntil: number = 0;
 
   private pinchBase: number = MIN_SCALE;
   private panBaseX: number = 0;
@@ -132,10 +129,7 @@ struct ZoomableImagePage {
         const rect = win.getWindowProperties().windowRect;
         this.containerWidth = rect.width > 0 ? px2vp(rect.width) : this.containerWidth;
         this.containerHeight = rect.height > 0 ? px2vp(rect.height) : this.containerHeight;
-        // 查看器用 expandSafeArea 铺满全屏，状态栏是叠在上面画的 ——
-        // 超分按钮要靠避让区把自己压到状态栏下面，否则会和时钟/电量叠在一起。
-        const area: window.AvoidArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-        this.topSafeVp = px2vp(area.topRect.height);
+        this.topSafeVp = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height);
       }).catch(() => {
         // onAreaChange 会提供更精确的组件尺寸；这里仅作为早期兜底。
       });
@@ -152,7 +146,7 @@ struct ZoomableImagePage {
     return `${this.imageUrl}${separator}preview_retry=${this.retryCount}`;
   }
 
-  // ───────────────────────── 图像超分：本页按钮 ─────────────────────────
+  // ───────────────────────── 图像超分显示 ─────────────────────────
 
   /** 当前显示的是不是增强图。**增强图与原图各自独立引用**，原图 URL 始终留着 */
   private showingEnhanced(): boolean {
@@ -192,6 +186,9 @@ struct ZoomableImagePage {
     if (this.sr.status === SrStatus.UNAVAILABLE) {
       return '#80FFFFFF';
     }
+    if (this.sr.status === SrStatus.ON) {
+      return AppTheme.ON_ACCENT;
+    }
     return Color.White;
   }
 
@@ -200,8 +197,8 @@ struct ZoomableImagePage {
       return '#33000000';
     }
     if (this.sr.status === SrStatus.ON) {
-      // 与主题强调色同源（`#0A59F7`）：开启成功才变蓝，一眼能看出"现在看的是增强图"
-      return '#CC0A59F7';
+      // 开启成功使用当前主题强调色的半透明底。
+      return AppTheme.SR_ACTIVE_BACKGROUND;
     }
     return '#66000000';
   }
@@ -385,7 +382,8 @@ struct ZoomableImagePage {
   }
 
   @Builder
-  private ZoomedImage() {
+  /** 缩放始终使用同一棵图片子树，跨过1倍时不销毁/重建Image。 */
+  private InteractiveImage() {
     Stack() {
       this.PreviewImage()
     }
@@ -393,11 +391,13 @@ struct ZoomableImagePage {
     .height('100%')
       .gesture(
         PanGesture({ fingers: 1, distance: 5 })
+          .tag('image-zoom-pan')
           .onActionStart(() => {
             this.panBaseX = this.panX;
             this.panBaseY = this.panY;
           })
           .onActionUpdate((event: GestureEvent) => {
+            if (this.zoomScale <= MIN_SCALE) { return; }
             this.panX = this.panBaseX + event.offsetX;
             this.panY = this.panBaseY + event.offsetY;
             this.clampOffsets();
@@ -406,6 +406,13 @@ struct ZoomableImagePage {
             this.clampOffsets();
           })
       )
+      .parallelGesture(LongPressGesture({ duration: 450 })
+        .onAction((): void => { if (!this.srBlocked()) { this.onLongPressImage(); } }))
+      .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
+        // 1倍时拒绝本层拖动识别，把横滑交给Swiper；手势门控不改变图片节点。
+        return info.tag === 'image-zoom-pan' && this.zoomScale <= MIN_SCALE
+          ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
+      })
   }
 
   @Builder
@@ -435,22 +442,21 @@ struct ZoomableImagePage {
 
   build() {
     Stack() {
-      /*
-       * ① 手势层：图片 + 缩放/拖动/单击(关闭)/双击(放大)/长按(导出菜单)。
-       *
-       * 超分按钮**刻意不放这一层**：放在这里它会和 TapGesture(count:1) 抢手势竞技场，
-       * 点按钮有概率被判定成"单击画面 → 关闭查看器"。见 ②。
-       */
+      // 图片手势层；菜单触摸由查看器顶层承接。
       Stack() {
-        if (this.zoomScale > MIN_SCALE) {
-          this.ZoomedImage()
-        } else {
-          this.PreviewImage()
+        // 原图还在请求/解码时承接已显示的缩略图，避免展开成一块空白。
+        if (this.loadState === ImageLoadState.LOADING && this.transitionPreview.length > 0) {
+          Image(this.transitionPreview).width('100%').height('100%').objectFit(ImageFit.Contain)
         }
+        this.InteractiveImage()
         this.LoadOverlay()
       }
       .width('100%')
       .height('100%')
+      .geometryTransition(this.transitionId)
+      .renderFit(RenderFit.RESIZE_FILL)
+      // 放大/拖动后的图像不能越过正在收缩的共享元素边界，否则白色图片会留下大框。
+      .clip(true)
       .onAreaChange((oldValue: Area, newValue: Area) => {
         this.containerWidth = newValue.width as number;
         this.containerHeight = newValue.height as number;
@@ -470,43 +476,15 @@ struct ZoomableImagePage {
             }),
           TapGesture({ count: 2 })
             .onAction(() => {
-              if (this.srBlocked()) {
-                return;
-              }
-              this.toggleDoubleTapZoom();
+              if (!this.srBlocked()) { this.toggleDoubleTapZoom(); }
             }),
           TapGesture({ count: 1 })
             .onAction(() => {
-              if (this.srBlocked()) {
-                return;
-              }
-              this.onTapImage();
+              if (!this.srBlocked()) { this.onTapImage(); }
             })
         )
       )
-
-      .parallelGesture(
-        LongPressGesture({ repeat: false, duration: 400 })
-          .onAction(() => {
-            if (this.srBlocked()) {
-              return;
-            }
-            hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'gesture longpress fired');
-            this.onLongPressImage();
-          })
-      )
-
-      /*
-       * ② 超分按钮层：**独立兄弟节点**，压在手势层之上。
-       *
-       * 命中测试只走最上面那个节点，因此手指落在按钮上时，①那一层根本收不到这次触摸 ——
-       * 单击关闭、双击放大、长按导出、拖动都不会被误触发，按钮的 `onClick` 也不会被手势吃掉。
-       * 按钮位置由 `srButtonPosition()` 算：贴着图片显示区域右上角，且始终留在屏幕可操作区域内。
-       *
-       * 设置里把「图像超分」关掉后**整层都不渲染**（连"本机不支持"的灰显也不留位），
-       * 这就是那个开关的唯一作用；超分本身仍是每张图各自的手动动作。
-       */
-      if (superResolutionStore.enabled) {
+      if (smartReachStore.imageMenuLongPress && superResolutionStore.enabled) {
         this.SuperResolutionButton()
       }
     }
@@ -521,12 +499,17 @@ export struct ImageViewer {
   imageUrls: string[] = [];
   initialIndex: number = 0;
   onClose: () => void = (): void => {};
+  private imageTransition: ImageTransitionSeed = new ImageTransitionSeed();
 
   /** 当前页下标：驱动 `Swiper.index` 与底部页码 */
   @State private currentIndex: number = 0;
   /** 底部安全区（系统手势条高度，vp）：页码贴底时用它把文字顶到手势条之上 */
   @State private bottomSafeVp: number = 0;
-  /** 导出菜单是否打开（／） */
+  @State private menuHidden: boolean = false;
+  @State private menuRevealed: boolean = false;
+  @State private viewerWidth: number = 0;
+  @State private viewerHeight: number = 0;
+  /** 导出是否已初始化 */
   @State private exportOpen: boolean = false;
   /** 导出准备状态：0 未开始｜1 下载中｜2 就绪｜3 失败 */
   @State private exportState: number = 0;
@@ -534,20 +517,16 @@ export struct ImageViewer {
   @State private exportError: string = '';
   /** 正在执行的动作名（防重复点击，仅用于提示） */
   @State private exportBusy: string = '';
-  /**
-   * 超分状态变化的计数器。
-   *
-   * 按钮在页组件里走 `@ObjectLink`，不依赖它；它只服务于**导出菜单**：
-   * `srStates` 是普通数组（不参与 ArkUI 观察），菜单里"增强图"那一段是否出现
-   * 必须靠一个真正的 `@State` 参与求值才会跟着重算（见 `showEnhancedSection()`）。
-   */
+  /** 推动菜单重读当前图片的超分状态。 */
   @State private srTick: number = 0;
 
   /** 已下载的图片字节与沙箱文件 URI（非状态，避免深观察大数组） */
   private exportBytes: Uint8Array | null = null;
   private exportUri: string = '';
-  /** 长按抬手后的一小段时间内忽略"单击关闭"（长按与单击可能同时被判定，见 parallelGesture 注释） */
+  /** 操作完成后一小段时间内忽略单击关闭 */
   private suppressCloseUntil: number = 0;
+  private exportEpoch: number = 0;
+  private emojiManager: SavedEmojiManagerVM = new SavedEmojiManagerVM();
 
   /** 本次看图会话的超分状态机（打开时建、关闭时 `close()` 释放） */
   private srSession: ImageSuperResolutionSession = new ImageSuperResolutionSession();
@@ -557,14 +536,19 @@ export struct ImageViewer {
   aboutToAppear(): void {
     const urls: string[] = this.effectiveImageUrls();
     this.currentIndex = this.clampedIndex(this.initialIndex, urls.length);
+    this.imageTransition = takeImageTransition(urls[this.currentIndex] || '');
     this.buildSrStates(urls);
     this.readSafeArea();
     this.hideSystemStatusBar();
+    smartReachStore.load(this.hostContext());
+    this.openExport();
   }
 
   aboutToDisappear(): void {
     // 会话结束：使在飞任务失效、清空增强图缓存、在安全时机释放分析器
     this.srSession.close();
+    ++this.exportEpoch;
+    this.emojiManager.dispose();
     this.restoreSystemStatusBar();
   }
 
@@ -627,7 +611,7 @@ export struct ImageViewer {
     return this.srSession.stateFor(url);
   }
 
-  /** 翻页 / 长按换页时同步"当前图"：切走会让在飞任务的**结果作废**（底层仍会跑完） */
+  /** 翻页时同步"当前图"：切走会让在飞任务的**结果作废**（底层仍会跑完） */
   private syncSrCurrent(index: number): void {
     const urls: string[] = this.effectiveImageUrls();
     if (index < 0 || index >= urls.length) {
@@ -646,7 +630,7 @@ export struct ImageViewer {
     this.srSession.noteDecodedSize(urls[index], width, height);
   }
 
-  /** 点一次超分按钮（页组件回调）；提示文案由会话决定，这里只负责原话展示 */
+  /** 点击胶囊内超分图标；提示文案由会话决定，这里只负责原话展示 */
   private async toggleSuperResolution(index: number): Promise<void> {
     const urls: string[] = this.effectiveImageUrls();
     if (index < 0 || index >= urls.length) {
@@ -654,7 +638,9 @@ export struct ImageViewer {
     }
     hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'sr toggle index=%{public}d url=%{public}s',
       index, urls[index].slice(0, 60));
-    const outcome: SrToggleResult = await this.srSession.toggle(urls[index]);
+    const pending: Promise<SrToggleResult> = this.srSession.toggle(urls[index]);
+    this.srTick += 1;
+    const outcome: SrToggleResult = await pending;
     this.srTick += 1;
     if (outcome.message.length > 0) {
       this.toast(outcome.message);
@@ -712,7 +698,7 @@ export struct ImageViewer {
     }
   }
 
-  // ───────────────────────── ／长按导出 ─────────────────────────
+  // ───────────────────────── 当前图片准备与导出 ─────────────────────────
 
   /** 当前页地址 */
   private currentUrl(): string {
@@ -728,7 +714,7 @@ export struct ImageViewer {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
-  /** 长按：打开菜单并**先把图下下来**（安全控件的授权窗口很短，不能在点保存时才去下载） */
+  /** 打开查看器或切图后预先准备当前原图，下载失败可点图标重试 */
   private openExport(): void {
     hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'openExport index=%{public}d url=%{public}s',
       this.currentIndex, this.currentUrl().slice(0, 60));
@@ -743,8 +729,10 @@ export struct ImageViewer {
 
   private async prepareExport(): Promise<void> {
     const url: string = this.currentUrl();
+    const mine: number = ++this.exportEpoch;
     try {
       const bytes: Uint8Array = await fetchImageBytes(url);
+      if (mine !== this.exportEpoch || !this.exportOpen) { return; }
       const name: string = imageFileName(url, this.currentIndex);
       const uri: string = writeImageToCache(this.hostContext(), bytes, name);
       this.exportBytes = bytes;
@@ -752,26 +740,25 @@ export struct ImageViewer {
       this.exportState = 2;
       hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'prepare ok bytes=%{public}d', bytes.length);
     } catch (err) {
+      if (mine !== this.exportEpoch || !this.exportOpen) { return; }
       this.exportState = 3;
       this.exportError = err instanceof Error ? err.message : String(err);
+      this.toast('图片准备失败，点击分享或表情图标重试');
       hilog.error(EXPORT_DOMAIN, EXPORT_TAG, 'prepare failed: %{public}s', this.exportError);
     }
   }
 
   private closeExport(): void {
-    this.exportOpen = false;
-    this.exportState = 0;
-    this.exportError = '';
-    this.exportBusy = '';
-    this.exportBytes = null;
-    this.exportUri = '';
+    // 常显模式保留胶囊；长按模式完成操作后收起，下一次长按再显示。
+    if (smartReachStore.imageMenuLongPress) { this.menuRevealed = false; }
+    this.suppressCloseUntil = Date.now() + 400;
   }
 
   private toast(message: string): void {
     promptAction.showToast({ message: message, duration: 2000 });
   }
 
-  /** 保存到相册：只在 `SaveButton` 授权成功后调用（见 utils/ImageExport 头注释） */
+  /** 保存到相册：安全控件授权成功后直接保存到相册 */
   private async saveToGallery(): Promise<void> {
     if (this.exportState !== 2 || this.exportUri.length === 0) {
       hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'save skipped state=%{public}d uri=%{public}d',
@@ -789,28 +776,6 @@ export struct ImageViewer {
       hilog.error(EXPORT_DOMAIN, EXPORT_TAG, 'save failed: %{public}s',
         err instanceof Error ? err.message : String(err));
       this.toast(`保存失败：${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      this.exportBusy = '';
-    }
-  }
-
-  private async copyImage(): Promise<void> {
-    if (this.exportBytes === null || this.exportState !== 2) {
-      hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'copy skipped state=%{public}d bytes=%{public}d',
-        this.exportState, this.exportBytes === null ? -1 : this.exportBytes.length);
-      this.toast('图片还没准备好');
-      return;
-    }
-    this.exportBusy = 'copy';
-    try {
-      await copyImageToPasteboard(this.exportBytes);
-      hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'copy ok');
-      this.toast('已复制图片');
-      this.closeExport();
-    } catch (err) {
-      hilog.error(EXPORT_DOMAIN, EXPORT_TAG, 'copy failed: %{public}s',
-        err instanceof Error ? err.message : String(err));
-      this.toast(`复制失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.exportBusy = '';
     }
@@ -837,48 +802,88 @@ export struct ImageViewer {
     }
   }
 
-  /** 菜单里的段标题：把"原图"和"增强图"两段分开，避免两张「保存图片」分不清 */
-  @Builder
-  private ExportSectionLabel(label: string) {
-    Row() {
-      Text(label)
-        .fontSize(13)
-        .fontColor('#B3FFFFFF')
+  private async collectImage(): Promise<void> {
+    const bytes: Uint8Array | null = this.exportBytes;
+    if (this.exportBusy.length > 0 || bytes === null || this.exportState !== 2) { return; }
+    this.exportBusy = 'emoji';
+    let source: image.ImageSource | null = null;
+    try {
+      source = image.createImageSource(bytes.buffer as ArrayBuffer);
+      const info: image.ImageInfo = await source.getImageInfo();
+      const input: ImageUploadInput = new ImageUploadInput();
+      input.bytes = bytes; input.width = info.size.width; input.height = info.size.height;
+      input.forCollection = true;
+      const added: boolean = await this.emojiManager.addImage(this.hostContext(), input);
+      this.toast(added ? '已收藏到表情' : this.emojiManager.error || '未完成收藏，请重试');
+      if (added) { this.closeExport(); }
+    } catch (err) {
+      this.toast('收藏失败，请重试');
+    } finally {
+      if (source !== null) { source.release(); }
+      this.exportBusy = '';
     }
-    .width('100%')
-    .padding({ left: 20, right: 20, top: 10, bottom: 2 })
+  }
+
+  private menuReady(): boolean { return this.exportState === 2 && this.exportBusy.length === 0; }
+
+  private retryExport(): void {
+    if (this.exportState === 3 && this.exportBusy.length === 0) {
+      this.exportState = 1;
+      this.toast('正在重新准备图片');
+      this.prepareExport();
+    }
   }
 
   @Builder
-  private SaveToGalleryButton(kind: number) {
-    SaveButton({ icon: SaveIconStyle.FULL_FILLED, text: SaveDescription.SAVE_IMAGE })
-      .iconSize(22)
-      .fontSize(16)
-      .fontColor(Color.White)
-      .backgroundColor(Color.Transparent)
-      .width('100%')
-      .height(52)
-      .padding({ left: 12 })
-      .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
-        if (result !== SaveButtonOnClickResult.SUCCESS) {
-          hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'save not authorized result=%{public}d', result);
-          this.toast('未获得保存授权');
-          return;
-        }
-        if (kind === 5) {
-          this.exportEnhanced(false);
-        } else {
+  private MenuIcon(icon: Resource, label: string, kind: number) {
+    Stack() {
+      if (this.exportBusy === (kind === 0 ? 'save' : kind === 1 ? 'share' : 'emoji')) {
+        LoadingProgress().width(20).height(20).color(AppTheme.TEXT_MAIN)
+      } else {
+        SymbolGlyph(icon).fontSize(20).fontColor([AppTheme.TEXT_MAIN])
+      }
+    }
+    .width(36).height(36).backgroundColor(Color.Transparent)
+    .opacity(this.menuReady() ? 1 : 0.45)
+    .accessibilityText(label).accessibilityLevel('yes')
+    .onClick((): void => {
+      if (this.exportState === 3) { this.retryExport(); return; }
+      if (!this.menuReady()) { this.toast(this.exportBusy ? '正在处理，请稍候' : '图片准备中'); return; }
+      if (kind === 0) {
+        this.saveToGallery();
+      } else if (kind === 1) {
+        this.shareImage();
+      } else { this.collectImage(); }
+    })
+  }
+
+  @Builder
+  private SaveToGalleryButton() {
+    Row() {
+      SaveButton({ icon: SaveIconStyle.FULL_FILLED, text: SaveDescription.SAVE, buttonType: ButtonType.Normal })
+        .iconSize(22)
+        .fontSize(16)
+        .fontColor(Color.White)
+        .backgroundColor('#1C1C1E')
+        .height(52)
+        .padding({ left: 20, right: 20 })
+        .textIconSpace(12)
+        .enabled(this.menuReady())
+        .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
+          if (result !== SaveButtonOnClickResult.SUCCESS) {
+            hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'save not authorized result=%{public}d', result);
+            this.toast('未获得保存授权');
+            return;
+          }
           this.saveToGallery();
-        }
-      })
+        })
+    }.width('100%').height(52)
   }
 
   @Builder
   private ExportRow(icon: Resource, label: string, kind: number) {
     Row({ space: 12 }) {
-      SymbolGlyph(icon)
-        .fontSize(22)
-        .fontColor([this.exportRowColor(kind)])
+      SymbolGlyph(icon).fontSize(22).fontColor([this.exportRowColor(kind)])
       Text(label)
         .fontSize(16)
         .fontColor(this.exportRowColor(kind))
@@ -892,13 +897,11 @@ export struct ImageViewer {
     })
   }
 
-  /** 行的可用性：复制/分享原图依赖原图已就绪；增强图的保存/分享依赖增强图已生成 */
+  /** 分享与表情收藏依赖原图就绪；处理中禁止重复操作。 */
   private exportRowEnabled(kind: number): boolean {
-    if (kind === 0 || kind === 1) {
+    if (this.exportBusy.length > 0) { return false; }
+    if (kind === 1 || kind === 6) {
       return this.exportState === 2;
-    }
-    if (kind === 5) {
-      return this.enhancedReady();
     }
     return true;
   }
@@ -914,12 +917,11 @@ export struct ImageViewer {
       this.toast('图片还没准备好');
       return;
     }
-    if (kind === 0) {
-      this.copyImage();
-    } else if (kind === 1) {
+    if (kind === 1) {
       this.shareImage();
-    } else if (kind === 5) {
-      this.exportEnhanced(true);
+    } else if (kind === 6) {
+      this.collectImage();
+
     } else if (kind === 2) {
       this.exportState = 1;
       this.exportError = '';
@@ -929,91 +931,19 @@ export struct ImageViewer {
     }
   }
 
-  // ───────────────────────── 图像超分：增强图导出 ─────────────────────────
+  // 当前图片的超分仅用于查看；保存、分享始终使用已下载原图。
 
   /** 当前页的状态对象（页码越界返回 null） */
   private currentSrState(): PageSuperResolutionState | null {
-    const index: number = this.currentIndex;
+    const index: number = this.srTick >= 0 ? this.currentIndex : -1;
     if (index < 0 || index >= this.srStates.length) {
       return null;
     }
     return this.srStates[index];
   }
 
-  /**
-   * 当前图是否有**可导出的增强图**。
-   * 处理中、失败、结果被淘汰都不算 —— 这些情况下菜单里不出现增强图那一段。
-   */
-  private enhancedReady(): boolean {
-    const state: PageSuperResolutionState | null = this.currentSrState();
-    return state !== null && state.hasResult && state.pixelMap !== null
-      && state.status !== SrStatus.PROCESSING;
-  }
-
-  /**
-   * 菜单里要不要显示"增强图"那一段。
-   *
-   * `this.srTick >= 0` 不是废话：`srStates` 是普通数组，ArkUI 不观察它，
-   * 必须让一个真正的 `@State` 参与这次求值，状态变化后菜单才会重算。
-   */
-  private showEnhancedSection(): boolean {
-    return this.srTick >= 0 && this.enhancedReady();
-  }
-
-  /**
-   * 导出增强图（保存到相册 / 分享）。
-   *
-   * **开始时钉住图片身份与结果版本**：编码是异步的，期间翻页不能把"导出这张"
-   * 变成"导出另一张"。编码回来后再核对版本，变了就如实说"请重新导出"，不交一份错文件。
-   * 增强图用**独立缓存文件名**（`tieba_sr_*`），不覆盖原图缓存。
-   * 保存同样走 `SaveButton` 安全控件授权后的调用，**不扩大权限范围**。
-   */
-  private async exportEnhanced(share: boolean): Promise<void> {
-    const state: PageSuperResolutionState | null = this.currentSrState();
-    const held: image.PixelMap | null = state === null ? null : state.pixelMap;
-    if (state === null || held === null || !this.enhancedReady()) {
-      this.toast('增强图还没准备好');
-      return;
-    }
-    const pinnedKey: string = state.key;
-    const pinnedVersion: number = state.resultVersion;
-    const format: string = srExportFormat(state.resultHasAlpha);
-    const extension: string = srFormatExtension(format);
-    hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'enhanced export start share=%{public}s ver=%{public}d',
-      String(share), pinnedVersion);
-    this.exportBusy = share ? 'share-sr' : 'save-sr';
-    this.srSession.setExportPin(pinnedKey);
-    try {
-      const encoded: ArrayBuffer = await srEncodePixelMap(held, format, 100);
-      if (state.resultVersion !== pinnedVersion || state.pixelMap === null) {
-        hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'enhanced export aborted: result changed');
-        this.toast('增强图已更新，请重新导出');
-        return;
-      }
-      const uri: string = writeImageToCache(this.hostContext(), new Uint8Array(encoded),
-        srExportFileName(this.currentIndex, Date.now(), extension));
-      if (share) {
-        await shareImageFile(this.hostContext(), uri, '贴吧图片（超分）');
-        hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'enhanced share panel shown');
-        this.toast('已打开分享面板');
-      } else {
-        await saveImageToGallery(this.hostContext(), uri);
-        hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'enhanced save ok');
-        this.toast('已保存增强图到相册');
-      }
-      this.closeExport();
-    } catch (err) {
-      const message: string = err instanceof Error ? err.message : String(err);
-      hilog.error(EXPORT_DOMAIN, EXPORT_TAG, 'enhanced export failed: %{public}s', message);
-      this.toast(`${share ? '分享' : '保存'}失败：${message}`);
-    } finally {
-      this.srSession.clearExportPin();
-      this.exportBusy = '';
-    }
-  }
-
   @Builder
-  private ExportSheet() {
+  private BottomExportSheet() {
     Column() {
       // 遮罩：点它只关菜单，不关查看器
       Column()
@@ -1051,37 +981,85 @@ export struct ImageViewer {
             .padding({ left: 20, right: 20, bottom: 8 })
           this.ExportRow($r('sys.symbol.exclamationmark_circle'), '重试', 2)
         } else {
-          // 原图段：保存 / 复制 / 分享**依旧只针对原图**，增强图不顶替它
-          this.ExportSectionLabel('原图')
-          this.SaveToGalleryButton(4)
-          // 复制用 `doc_text_on_doc_text`（与评论长按「复制全部」同一枚，项目已验证可编译可渲染）
-          this.ExportRow($r('sys.symbol.doc_text_on_doc_text'), '复制图片', 0)
-
-          this.ExportRow($r('sys.symbol.arrow_up_right'), '分享图片', 1)
-
-          /*
-           * 增强图段：**只有真的存在一份增强结果时才出现**。
-           * 处理中 / 失败 / 结果已被淘汰都不显示可执行的导出项（`showEnhancedSection()`）。
-           * 段标题把两张"保存图片"区分开：安全控件的文案由系统给，改不了。
-           */
-          if (this.showEnhancedSection()) {
-            this.ExportSectionLabel('增强图（图像超分结果）')
-            this.SaveToGalleryButton(5)
-            this.ExportRow($r('sys.symbol.arrow_up_right'), '分享增强图', 5)
-          }
+          this.SaveToGalleryButton()
+          this.ExportRow($r('sys.symbol.arrow_up_right'), '分享', 1)
+          this.ExportRow($r('sys.symbol.face_smiling'), '收藏到表情', 6)
         }
-
-        Divider().color('#33FFFFFF').margin({ top: 4 })
-        this.ExportRow($r('sys.symbol.xmark'), '取消', 3)
       }
       .width('100%')
-      .backgroundColor('#E61C1C1E')
+      .backgroundColor('#1C1C1E')
       .borderRadius({ topLeft: 18, topRight: 18 })
       // 底部留白至少 12vp：真机实测 `TYPE_SYSTEM` 避让区在查看器里可能返回 0
       .padding({ bottom: Math.max(this.bottomSafeVp, 12) + 8 })
     }
     .width('100%')
     .height('100%')
+    .id('image-bottom-menu')
+  }
+
+  @Builder
+  private CapsuleBacking() { Row().width('100%').height('100%') }
+
+  @Builder
+  private CapsuleContent() {
+    Column({ space: 2 }) {
+      SaveButton({ icon: SaveIconStyle.LINES, buttonType: ButtonType.Circle })
+        .iconSize(20).iconColor(AppTheme.TEXT_MAIN)
+        // 安全控件背景alpha低于0x1a会强制变成不透明，使用系统允许的最低值。
+        .backgroundColor('#1A000000').width(36).height(36).padding(8)
+        .enabled(this.menuReady())
+        .onClick((_event: ClickEvent, result: SaveButtonOnClickResult): void => {
+          if (!this.menuReady()) { return; }
+          if (result !== SaveButtonOnClickResult.SUCCESS) { this.toast('未获得保存授权'); return; }
+          this.saveToGallery();
+        })
+      this.MenuIcon($r('sys.symbol.arrow_up_right'), '分享图片', 1)
+      this.MenuIcon($r('sys.symbol.face_smiling'), '添加到表情收藏', 2)
+      if (superResolutionStore.enabled) {
+        Stack() {
+          if (this.currentSrState()?.status === SrStatus.PROCESSING) {
+            LoadingProgress().width(20).height(20).color(AppTheme.TEXT_MAIN)
+          } else {
+            SymbolGlyph(this.currentSrState()?.status === SrStatus.ON
+              ? $r('sys.symbol.wand_and_stars_fill') : $r('sys.symbol.wand_and_stars'))
+              .fontSize(20).fontColor([this.currentSrState()?.status === SrStatus.ON ? AppTheme.ACCENT : AppTheme.TEXT_MAIN])
+          }
+        }.width(36).height(36).backgroundColor(Color.Transparent)
+          .opacity(this.currentSrState()?.status === SrStatus.UNAVAILABLE ? 0.45 : 1)
+          .accessibilityText(this.currentSrState()?.status === SrStatus.ON ? '关闭图像超分' : '开启图像超分')
+          .accessibilityLevel('yes')
+          .onClick((): void => {
+            if (this.exportBusy.length > 0) { this.toast('正在处理，请稍候'); return; }
+            this.toggleSuperResolution(this.currentIndex);
+          })
+      }
+      Stack() {
+        SymbolGlyph($r('sys.symbol.eye_slash')).fontSize(20).fontColor([AppTheme.TEXT_MAIN])
+      }.width(36).height(36).accessibilityText('本次查看隐藏菜单').accessibilityLevel('yes')
+        .onClick((): void => { this.menuHidden = true; this.suppressCloseUntil = Date.now() + 400; })
+    }.padding(6).width(48).height(superResolutionStore.enabled ? 200 : 162)
+  }
+
+  @Builder
+  private ExportSheet() {
+    Stack() {
+        HdsTabs({ barPosition: BarPosition.End }) {
+          TabContent() {}.tabBar(this.CapsuleBacking())
+        }
+        .barHeight(superResolutionStore.enabled ? 200 : 162)
+        .barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
+        .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
+        .barFloatingStyle({
+          barWidth: { smallWidth: 48, mediumWidth: 48, largeWidth: 48 },
+          barSideMargin: 0, barBottomMargin: 0, gradientMask: SPLIT_PILL_GRADIENT_MASK,
+          thermoCtrl: true, systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.SHEET)
+        })
+        .width(48).height(superResolutionStore.enabled ? 200 : 162).hitTestBehavior(HitTestMode.None)
+        this.CapsuleContent()
+      }
+      .width(48).height(superResolutionStore.enabled ? 200 : 162).borderRadius(24).clip(true)
+
+      .id('image-action-capsule')
   }
 
   build() {
@@ -1092,26 +1070,31 @@ export struct ImageViewer {
           ForEach(this.effectiveImageUrls(), (url: string, index: number) => {
             ZoomableImagePage({
               imageUrl: url,
+              transitionId: index === this.initialIndex && this.currentIndex === this.initialIndex
+                ? this.imageTransition.id : '',
+              transitionPreview: index === this.initialIndex ? this.imageTransition.preview : '',
               index: index,
               sr: this.srStateAt(index, url),
-              onSuperResolutionToggle: (tapped: number): void => {
-                this.toggleSuperResolution(tapped);
+              onSuperResolutionToggle: (index: number): void => {
+                if (this.exportBusy.length === 0) { this.toggleSuperResolution(index); }
               },
               onImageDecoded: (decoded: number, width: number, height: number): void => {
                 this.noteDecoded(decoded, width, height);
               },
+              onLongPressImage: (): void => {
+                if (smartReachStore.imageMenuLongPress && this.exportBusy.length === 0) {
+                  this.menuRevealed = true; this.suppressCloseUntil = Date.now() + 700;
+                }
+              },
               onTapImage: (): void => {
-                // 长按抬手可能同时被判成一次单击（parallelGesture 的代价）：这段时间内不关查看器
-                if (this.exportOpen || Date.now() < this.suppressCloseUntil) {
+                // 操作完成后的短时间内忽略冒泡单击，避免误关查看器
+                if (this.exportBusy.length > 0 || Date.now() < this.suppressCloseUntil) {
                   return;
                 }
-                this.onClose();
-              },
-              onLongPressImage: (): void => {
-                // 长按当前页才有效：翻页动画期间 currentIndex 可能还没跟上
-                this.currentIndex = index;
-                this.syncSrCurrent(index);
-                this.openExport();
+                if (smartReachStore.imageMenuLongPress && this.menuRevealed) {
+                  this.menuRevealed = false; return;
+                }
+                animateImageTransition(this.getUIContext(), (): void => { this.onClose(); });
               }
             })
           },
@@ -1123,32 +1106,43 @@ export struct ImageViewer {
         }
         .index(this.currentIndex)
         .indicator(false)
+        .disableSwipe(this.exportBusy.length > 0)
         .loop(false)
         .onChange((index: number) => {
           this.currentIndex = index;
           // 切图使**在飞任务**失效（结果作废、底层照跑完）；已缓存的开关状态保留
           this.syncSrCurrent(index);
+          this.openExport();
         })
         .width('100%')
         .height('100%')
       }
-      if (!this.exportOpen) {
+      if (!smartReachStore.imageMenuLongPress || !this.menuRevealed) {
         this.PageBadge(this.effectiveImageUrls().length)
       }
-      // 导出菜单盖在最上层；打开期间页码隐藏、遮罩接住所有触摸
-      if (this.exportOpen) {
-        this.ExportSheet()
+      // 常显小胶囊只接住自身触摸；图片仍可缩放、翻页和单击关闭。
+      if (this.exportOpen && !this.menuHidden && !smartReachStore.imageMenuLongPress) {
+        ImageMenuPosition({ viewportWidth: this.viewerWidth, viewportHeight: this.viewerHeight,
+          capsuleHeight: superResolutionStore.enabled ? 200 : 162, bottomInset: this.bottomSafeVp,
+          busy: this.exportBusy.length > 0, content: (): void => { this.ExportSheet() } })
+      }
+      if (smartReachStore.imageMenuLongPress && this.menuRevealed) {
+        this.BottomExportSheet()
       }
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((_old: Area, area: Area): void => {
+      this.viewerWidth = Number(area.width); this.viewerHeight = Number(area.height);
+    })
     .backgroundColor(Color.Black)
+    .transition(TransitionEffect.OPACITY)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onKeyEvent((event: KeyEvent): boolean => {
       // 保留但**不生效**：这个 `Stack` 不持有焦点，收不到按键。真正拦返回键的是
       // 宿主 Index / ThreadDetailPage 的 onBackPress（查看器是页面上的浮层）。
       if (event.keyCode === KeyCode.KEYCODE_BACK) {
-        this.onClose();
+        animateImageTransition(this.getUIContext(), (): void => { this.onClose(); });
         return true;
       }
       return false;

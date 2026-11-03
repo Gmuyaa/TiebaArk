@@ -1,6 +1,7 @@
 /** 各接口的响应类型；请求和传输实现见 TiebaApi。 */
 import { ApiResult } from './ApiResult';
 import { AddPostResult } from '../model/AddPostResult';
+import { AddThreadResult } from '../model/AddThreadResult';
 import { AtCandidates } from '../model/AtCandidates';
 import { AuthorBlockResult } from '../model/AuthorBlock';
 import { AvatarUploadResult } from '../model/AvatarUpload';
@@ -133,6 +134,11 @@ export class MemeCollectResponse extends ApiResult {
 /** 回复回执包含新楼层 pid，可用于重新读取详情确认发布结果。 */
 export class ReplyResponse extends ApiResult {
   result: AddPostResult = new AddPostResult();
+}
+
+/** 发主题帖（form 通道 `/c/c/thread/add`）的结果；`result.tid` 可能为 0（响应没带 id）。 */
+export class AddThreadResponse extends ApiResult {
+  result: AddThreadResult = new AddThreadResult();
 }
 
 export class DirectoryResponse extends ApiResult {
