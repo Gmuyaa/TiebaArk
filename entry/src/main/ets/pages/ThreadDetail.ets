@@ -1007,7 +1007,7 @@ export struct ThreadDetailPage {
    *
    * 失败文案**由 VM 返回**（未登录 / 在途 / 缺少吧信息 / 服务端报错都在这里出），
    * 页面只负责展示——这样以后把 toast 换成行内提示不用动业务层。
-   * 成功后自动跳到新发的那条，避免"发出去了但看不见"被当成失败。
+   * 成功后保留阅读位置；主帖新评论由用户主动刷新查看。
    */
   async submitReplyText(): Promise<void> {
     if (this.vm.replyPending) { return; }
@@ -1040,22 +1040,7 @@ export struct ThreadDetailPage {
       promptAction.showToast({ message: visible ? '回复已发布' : '回复已发布，可在本层回复里查看', duration: 2200 });
       return;
     }
-    /*
-     * 成功后能否看到刚发的那条，VM 已经处理过了（正序时它会切到倒序把新回复带到首屏）。
-     * 这里只负责如实描述这两种结果——**不假装两种都一样**。
-     */
-    if (this.vm.containsPid(this.vm.lastReplyPid)) {
-      promptAction.showToast({
-        message: targetPid > 0 ? '回复已发布' : '评论已发布',
-        duration: 1800
-      });
-    } else {
-      promptAction.showToast({
-        message: targetPid > 0 ? '回复已发布，可在最新回复里查看' : '评论已发布，可在最新回复里查看',
-        duration: 2200
-      });
-    }
-    this.scrollToPost(this.vm.lastReplyPid);
+    promptAction.showToast({ message: '评论已发布，可刷新查看', duration: 2200 });
   }
 
   /** 回复目标作者的昵称。找不到返回空串，占位文案退回通用的「发表评论」 */

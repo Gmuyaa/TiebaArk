@@ -1120,19 +1120,7 @@ export class ThreadDetailVM {
         if (!current()) { return '账号或帖子已变化，回复已受理，请在原账号查看'; }
         return '';
       }
-      // 刷一次首屏，让新回复由服务端数据出现（顺序由服务端排序决定，本地不插队）
-      await this.refresh(context);
-      if (!current()) { return '账号或帖子已变化，回复已受理，请在原账号查看'; }
-      /*
-       * 正序下新回复排在**最后一页**，刷首屏之后屏幕上并没有它 ——
-       * 用户最容易把"发出去了但没看见"当成失败。所以这里把它找出来：
-       * 切到倒序（服务端定义：倒序首屏就是最后一页），而不是自己去猜页码。
-       * 只在正序时切：倒序如果还缺位说明另有原因，不该在这里折腾。
-       */
-      if (!this.containsPid(response.result.pid) && this.sortType === ReplySortType.ASC) {
-        hilog.info(FLOW_DOMAIN, FLOW_TAG, 'source=replySortToDesc tid=%{public}d', this.tid);
-        await this.switchReplySort(context, ReplySortType.DESC);
-      }
+      // 主帖评论受理后保留阅读现场；由用户主动刷新读取新评论，不重建列表或改变排序。
       return '';
     } catch (err) {
       const e: Error = err as Error;
