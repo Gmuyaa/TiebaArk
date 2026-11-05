@@ -1,4 +1,6 @@
 import { UIContext } from '@kit.ArkUI';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 
 /** 一次性桥接点击源与浮层；不按 URL 全局配对，重复图片仍各有独立返回位置。 */
 export class ImageTransitionSeed {
@@ -20,6 +22,7 @@ export class ImageTransitionSource {
   private prefix: string = `image-transition-${++nextSource}`;
 
   id(url: string, index: number = 0): string {
+    if (!motionStore.isOn(MotionEffect.SHARED_ELEMENT)) { return ''; }
     // URL 参与身份：列表组件复用后不能把旧图收回到新图的位置。
     return `${this.prefix}:${index}:${url}`;
   }
@@ -39,5 +42,5 @@ export function takeImageTransition(origin: string): ImageTransitionSeed {
 }
 
 export function animateImageTransition(context: UIContext, action: () => void): void {
-  context.animateTo({ duration: 300, curve: Curve.Friction }, action);
+  context.animateTo({ duration: motionStore.isOn(MotionEffect.SHARED_ELEMENT) ? 300 : 0, curve: Curve.Friction }, action);
 }

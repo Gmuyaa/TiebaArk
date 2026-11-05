@@ -8,7 +8,7 @@ import { MemePicItem } from '../model/MemeEmoji';
 import { emojiImageUrl } from '../model/ThreadDetail';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { readEmojiEditor, restoreEmojiEditor } from '../utils/EmojiEditor';
-import { materialManager } from '../common/material/MaterialManager';
+import { SearchTopMaterial } from '../components/SearchTopMaterial';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { ComposeOptionSheet } from '../components/ComposeOptionSheet';
 import { CloseIcon } from '../components/CloseIcon';
@@ -16,9 +16,10 @@ import { GlassCircleButton } from '../components/GlassCircleButton';
 import { NavigationService } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
 import { readStatusBarVp, STATUS_BAR_FALLBACK_VP } from '../utils/SafeArea';
-import { COMPOSE_TYPES, ComposeDraft, ComposePublishResult, ComposeVM, unsupportedComposeOptions } from '../viewmodel/ComposeVM';
+import { COMPOSE_TYPES, TITLE_MIN_LENGTH, TITLE_MAX_LENGTH, ComposeDraft, ComposePublishResult, ComposeVM, unsupportedComposeOptions } from '../viewmodel/ComposeVM';
 
 const TOP_BAR_HEIGHT: number = 40;
+const MEDIA_PREVIEW_SIZE: number = 96;
 
 @ComponentV2
 export struct ComposePage {
@@ -211,7 +212,9 @@ export struct ComposePage {
 
   @Builder
   EmojiPanel() {
-    EmojiPickerPanel({ picker: this.emojiPicker, tab: this.emojiTab,
+    Stack() {
+      SearchTopMaterial({ slot: MaterialSlot.REPLY_SHEET, panelHeight: this.emojiPanelHeight() })
+      EmojiPickerPanel({ picker: this.emojiPicker, tab: this.emojiTab,
       gridHeight: Math.max(0, this.emojiPanelHeight() - 60 - AppTheme.BAR_SAFE_H), safeBottom: AppTheme.BAR_SAFE_H,
       onTabChange: (tab: number): void => { this.emojiTab = tab; },
       onManagerChange: (open: boolean): void => { this.emojiManaging = open; },
@@ -220,8 +223,7 @@ export struct ComposePage {
       onBuiltin: (code: number): void => { this.insertEmoji(emojiImageUrl(`image_emoticon${code}`)); },
       onMeme: (item: MemePicItem): void => { this.insertEmoji(this.emojiPicker.memeDisplayUrl(item)); },
       onDelete: (): void => { this.deleteEmoji(); } })
-      .backgroundColor(AppTheme.CARD)
-      .backgroundEffect(materialManager.glassOf(MaterialSlot.REPLY_SHEET))
+    }.width('100%').height(this.emojiPanelHeight())
       .borderRadius({ topLeft: 16, topRight: 16 }).clip(true)
   }
 
@@ -235,9 +237,9 @@ export struct ComposePage {
   }
 
   private bodyHint(): string {
-    if (this.vm.type === 3) { return '请输入问题描述，提供的信息越全，解答越准确哦'; }
-    if (this.vm.type === 0) { return '请输入正文，分享你的想法（最多添加9张图片）'; }
-    return '请输入正文（建议200–2000字）';
+    if (this.vm.type === 3) { return '描述你遇到的问题和已尝试的方法'; }
+    if (this.vm.type === 0) { return '分享你的想法，最多可添加9张图片'; }
+    return '分享你的想法…';
   }
 
   @Builder
@@ -246,8 +248,10 @@ export struct ComposePage {
       ForEach(COMPOSE_TYPES, (label: string, index: number) => {
         Column() {
           Text(label).fontSize(16).fontWeight(this.vm.type === index ? FontWeight.Bold : FontWeight.Normal)
-            .fontColor(this.vm.type === index ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB).maxLines(1)
+            .fontColor(this.vm.type === index ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB).maxLines(1)
+            .maxFontScale(1.25)
         }.layoutWeight(1).height(TOP_BAR_HEIGHT).justifyContent(FlexAlign.Center)
+          .borderRadius(TOP_BAR_HEIGHT / 2)
           .accessibilityText(label).accessibilitySelected(this.vm.type === index)
           .id(`compose-type-${index}`)
           .onClick((): void => {
@@ -263,10 +267,13 @@ export struct ComposePage {
 
   @Builder
   PublishAction() {
-    Row() {
-      Text(this.vm.publishing ? '发布中…' : '发布').fontSize(15).fontWeight(FontWeight.Medium)
-        .fontColor(this.vm.publishing ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN).maxLines(1)
+    Row({ space: 4 }) {
+      if (this.vm.publishing) { LoadingProgress().width(16).height(16) }
+      Text(this.vm.publishing ? '发布中' : '发布').fontSize(14).fontWeight(FontWeight.Bold)
+        .fontColor(this.vm.publishing ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK).maxLines(1)
+        .maxFontScale(1.25).textOverflow({ overflow: TextOverflow.Ellipsis })
     }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+      .enabled(!this.vm.publishing).borderRadius(TOP_BAR_HEIGHT / 2)
       .id('compose-publish').accessibilityGroup(true)
       .accessibilityText(this.vm.publishing ? '正在发布' : '发布')
       .onClick((): void => { void this.startPublish(); })
@@ -317,12 +324,11 @@ export struct ComposePage {
   Header() {
     Row({ space: 8 }) {
       GlassCircleButton({ symbol: $r('sys.symbol.xmark'), diameter: TOP_BAR_HEIGHT,
-        iconWeight: FontWeight.Regular, shadowEnabled: false, accessibilityLabel: '关闭发帖页',
+        iconWeight: FontWeight.Regular, accessibilityLabel: '关闭发帖页',
         onTap: (): void => { this.close(); } })
         .borderRadius(TOP_BAR_HEIGHT / 2)
-        .shadow({ radius: 14, color: '#18000000', offsetY: 4 })
       ComposeMaterialBar({ barHeight: TOP_BAR_HEIGHT, content: (): void => { this.TypeTabs(); } }).layoutWeight(1)
-      ComposeMaterialBar({ barHeight: TOP_BAR_HEIGHT, content: (): void => { this.PublishAction(); } }).width(56)
+      ComposeMaterialBar({ barHeight: TOP_BAR_HEIGHT, content: (): void => { this.PublishAction(); } }).width(72)
     }.width('100%').padding({ left: 16, right: 16, top: this.statusBarH + 8, bottom: 16 })
   }
 
@@ -335,9 +341,9 @@ export struct ComposePage {
             Column({ space: 8 }) {
               SymbolGlyph($r('sys.symbol.video')).fontSize(30).fontColor([AppTheme.ACCENT])
               Text('已选择视频').fontSize(13).fontColor(AppTheme.TEXT_MAIN)
-            }.width(112).height(112).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
+            }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
           } else {
-            Image(uri).width(112).height(112).objectFit(ImageFit.Cover)
+            Image(uri).width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).objectFit(ImageFit.Cover)
           }
           Row() { CloseIcon({ iconSize: 14 }).width(14).height(14) }
             .width(32).height(32).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
@@ -350,7 +356,7 @@ export struct ComposePage {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.video')).fontSize(30).fontColor([AppTheme.ACCENT])
             Text('已选择视频').fontSize(13).fontColor(AppTheme.TEXT_MAIN)
-          }.width(112).height(112).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
+          }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
           Row() { CloseIcon({ iconSize: 14 }).width(14).height(14) }
             .width(32).height(32).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
             .backgroundColor(AppTheme.CARD).borderRadius(16).accessibilityText('移除视频')
@@ -361,13 +367,16 @@ export struct ComposePage {
         (this.vm.type !== 2 && this.vm.draft.media.length < 9)) {
         Column({ space: 8 }) {
           SymbolGlyph(this.vm.type === 2 ? $r('sys.symbol.video') : $r('sys.symbol.plus'))
-            .fontSize(32).fontWeight(FontWeight.Lighter).fontColor([AppTheme.TEXT_SUB])
+            .fontSize(28).maxFontScale(1).fontWeight(FontWeight.Lighter).fontColor([AppTheme.TEXT_SUB])
           Text(this.vm.picking ? '选择中…' : (this.vm.type === 2 ? '选择视频' : '添加图片'))
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
-        }.width(112).height(112).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
-          .borderRadius(16).enabled(!this.vm.picking).onClick((): void => { void this.pick(); })
+        }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
+          .borderRadius(16).enabled(!this.vm.picking).opacity(this.vm.picking ? 0.5 : 1)
+          .id('compose-add-media').accessibilityGroup(true)
+          .accessibilityText(this.vm.type === 2 ? '选择视频' : `添加图片，已选${this.vm.draft.media.length}张，最多9张`)
+          .onClick((): void => { void this.pick(); })
       }
-    }.width('100%').padding({ top: 16, bottom: 24 })
+    }.width('100%').padding({ top: 12, bottom: 16 })
   }
 
   private optionValue(title: string): string {
@@ -382,13 +391,17 @@ export struct ComposePage {
   @Builder
   OptionRow(symbol: Resource, title: string) {
     Row({ space: 12 }) {
-      SymbolGlyph(symbol).fontSize(21).fontColor([AppTheme.TEXT_MAIN])
-      Text(title).fontSize(16).fontColor(AppTheme.TEXT_MAIN).maxLines(1)
-      Blank()
-      Text(this.optionValue(title)).fontSize(13).fontColor(AppTheme.TEXT_SUB).maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '48%' })
-      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(13).fontColor([AppTheme.TEXT_MUTED])
-    }.width('100%').constraintSize({ minHeight: 56 }).onClick((): void => { this.openOption(title); })
+      SymbolGlyph(symbol).fontSize(18).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+        .flexShrink(0).accessibilityLevel('no')
+      Text(title === '选择的吧' ? '发布到' : title).fontSize(14).fontColor(AppTheme.TEXT_MAIN)
+        .maxLines(2).layoutWeight(1)
+      Text(this.optionValue(title)).fontSize(13).fontColor(AppTheme.TEXT_SUB).maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '48%' }).flexShrink(1)
+      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+        .flexShrink(0).accessibilityLevel('no')
+    }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .borderRadius(12).accessibilityGroup(true).accessibilityText(`${title}，${this.optionValue(title)}`)
+      .onClick((): void => { this.openOption(title); })
   }
 
   @Builder
@@ -405,15 +418,17 @@ export struct ComposePage {
       if (this.vm.type !== 3) {
         this.OptionRow($r('sys.symbol.info_circle'), '内容声明')
       }
-    }.width('100%').border({ width: { top: 0.5 }, color: AppTheme.DIVIDER }).padding({ top: 8 })
+    }.width('100%').backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(16)
+      .padding({ top: 4, bottom: 4 })
   }
 
   @Builder
   BodyEditor(type: number) {
     RichEditor({ controller: this.bodyControllers[type] })
       .id('compose-body').width('100%').height(type === 0 ? 270 : 144).maxLength(20000)
-      .placeholder(this.bodyHint(), { font: { size: 16 }, fontColor: AppTheme.TEXT_MUTED })
-      .backgroundColor(Color.Transparent).padding({ top: 18, left: 0, right: 0, bottom: 0 })
+      .placeholder(this.bodyHint(), { font: { size: 16 }, fontColor: AppTheme.TEXT_SUB })
+      .backgroundColor(Color.Transparent).padding({ top: 8, left: 0, right: 0, bottom: 0 })
+      .accessibilityText('正文')
       .focusBox({ strokeWidth: LengthMetrics.vp(0) })
       .onReady((): void => { this.restoreBody(type); })
       .onDisAppear((): void => { this.bodyReady[type] = false; })
@@ -425,18 +440,26 @@ export struct ComposePage {
   Editor() {
     Column() {
       if (this.vm.type !== 2 || this.vm.draft.media.length > 0) {
+        Row() {
+          Text(`标题 · ${TITLE_MIN_LENGTH}–${TITLE_MAX_LENGTH}个字`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+            .layoutWeight(1)
+          Text(`${this.vm.draft.title.length}/${TITLE_MAX_LENGTH}`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+            .id('compose-title-count')
+        }.width('100%').padding({ top: 8, bottom: 2 })
         Row({ space: 6 }) {
           if (this.vm.type === 3) {
             Text('求助').fontSize(11).fontColor(AppTheme.ACCENT_DARK).padding(3).borderRadius(4)
               .border({ width: 0.5, color: AppTheme.ACCENT })
           }
           TextInput({ text: this.vm.draft.title,
-            placeholder: this.vm.type === 3 ? '请输入完整问题（5–31个字）' : '请输入完整帖子标题（5–31个字）' })
-            .id('compose-title').layoutWeight(1).height(64).fontSize(18).fontWeight(FontWeight.Bold)
-            .fontColor(AppTheme.TEXT_MAIN).placeholderColor(AppTheme.TEXT_MUTED).maxLength(31)
+            placeholder: this.vm.type === 3 ? '你想解决什么问题？' : '写一个清晰的标题' })
+            .id('compose-title').layoutWeight(1).height(48).fontSize(18).fontWeight(FontWeight.Bold)
+            .fontColor(AppTheme.TEXT_MAIN).placeholderColor(AppTheme.TEXT_SUB).maxLength(TITLE_MAX_LENGTH)
+            .accessibilityText(`标题，${TITLE_MIN_LENGTH}至${TITLE_MAX_LENGTH}个字`)
             .backgroundColor(Color.Transparent).padding(0)
             .onChange((value: string): void => { this.vm.draft.title = value; })
         }.width('100%').border({ width: { bottom: 0.5 }, color: AppTheme.DIVIDER })
+        Text('正文').fontSize(12).fontColor(AppTheme.TEXT_SUB).width('100%').padding({ top: 12 })
         ForEach([this.vm.type], (type: number) => { this.BodyEditor(type) }, (type: number): string => String(type))
       }
       this.Media()
@@ -522,13 +545,16 @@ export struct ComposePage {
             this.Editor()
             if (this.vm.publishing || this.vm.publishStep.length > 0) {
               Text(this.vm.publishStep.length > 0 ? this.vm.publishStep : '正在发布…')
-                .fontSize(11).fontColor(AppTheme.TEXT_SUB).padding({ top: 8, bottom: 8 })
+                .fontSize(13).fontColor(AppTheme.TEXT_SUB).padding({ top: 8, bottom: 8 })
             } else if (this.vm.error.length > 0) {
               // 失败原因常驻：toast 一闪而过，hilog 缓冲也留不住，界面必须能读到整句。
               Text(`发布失败：${this.vm.error}`)
-                .fontSize(11).fontColor(AppTheme.TEXT_SUB).width('100%')
+                .fontSize(13).fontColor(AppTheme.TEXT_SUB).width('100%')
                 .padding({ top: 8, bottom: 8, left: 16, right: 16 })
             }
+            // 固定工具栏的实际遮挡避让，保证最后一个选项和失败原因能滚到工具栏上方。
+            Column().width('100%').height(this.vm.type === 0 || this.vm.type === 1 ? AppTheme.BAR_TOTAL_H : 12)
+              .id('compose-tools-occlusion').accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
           }.width('100%').padding({ top: this.statusBarH + TOP_BAR_HEIGHT + 24 })
         }.id('compose-editor-scroll').width('100%').height(`calc(100% - ${this.inputPanelHeight()}vp)`)
           .scrollBar(BarState.Off).align(Alignment.TopStart)

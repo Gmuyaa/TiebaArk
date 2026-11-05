@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 /** 浏览历史、收藏、回复与帖子列表页面，共用列表布局与对应 VM。 */
@@ -15,6 +16,9 @@ import { PostContentInline } from '../components/PostContentInline';
 import { POST_BODY_SIZE } from '../common/appearance/PostTypography';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
+import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { ImageViewer } from '../components/ImageViewer';
+import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 
 /** 已删除帖子的左下角提示（标题同色灰显，见 `CardItem`） */
 const DELETED_LABEL: string = '该帖子已被删除';
@@ -29,6 +33,49 @@ export struct MyListPage {
   @Local vm: MyListVM = new MyListVM();
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
+  @Local viewerImages: string[] = [];
+  @Local viewerIndex: number = 0;
+  private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
+  private imageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
+
+  private imageScroller(tid: number): ListScroller {
+    let scroller: ListScroller | undefined = this.imageScrollers.get(tid);
+    if (scroller === undefined) {
+      scroller = new ListScroller();
+      this.imageScrollers.set(tid, scroller);
+    }
+    return scroller;
+  }
+
+  private showActionResult(message: string): void {
+    if (message.length > 0) { this.getUIContext().getPromptAction().showToast({ message }); }
+  }
+
+  private threadMenu(item: MyListItem): MenuElement[] {
+    const owner: string = this.vm.threadActionOwner();
+    const action: 'hide' | 'show' = item.hideFromProfile ? 'show' : 'hide';
+    return [
+      { value: item.hideFromProfile ? '设为主页可见' : '设为主页不可见', action: (): void => {
+        void this.vm.manageThread(this.hostContext(), item, owner, action)
+          .then((message: string): void => { this.showActionResult(message); });
+      } },
+      { value: '删除', action: (): void => { this.confirmDeleteThread(item, owner); } }
+    ];
+  }
+
+  private confirmDeleteThread(item: MyListItem, owner: string): void {
+    if (this.vm.threadPendingTid > 0) { return; }
+    this.getUIContext().getPromptAction().showDialog({
+      title: '删除帖子',
+      message: item.title.length > 0 ? `确定删除“${item.title}”？删除后无法恢复。` : '确定删除这条帖子？删除后无法恢复。',
+      buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '删除', color: AppTheme.DANGER_TEXT }]
+    }).then((result) => {
+      if (result.index === 1) {
+        void this.vm.manageThread(this.hostContext(), item, owner, 'delete')
+          .then((message: string): void => { this.showActionResult(message); });
+      }
+    }).catch(() => {});
+  }
 
   aboutToAppear(): void {
 
@@ -144,6 +191,7 @@ export struct MyListPage {
   build() {
 
     HdsNavDestination() {
+      Stack() {
       Column() {
         // ── 页头：返回 + 标题（+ 历史页的"清空"）──
         PageHeader({ title: kindTitle(this.vm.kind), onBack: (): void => { this.goBack(); },
@@ -153,6 +201,8 @@ export struct MyListPage {
         this.FavoritesBody()
       } else if (this.vm.kind === 'reply') {
         this.ReplyBody()
+      } else if (this.vm.kind === 'thread') {
+        this.ThreadBody()
       } else if (this.vm.loading && !this.vm.loadedOnce) {
         PageState({ fillRemaining: true, loading: true, message: '正在加载…' }).layoutWeight(1)
       } else if (this.vm.errorText.length > 0) {
@@ -172,16 +222,84 @@ export struct MyListPage {
         .width('100%')
         .layoutWeight(1)
         .backgroundColor(AppTheme.BG)
-        .edgeEffect(EdgeEffect.Spring)
+        .edgeEffect(motionEdgeEffect())
       }
     }
     .width('100%')
     .height('100%')
     .padding({ top: this.statusBarH })
     .backgroundColor(AppTheme.BG)
+      if (this.viewerImages.length > 0) {
+        ImageViewer({ imageUrls: this.viewerImages, initialIndex: this.viewerIndex,
+          onClose: (): void => { this.viewerImages = []; } })
+      }
+      }.width('100%').height('100%')
     }
     // 本页页头完全由内容自绘（GlassBackButton + 标题在页面流内），绝不显示 HDS 默认标题栏
     .hideTitleBar(true)
+  }
+
+  @Builder
+  ThreadBody() {
+    Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
+      Column() {
+        if (this.vm.items.length === 0) {
+          PageState({ fillRemaining: true, loading: this.vm.loading,
+            title: this.vm.errorText.length > 0 ? '加载失败' : '',
+            message: this.vm.loading ? '正在加载…' : (this.vm.errorText || this.emptyText()),
+            actionLabel: this.vm.errorText.length > 0 ? '重试' : '',
+            onAction: (): void => { void this.vm.load(this.hostContext()); } }).layoutWeight(1)
+        } else {
+          if (this.vm.errorText.length > 0) {
+            PageState({ compact: true, message: this.vm.errorText, actionLabel: '重试',
+              onAction: (): void => { void this.vm.load(this.hostContext()); } })
+          }
+          List({ space: 10 }) {
+            ForEach(this.vm.items, (item: MyListItem) => {
+              ListItem() { this.ThreadCard(item) }
+            }, (item: MyListItem) => `${item.tid}-${item.forumAvatar}-${item.hideFromProfile}`)
+          }.padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
+            .edgeEffect(motionEdgeEffect())
+        }
+      }.width('100%').height('100%')
+    }.refreshOffset(PULL_REFRESH_OFFSET)
+      .onStateChange((state: RefreshStatus) => {
+        this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;
+      }).width('100%').layoutWeight(1).onRefreshing(() => {
+        this.vm.load(this.hostContext()).finally(() => { this.refreshing = false; });
+      })
+  }
+
+  @Builder
+  ThreadCard(item: MyListItem) {
+    ThreadPreviewCard({
+      forumIdentity: true, forumName: item.forumName, forumAvatar: item.forumAvatar,
+      postedTime: item.postedTime, title: item.title, summary: item.content, contentPieces: item.pieces,
+      headerStatus: item.hideFromProfile ? HIDE_FROM_PROFILE_LABEL : '公开',
+      menuBusy: this.vm.threadPendingTid === item.tid, menu: this.threadMenu(item),
+      images: item.images, originImages: item.originImages, imageScroller: this.imageScroller(item.tid),
+      agreeCount: item.agreeCount, replyCount: item.replyCount, shareCount: item.shareCount,
+      onActivateContent: (piece: ContentPiece): void => { openContentPiece(piece, this.getUIContext()); },
+      canOpenForum: item.forumName.length > 0,
+      onOpenForum: (): void => { NavigationService.openForum({ forumName: item.forumName }); },
+      onOpenThread: (): void => { this.openThread(item); },
+      onOpenComments: (): void => {
+        NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName,
+          replyCount: item.replyCount, openComments: true });
+      },
+      onToggleLike: (state: ThreadCardActionState): void => {
+        void this.cardActions.toggleLike(state, this.hostContext(), item.tid, item.forumName)
+          .then((message: string): void => { this.showActionResult(message); });
+      },
+      onShare: (): void => {
+        void this.cardActions.share(this.hostContext(), item.tid, item.title)
+          .then((message: string): void => { this.showActionResult(message); });
+      },
+      onOpenImage: (index: number): void => {
+        this.viewerIndex = index;
+        this.viewerImages = item.originImages.length > 0 ? item.originImages : item.images;
+      }
+    })
   }
 
   @Builder
@@ -233,7 +351,7 @@ export struct MyListPage {
                 onRetry: (): void => { void this.vm.loadMore(this.hostContext()); } })
               }
             }.padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
-              .edgeEffect(EdgeEffect.Spring).onReachEnd(() => {
+              .edgeEffect(motionEdgeEffect()).onReachEnd(() => {
                 if (this.vm.pagingError.length === 0) { this.vm.loadMore(this.hostContext()); }
               })
           }
@@ -272,7 +390,7 @@ export struct MyListPage {
             }
           }
           .padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
-          .edgeEffect(EdgeEffect.Spring)
+          .edgeEffect(motionEdgeEffect())
           .onReachEnd(() => {
             if (this.vm.pagingError.length === 0) {
               this.vm.loadMore(this.hostContext());
@@ -350,21 +468,6 @@ export struct MyListPage {
       // ⚠️ 不能用 Blank() 撑开：constraintSize 的 minHeight 不参与子节点测量，
       // Blank 量到 0，吧信息会贴在标题下面。用 SpaceBetween 把两个子节点顶到两端。
       Column() {
-        if (item.hideFromProfile && !item.isDeleted) {
-          // 官方「我的帖子」把可见范围标在条目右上角；这里放进左列顶部右对齐，
-          // 避免和右侧封面图抢位置。
-          Row() {
-            Text(HIDE_FROM_PROFILE_LABEL)
-              .fontSize(11)
-              .fontColor(AppTheme.TEXT_SUB)
-              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-              .backgroundColor(AppTheme.BG)
-              .borderRadius(4)
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.End)
-          .margin({ bottom: 6 })
-        }
         Text(item.title)
           .fontSize(16)
           // 已删除：整行灰显（与正文主色区分开，一眼看出点不开）

@@ -1,8 +1,9 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionGeometryId, motionTransition, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { ImageMenuPosition } from './ImageMenuPosition';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
-import { HdsTabs } from '@kit.UIDesignKit';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MaterialTabs } from './MaterialTabs';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { SavedEmojiManagerVM } from '../viewmodel/SavedEmojiManagerVM';
 import { ImageUploadInput } from '../model/ImageUpload';
 import { ImageTransitionSeed, takeImageTransition, animateImageTransition } from './ImageTransition';
@@ -324,7 +325,7 @@ struct ZoomableImagePage {
 
   private settleScale(): void {
     const target: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.zoomScale));
-    animateTo({ duration: ANIMATION_DURATION }, () => {
+    animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE)}, () => {
       this.setScale(target);
       if (target === MIN_SCALE) {
         this.panX = 0;
@@ -334,7 +335,7 @@ struct ZoomableImagePage {
   }
 
   private toggleDoubleTapZoom(): void {
-    animateTo({ duration: ANIMATION_DURATION }, () => {
+    animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE)}, () => {
       if (this.zoomScale > MIN_SCALE) {
         this.setScale(MIN_SCALE);
       } else {
@@ -453,7 +454,7 @@ struct ZoomableImagePage {
       }
       .width('100%')
       .height('100%')
-      .geometryTransition(this.transitionId)
+      .geometryTransition(motionGeometryId(this.transitionId))
       .renderFit(RenderFit.RESIZE_FILL)
       // 放大/拖动后的图像不能越过正在收缩的共享元素边界，否则白色图片会留下大框。
       .clip(true)
@@ -1043,21 +1044,12 @@ export struct ImageViewer {
   @Builder
   private ExportSheet() {
     Stack() {
-        HdsTabs({ barPosition: BarPosition.End }) {
-          TabContent() {}.tabBar(this.CapsuleBacking())
-        }
-        .barHeight(superResolutionStore.enabled ? 200 : 162)
-        .barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
-        .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
-        .barFloatingStyle({
-          barWidth: { smallWidth: 48, mediumWidth: 48, largeWidth: 48 },
-          barSideMargin: 0, barBottomMargin: 0, gradientMask: SPLIT_PILL_GRADIENT_MASK,
-          thermoCtrl: true, systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.SHEET)
-        })
+        MaterialTabs({ slot: MaterialSlot.SHEET, barHeight: superResolutionStore.enabled ? 200 : 162, barWidth: 48,
+        barContent: (): void => { this.CapsuleBacking(); } })
         .width(48).height(superResolutionStore.enabled ? 200 : 162).hitTestBehavior(HitTestMode.None)
         this.CapsuleContent()
       }
-      .width(48).height(superResolutionStore.enabled ? 200 : 162).borderRadius(24).clip(true)
+      .width(48).height(superResolutionStore.enabled ? 200 : 162).borderRadius(24).clip(false)
 
       .id('image-action-capsule')
   }
@@ -1108,6 +1100,7 @@ export struct ImageViewer {
         .indicator(false)
         .disableSwipe(this.exportBusy.length > 0)
         .loop(false)
+        .duration(motionDuration(400)).curve(motionSwiperCurve())
         .onChange((index: number) => {
           this.currentIndex = index;
           // 切图使**在飞任务**失效（结果作废、底层照跑完）；已缓存的开关状态保留
@@ -1136,7 +1129,7 @@ export struct ImageViewer {
       this.viewerWidth = Number(area.width); this.viewerHeight = Number(area.height);
     })
     .backgroundColor(Color.Black)
-    .transition(TransitionEffect.OPACITY)
+    .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onKeyEvent((event: KeyEvent): boolean => {
       // 保留但**不生效**：这个 `Stack` 不持有焦点，收不到按键。真正拦返回键的是

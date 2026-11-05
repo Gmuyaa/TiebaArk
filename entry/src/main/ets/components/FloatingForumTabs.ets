@@ -1,9 +1,11 @@
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration } from '../common/appearance/MotionPolicy';
+import { motionStore } from '../common/appearance/MotionStore';
+import { MaterialTabs } from './MaterialTabs';
 import { common } from '@kit.AbilityKit';
 import { ForumTab } from '../model/ThreadList';
 import { AppTheme } from '../theme/Theme';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { clampFloating, dockFloatingX, floatingBounds, holdingSide, HoldingSession } from '../model/SmartReach';
 import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
@@ -118,7 +120,7 @@ export struct FloatingForumTabs {
       this.pendingHoldingSide = 0;
       if (side === 0) { return; }
       this.onMoveStart();
-      this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
         this.moved = true; this.dockRight = side === 1;
         this.anchorX = this.dockRight ? this.maxX() : this.minX();
         this.avoidRefresh();
@@ -200,7 +202,7 @@ export struct FloatingForumTabs {
   private flowSelection(): void {
     const targetX: number = this.tabStart(this.selectedId);
     const targetW: number = this.selectedWidth();
-    if (targetW <= 0 || this.selectionW <= 0 || !this.expanded || !this.active) {
+    if (!motionStore.isOn(MotionEffect.MOVE) || targetW <= 0 || this.selectionW <= 0 || !this.expanded || !this.active) {
       this.resetSelection(); return;
     }
     if (this.selectionId === this.selectedId) {
@@ -210,6 +212,16 @@ export struct FloatingForumTabs {
     }
     const revision: number = ++this.selectionRevision;
     this.selectionId = this.selectedId;
+    if (!motionStore.isOn(MotionEffect.SPRING) || !motionStore.isOn(MotionEffect.SCALE)) {
+      this.getUIContext().animateTo({ duration: motionDuration(220), curve: Curve.EaseOut }, (): void => {
+        this.selectionX = targetX;
+        this.selectionW = targetW;
+        this.selectionScaleY = 1;
+        this.selectionRestBlend = 1;
+      });
+      this.selectionFlowing = false;
+      return;
+    }
     this.selectionFlowing = true;
     // 先提交可见面交接，避免同一批关键帧把0→1合并后跳过流动层。
     this.getUIContext().animateTo({ duration: 0 }, (): void => { this.selectionRestBlend = 0; });
@@ -243,7 +255,8 @@ export struct FloatingForumTabs {
         this.selectionX = targetX;
         this.selectionW = targetW;
         this.selectionScaleY = 1;
-        this.selectionRestBlend = 1;
+        // 关闭淡化时保持流动面，完成后由 resetSelection 直接交接静止面。
+        this.selectionRestBlend = motionStore.isOn(MotionEffect.FADE) ? 1 : 0;
       } }
     ]);
   }
@@ -261,7 +274,7 @@ export struct FloatingForumTabs {
       (this.hasRight() ? 32 : 4) + 0.5;
   }
   private showPage(start: number): void {
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.pageStart = Math.max(0, Math.min(start, this.tabs.length - 1));
       this.anchorX = this.dockRight ? this.maxX() : this.minX();
       this.avoidRefresh();
@@ -277,7 +290,7 @@ export struct FloatingForumTabs {
   }
   private scrollToOffset(offset: number): void {
     this.scroller.scrollTo({ xOffset: clampFloating(offset, 0, Math.max(0, this.contentWidth() - this.controlWidth())),
-      yOffset: 0, animation: { duration: 280, curve: Curve.EaseOut } });
+      yOffset: 0, animation: { duration: motionDuration(280), curve: Curve.EaseOut } });
   }
   private browseEdge(direction: number): void {
     ++this.revealRevision;
@@ -332,7 +345,7 @@ export struct FloatingForumTabs {
   @Monitor('prefs.xRatio', 'prefs.yRatio', 'refreshX', 'refreshY')
   refreshMoved(): void {
     if (!this.ready || this.dragging || this.refreshOwnsCollision) { return; }
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => { this.avoidRefresh(); });
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => { this.avoidRefresh(); });
   }
 
   private avoidRefresh(): void {
@@ -374,7 +387,7 @@ export struct FloatingForumTabs {
   private setExpanded(value: boolean): void {
     if (this.expanded === value) { return; }
     this.resetSelection();
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.expanded = value;
       // 展开/收起只改变宽度，沿用拖动或握姿确定的停靠侧。
       this.anchorX = this.dockRight ? this.maxX() : this.minX();
@@ -393,7 +406,7 @@ export struct FloatingForumTabs {
       this.dockRight = this.displayX() >= (this.minX() + this.maxX()) / 2;
       this.anchorX = this.dockRight ? this.maxX() : this.minX();
       this.anchorY = clampFloating(this.y, this.topInset + 8, this.maxY());
-      this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => { this.avoidRefresh(); });
+      this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => { this.avoidRefresh(); });
     }
   }
 
@@ -421,51 +434,30 @@ export struct FloatingForumTabs {
 
   build() {
     Stack() {
-      HdsTabs({ barPosition: BarPosition.End }) {
-        TabContent() {}.tabBar(this.GlassContent())
-      }.barHeight(AppTheme.BAR_CONTENT_H).barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
-        .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
-        .barFloatingStyle({ barWidth: { smallWidth: this.controlWidth(), mediumWidth: this.controlWidth(), largeWidth: this.controlWidth() },
-          barSideMargin: 0, barBottomMargin: 0, gradientMask: SPLIT_PILL_GRADIENT_MASK, thermoCtrl: true,
-          systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR) })
-        .width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).borderRadius(AppTheme.BAR_CONTENT_H / 2).clip(true).hitTestBehavior(HitTestMode.None)
+      MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: AppTheme.BAR_CONTENT_H, barWidth: this.controlWidth(),
+        barContent: (): void => { this.GlassContent(); } })
+        .width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).borderRadius(AppTheme.BAR_CONTENT_H / 2).clip(false).hitTestBehavior(HitTestMode.None)
       if (this.expanded) {
         Stack({ alignContent: Alignment.TopStart }) {
           Scroll(this.scroller) {
             Stack({ alignContent: Alignment.TopStart }) {
               // 单个选中玻璃面在分类间移动，避免每个标签各自突然亮灭。
-              HdsTabs({ barPosition: BarPosition.End }) {
-                TabContent() {}.tabBar(this.GlassContent())
-              }.barHeight(AppTheme.BAR_CONTENT_H - 8).barMode(BarMode.Fixed).scrollable(false)
-                .animationDuration(0).barOverlap(true)
-                .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
-                .barFloatingStyle({ barWidth: { smallWidth: this.selectionSurfaceWidth(), mediumWidth: this.selectionSurfaceWidth(),
-                  largeWidth: this.selectionSurfaceWidth() }, barSideMargin: 0, barBottomMargin: 0,
-                  gradientMask: SPLIT_PILL_GRADIENT_MASK, thermoCtrl: true,
-                  systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR) })
+              MaterialTabs({ slot: MaterialSlot.FORUM_TAB_SELECTION, barHeight: AppTheme.BAR_CONTENT_H - 8, barWidth: this.selectionSurfaceWidth(),
+        barContent: (): void => { this.GlassContent(); } })
                 .width(this.selectionSurfaceWidth()).height(AppTheme.BAR_CONTENT_H - 8)
-                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(true).hitTestBehavior(HitTestMode.None)
-                .border({ width: 0.8, color: AppTheme.FORUM_TAB_GLOW_BORDER })
-                .shadow({ radius: 8, color: AppTheme.FORUM_TAB_GLOW_SHADOW, offsetX: 0, offsetY: 0 })
+                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.None)
+
                 .position({ x: 0, y: 4 })
                 .scale({ x: this.selectionW / Math.max(1, this.selectionSurfaceWidth()), y: this.selectionScaleY,
                   centerX: 0, centerY: '50%' })
                 .translate({ x: this.selectionX, y: 0 })
                 .opacity(this.selectionVisible() ? 1 - this.selectionRestBlend : 0)
               // 最后110ms交接到真实宽度的HDS面，静止时两端保持半圆而非拉长的椭圆。
-              HdsTabs({ barPosition: BarPosition.End }) {
-                TabContent() {}.tabBar(this.GlassContent())
-              }.barHeight(AppTheme.BAR_CONTENT_H - 8).barMode(BarMode.Fixed).scrollable(false)
-                .animationDuration(0).barOverlap(true)
-                .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
-                .barFloatingStyle({ barWidth: { smallWidth: this.selectedWidth(), mediumWidth: this.selectedWidth(),
-                  largeWidth: this.selectedWidth() }, barSideMargin: 0, barBottomMargin: 0,
-                  gradientMask: SPLIT_PILL_GRADIENT_MASK, thermoCtrl: true,
-                  systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR) })
+              MaterialTabs({ slot: MaterialSlot.FORUM_TAB_SELECTION, barHeight: AppTheme.BAR_CONTENT_H - 8, barWidth: this.selectedWidth(),
+        barContent: (): void => { this.GlassContent(); } })
                 .width(this.selectedWidth()).height(AppTheme.BAR_CONTENT_H - 8)
-                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(true).hitTestBehavior(HitTestMode.None)
-                .border({ width: 0.8, color: '#A0569CFF' })
-                .shadow({ radius: 8, color: '#60569CFF', offsetX: 0, offsetY: 0 })
+                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.None)
+
                 .position({ x: this.tabStart(this.selectedId), y: 4 })
                 .opacity(this.selectionVisible() ? this.selectionRestBlend : 0)
             Row({ space: 4 }) {
@@ -494,14 +486,14 @@ export struct FloatingForumTabs {
               .fontWeight(FontWeight.Medium).fontColor([AppTheme.TEXT_MAIN])
           }.width(28).height(AppTheme.BAR_CONTENT_H).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
             .position({ x: 4, y: 0 }).opacity(this.hasLeft() ? 1 : 0)
-            .translate({ x: this.hasLeft() ? 0 : -8 }).animation({ duration: 180, curve: Curve.EaseOut })
+            .translate({ x: this.hasLeft() ? 0 : -8 }).animation({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut })
             .accessibilityText('向左浏览分类')
           Row() {
             SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).maxFontScale(1)
               .fontWeight(FontWeight.Medium).fontColor([AppTheme.TEXT_MAIN])
           }.width(28).height(AppTheme.BAR_CONTENT_H).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
             .position({ x: this.controlWidth() - 32, y: 0 }).opacity(this.hasRight() ? 1 : 0)
-            .translate({ x: this.hasRight() ? 0 : 8 }).animation({ duration: 180, curve: Curve.EaseOut })
+            .translate({ x: this.hasRight() ? 0 : 8 }).animation({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut })
             .accessibilityText('向右浏览分类')
         }.width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).hitTestBehavior(HitTestMode.None)
       } else {
@@ -513,10 +505,9 @@ export struct FloatingForumTabs {
           .hitTestBehavior(HitTestMode.None)
       }
     }.width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H)
-      .animation({ duration: 220, curve: Curve.EaseOut })
+      .animation({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut })
       .borderRadius(AppTheme.BAR_CONTENT_H / 2)
-      .clip(true)
-      .shadow({ radius: this.dragging ? 24 : 14, color: '#28000000', offsetY: 5 })
+      .clip(false)
       .position({ x: this.displayX(), y: this.y }).id('floating-forum-tabs')
       .zIndex(20)
       .hitTestBehavior(HitTestMode.Block)

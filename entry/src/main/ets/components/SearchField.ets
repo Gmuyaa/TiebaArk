@@ -2,12 +2,11 @@
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { searchFieldHeight } from '../common/appearance/UiLayout';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MaterialTabs } from './MaterialTabs';
 import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
-import { themeModeStore } from '../common/appearance/ThemeModeStore';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
 
 export const SEARCH_FIELD_HEIGHT: number = 32;
 
@@ -29,38 +28,27 @@ export struct SearchField {
       searchFieldHeight(fontSizeScaleOf(fontScaleStore.pref, fontScaleStore.systemScale, fontScaleStore.customSize)));
   }
 
-  @Builder
-  MaterialContent() {
-    Row().width('100%').height('100%')
+  build() {
+    if (materialManager.useArkUI) {
+      MaterialTabs({ slot: MaterialSlot.SEARCH_BAR, barHeight: this.fieldHeight(), componentMaterial: true,
+        barContent: (): void => { this.ArkUIField(); } })
+        .width('100%').height(this.fieldHeight())
+    } else {
+      this.CompatibilityField()
+    }
   }
 
-  build() {
+  @Builder
+  CompatibilityField() {
     Stack() {
       // 只承载材质，不接受触摸；输入层不放在 tabBar 内，避免 tab 手势截获输入。
       if (this.fieldWidth > 0) {
-        HdsTabs({ barPosition: BarPosition.End }) {
-          TabContent() {}.tabBar(this.MaterialContent())
-        }
-        .barHeight(this.fieldHeight())
-        .barMode(BarMode.Fixed)
-        .scrollable(false)
-        .animationDuration(0)
-        .barOverlap(true)
-        .barBackgroundColor(visualThemeStore.isPaper ? AppTheme.SURFACE_MUTED : Color.Transparent)
-        .barBackgroundBlurStyle(BlurStyle.NONE)
-        .barFloatingStyle({
-          barWidth: { smallWidth: this.fieldWidth, mediumWidth: this.fieldWidth,
-            largeWidth: this.fieldWidth },
-          barSideMargin: 0,
-          barBottomMargin: 0,
-          gradientMask: SPLIT_PILL_GRADIENT_MASK,
-          thermoCtrl: true,
-          systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.SEARCH_BAR)
-        })
+        MaterialTabs({ slot: MaterialSlot.SEARCH_BAR, barHeight: this.fieldHeight(),
+          barWidth: this.fieldWidth })
         .width('100%')
         .height(this.fieldHeight())
         .borderRadius(this.fieldHeight() / 2)
-        .clip(true)
+        .clip(false)
         .hitTestBehavior(HitTestMode.None)
       }
       Row({ space: 8 }) {
@@ -99,13 +87,29 @@ export struct SearchField {
     .width('100%')
     .height(this.fieldHeight())
     .borderRadius(this.fieldHeight() / 2)
-    .border({ width: 0.5, color: visualThemeStore.isPaper ? AppTheme.DIVIDER : (themeModeStore.isDark ?
-      'rgba(255, 255, 255, 0.22)' : 'rgba(0, 0, 0, 0.04)') })
-    .shadow({ radius: 10, offsetY: 2, color: themeModeStore.isDark ?
-      'rgba(0, 0, 0, 0.40)' : 'rgba(0, 0, 0, 0.06)' })
     .onAreaChange((_old: Area, area: Area) => {
       const width: number = Number(area.width);
       if (width > 0 && Math.abs(width - this.fieldWidth) >= 0.5) { this.fieldWidth = width; }
     })
+  }
+
+  @Builder
+  ArkUIField() {
+    Search({ value: this.text, placeholder: this.placeholder })
+      .id(this.inputId)
+      .width('100%').height(this.fieldHeight()).margin(0).borderRadius(this.fieldHeight() / 2)
+      .textFont({ size: 16 })
+      .fontColor(AppTheme.TEXT_MAIN)
+      .placeholderColor(visualThemeStore.isPaper ? AppTheme.SEARCH_HINT : AppTheme.TAB_UNDERLINE_TEXT)
+      .placeholderFont({ size: 16 })
+      .searchIcon({ size: 20, color: visualThemeStore.isPaper ? AppTheme.SEARCH_HINT : AppTheme.TAB_UNDERLINE_TEXT })
+      .cancelButton({ style: CancelButtonStyle.INVISIBLE })
+      .enableKeyboardOnFocus(this.editable).focusable(this.editable)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(materialManager.officialOf(MaterialSlot.SEARCH_BAR))
+      .enterKeyType(EnterKeyType.Search)
+      .onChange((value: string): void => { if (this.editable) { this.onChange(value); } })
+      .onSubmit((): void => { if (this.editable) { this.onSubmit(); } })
+      .onClick((): void => { if (!this.editable) { this.onTap(); } })
   }
 }

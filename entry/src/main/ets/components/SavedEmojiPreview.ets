@@ -1,5 +1,6 @@
 import { ComponentContent, LevelMode, LevelOrder, UIContext, window } from '@kit.ArkUI';
 import { animateImageTransition } from './ImageTransition';
+import { motionGeometryId } from '../common/appearance/MotionPolicy';
 
 /** 仅持有当前按压的一张预览；抬手收回后释放，不新增文件缓存。 */
 @ObservedV2
@@ -28,7 +29,7 @@ struct SavedEmojiPreviewLayer {
           }
         }
         .width(this.state.width).height(this.state.height)
-        .geometryTransition(this.state.transitionId).renderFit(RenderFit.RESIZE_FILL).clip(true)
+        .geometryTransition(motionGeometryId(this.state.transitionId)).renderFit(RenderFit.RESIZE_FILL).clip(true)
         .id('saved-emoji-preview-image').accessibilityText('收藏表情放大预览')
       }
     }

@@ -3,11 +3,10 @@ import { CloseIcon } from './CloseIcon';
 
 import { PageState, ListFooter as PagingFooter } from './PageState';
 import { display } from '@kit.ArkUI';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MaterialTabs } from './MaterialTabs';
 import { PostItem, SubPostItem, UserBrief } from '../model/ThreadDetail';
 import { AgreeState } from '../viewmodel/ThreadDetailVM';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { DetailTheme } from '../theme/Theme';
 import { AnchorReplyCard } from './AnchorReplyCard';
 import { SubReplyDetailItem } from './SubReplyDetailItem';
@@ -21,7 +20,7 @@ const PILL_GUTTER: number = 16;
 /**
  * 列表底部预留（vp）。
  *
- * 末尾留出胶囊、手势区与 8vp 间距；最后一条的操作可完整滚到胶囊上方。
+ * 末尾留出胶囊与 8vp 间距，再加胶囊实际的底部偏移；最后一条操作可完整滚到胶囊上方。
  */
 const LIST_BOTTOM_PAD: number = PILL_HEIGHT + 8;
 
@@ -62,6 +61,8 @@ export struct SubReplyDetailSheet {
   @Event onToggleSubLike: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   /** 回复入口：调用方打开父楼层的回复框 */
   @Event onReply: () => void = (): void => {};
+  /** 单条子评论保留自身目标，不能复用父楼层入口。 */
+  @Event onReplySub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   /** 首屏/翻页失败重试 */
   @Event onRetry: () => void = (): void => {};
   /** 加载更多 */
@@ -95,39 +96,45 @@ export struct SubReplyDetailSheet {
     return this.anchor.floor > 0 ? `${this.anchor.floor}楼的回复` : '本层的回复';
   }
 
+  private replyLabel(): string {
+    return this.anchor.floor > 0 ? `回复${this.anchor.floor}楼` : '回复本层';
+  }
+
   @Builder
   Header() {
     Row({ space: 8 }) {
       Text(this.sheetTitle())
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
         .fontColor(DetailTheme.TEXT_MAIN)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
 
-      // 关闭：官方 Symbol `xmark`；外层 Row 只负责维持原先 40×40 的点击区
+      // 图标维持原尺寸，扩大关闭按钮的点击区。
       Row() {
         CloseIcon({ iconSize: 17, color: DetailTheme.ICON }).width(17).height(17)
       }
-      .width(40)
-      .height(40)
-      .borderRadius(20)
+      .width(48)
+      .height(48)
+      .borderRadius(24)
       .justifyContent(FlexAlign.Center)
+      .accessibilityText('关闭楼中楼回复')
+      .id('subreply-close')
       .onClick(() => {
         this.onClose();
       })
     }
     .width('100%')
     .height(56)
-    .padding({ left: 16, right: 10 })
+    .padding({ left: 16, right: 8 })
     .backgroundColor(DetailTheme.BG)
   }
 
   /** 锚点卡与列表之间的分隔：细线 + 上下留白，靠留白分层而不是加卡片 */
   @Builder
   SectionDivider() {
-    Column({ space: 12 }) {
+    Column({ space: 8 }) {
       Divider()
         .color(DetailTheme.DIVIDER)
         .strokeWidth(1)
@@ -138,7 +145,7 @@ export struct SubReplyDetailSheet {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding({ left: 16, right: 16, bottom: 16 })
+    .padding({ left: 16, right: 16, bottom: 12 })
   }
 
   @Builder
@@ -152,7 +159,7 @@ export struct SubReplyDetailSheet {
           endText: this.subPosts.length > 0 ? '没有更多回复' : '',
           onRetry: (): void => { this.onRetry(); } })
       }
-    }.width('100%').padding({ bottom: 18 + LIST_BOTTOM_PAD + this.safeBottomVp })
+    }.width('100%').padding({ bottom: LIST_BOTTOM_PAD + this.safeBottomVp })
   }
 
   /** 楼中楼弹层的回复入口，使用系统材质胶囊；内容层避免叠加自绘玻璃。 */
@@ -160,36 +167,11 @@ export struct SubReplyDetailSheet {
   FloatingReplyPill() {
 
     Stack() {
-      HdsTabs({ barPosition: BarPosition.End }) {
-        TabContent() {
-        }
-        .tabBar(this.ReplyPillTab())
-      }
-      .barHeight(PILL_HEIGHT)
-      .barMode(BarMode.Fixed)
-      .scrollable(false)
-      .animationDuration(0)
-      .barOverlap(true)
-      // 系统自带的整块底衬让出来（与首页底栏 / 详情页胶囊同一处理）
-      .barBackgroundColor(Color.Transparent)
-      .barBackgroundBlurStyle(BlurStyle.NONE)
-      .barFloatingStyle({
-        // 钉宽理由见 pillWidthVp；side/bottomMargin = 0 → 节点矩形 = 胶囊外接矩形
-        barWidth: {
-          smallWidth: this.pillWidthVp,
-          mediumWidth: this.pillWidthVp,
-          largeWidth: this.pillWidthVp
-        },
-        barSideMargin: 0,
-        barBottomMargin: 0,
-
-        gradientMask: SPLIT_PILL_GRADIENT_MASK,
-        thermoCtrl: true,
-        systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
-      })
+      MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: PILL_HEIGHT, barWidth: this.pillWidthVp,
+        barContent: (): void => { this.ReplyPillTab(); } })
 
       .borderRadius(PILL_RADIUS)
-      .clip(true)
+      .clip(false)
       .width(this.pillWidthVp)
       .height(PILL_HEIGHT)
     }
@@ -198,7 +180,6 @@ export struct SubReplyDetailSheet {
 
     .borderRadius(PILL_RADIUS)
 
-    .shadow({ radius: 14, color: DetailTheme.FLOAT_SHADOW, offsetX: 0, offsetY: 0 })
     // 全屏内容层铺到物理底边，胶囊避让手势区后仍停在原来的屏幕位置。
     .margin({ left: PILL_GUTTER, right: PILL_GUTTER, bottom: this.safeBottomVp })
   }
@@ -210,9 +191,12 @@ export struct SubReplyDetailSheet {
         .fontSize(23)
         .fontColor([DetailTheme.TEXT_MAIN])
 
-      Text('写评论')
+      Text(this.replyLabel())
         .fontSize(15)
         .fontColor(DetailTheme.TEXT_MAIN)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
     }
 
     .height('100%')
@@ -220,6 +204,9 @@ export struct SubReplyDetailSheet {
     .width('100%')
 
     .padding({ left: 14, right: 14 })
+    .accessibilityGroup(true)
+    .accessibilityText(this.replyLabel())
+    .id('subreply-reply-entry')
     .onClick(() => {
       this.onReply();
     })
@@ -263,18 +250,18 @@ export struct SubReplyDetailSheet {
                   bodyBuilder: (): void => {
                     this.subBody(sub);
                   },
-                  onReply: this.onReply,
+                  onReply: (): void => { this.onReplySub(sub); },
                   onToggleLike: (): void => {
                     this.onToggleSubLike(sub);
                   }
                 })
-                .margin({ top: index === 0 ? 0 : 12 })
+                .margin({ top: index === 0 ? 0 : 8 })
                 if (index < this.subPosts.length - 1) {
                   Divider()
                     .color(DetailTheme.DIVIDER)
                     .opacity(0.45)
                     .strokeWidth(1)
-                    .margin({ left: 42, top: 8 })
+                    .margin({ left: 42, top: 6 })
                 }
               }
             }
@@ -289,7 +276,7 @@ export struct SubReplyDetailSheet {
         .height('100%')
         .scrollBar(BarState.Off)
         // 避让空间放在可滚动的 ListFooter，保持内容可经过玻璃后方。
-        .padding({ bottom: 8 })
+        .id('subreply-list')
         .onReachEnd(() => {
           this.onLoadMore();
         })

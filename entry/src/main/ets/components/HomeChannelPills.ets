@@ -1,5 +1,6 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 
-import { curves } from '@kit.ArkUI';
 import { AppTheme } from '../theme/Theme';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
@@ -62,7 +63,7 @@ export struct HomeChannelPills {
           .opacity(0.7)
           .margin({ top: (HIT_H - SELECTED_H) / 2 })
           .translate({ x: this.selectedX() })
-          .animation({ duration: 220, curve: Curve.EaseInOut })
+          .animation({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseInOut })
 
         Row({ space: CHANNEL_GAP }) {
           ForEach(CHANNEL_LABELS, (label: string, index: number) => {
@@ -76,7 +77,7 @@ export struct HomeChannelPills {
                 .onAreaChange((_old: Area, area: Area) => {
                   this.updateChannelWidth(index, Number(area.width));
                 })
-                .animation({ duration: 220, curve: Curve.EaseInOut })
+                .animation({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseInOut })
             }
             .width(this.channelWidth(index))
             .height(HIT_H)
@@ -108,8 +109,8 @@ export struct HomeChannelPills {
     .alignItems(VerticalAlign.Center)
     .scale({ x: this.hidden ? 0.04 : 1, y: this.hidden ? 0.04 : 1,
       centerX: '50%', centerY: 0 })
+    .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
     .translate({ y: this.hidden ? -64 : 0 })
-    .animation({ duration: this.hidden ? 300 : 440,
-      curve: this.hidden ? Curve.EaseIn : curves.springMotion(0.38, 0.64) })
+    .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
   }
 }

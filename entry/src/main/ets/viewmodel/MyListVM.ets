@@ -4,6 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { authSession } from '../auth/AuthSession';
 import { TiebaApi, UserPostsResponse } from '../api/TiebaApi';
+import { ApiResult } from '../api/ApiResult';
 import { mergeUserReplies, StoredThread, UserPostItem, userReplyKey } from '../model/MyContent';
 import { ContentPiece } from '../model/ThreadDetail';
 import { UserProfileInfo } from '../model/UserProfile';
@@ -13,6 +14,7 @@ import {
   addBrowseHistory, BrowseItem, clearBrowseHistory, loadBrowseHistory, markBrowseDeleted
 } from '../utils/BrowseHistory';
 import { putForumAvatar } from '../model/ForumAvatarStore';
+import { formatPostTime } from '../model/HomeFeedPresentation';
 
 /** 列表类型（页面路由参数传字符串，这里做归一） */
 export type MyListKind = 'history' | 'fav' | 'reply' | 'thread';
@@ -46,9 +48,16 @@ export class MyListItem {
   isComment: boolean = false;
   tid: number = 0;
   title: string = '';
-  /** 正文摘要（回复列表用；主题/收藏为空） */
+  /** 帖子/回复正文摘要，收藏与历史为空。 */
   content: string = '';
   forumName: string = '';
+  forumId: number = 0;
+  postedTime: string = '';
+  images: string[] = [];
+  originImages: string[] = [];
+  agreeCount: number = -1;
+  replyCount: number = 0;
+  shareCount: number = -1;
   /** 吧头像完整地址；收藏的 JSON 信封不带，由 VM 按吧名懒解析补上 */
   forumAvatar: string = '';
   /** 封面图（收藏有、浏览历史新记录有，其余为空 → 界面显示占位） */
@@ -61,7 +70,7 @@ export class MyListItem {
    */
   isDeleted: boolean = false;
   /**
-   * 发帖时选了「个人主页不可见」。界面在列表项右上角显示「主页不可见」，
+   * 发帖时选了「个人主页不可见」。界面在卡片右上角、更多菜单左侧显示「主页不可见」，
    * 与官方「我的帖子」一致；只有主题列表有意义（回复行不带这个标志）。
    */
   hideFromProfile: boolean = false;
@@ -81,6 +90,7 @@ export class MyListVM {
   @Trace selected: number[] = [];
   @Trace removing: boolean = false;
   @Trace manageNotice: string = '';
+  @Trace threadPendingTid: number = 0;
 
   private favoritePage: number = 0;
   private favoriteRequest: number = 0;
@@ -104,6 +114,7 @@ export class MyListVM {
   private api: TiebaApi = new TiebaApi();
 
   async load(context: common.UIAbilityContext): Promise<void> {
+    if (this.disposed || this.threadPendingTid > 0) { return; }
     if (this.kind === 'reply' || this.kind === 'thread') { this.syncPrivateAccount(); }
     if (this.kind === 'fav') {
       await this.loadFavorites(context, false);
@@ -172,6 +183,58 @@ export class MyListVM {
     }
     if (this.kind === 'reply') {
       await this.loadReplies(context, true);
+    }
+  }
+
+  /** 菜单和删除确认都绑定打开时的账号，不能对切换后的账号执行。 */
+  threadActionOwner(): string { return this.listOwner; }
+
+  async manageThread(context: common.UIAbilityContext, item: MyListItem, confirmedOwner: string,
+    action: 'hide' | 'show' | 'delete'): Promise<string> {
+    if (this.disposed || this.kind !== 'thread' || this.loading || this.threadPendingTid > 0) { return ''; }
+    if (!authSession.isLoggedIn() || confirmedOwner.length === 0 ||
+      confirmedOwner !== this.listOwner || confirmedOwner !== authSession.sessionKey()) {
+      return '账号已变化，请刷新后再操作';
+    }
+    // 刷新后的同 tid 也是新条目：旧菜单/旧确认框不能对新列表执行。
+    if (!this.items.includes(item) || item.isDeleted || item.tid <= 0) { return '帖子已变化，请刷新后再操作'; }
+    const hidden: boolean = action === 'hide';
+    if (action !== 'delete' && hidden === item.hideFromProfile) { return ''; }
+    this.threadPendingTid = item.tid;
+    const request: number = this.replyRequest;
+    const current = (): boolean => !this.disposed && this.kind === 'thread' &&
+      request === this.replyRequest && confirmedOwner === authSession.sessionKey() && authSession.isLoggedIn();
+    try {
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current()) { return '账号或页面已变化，未继续操作'; }
+      if (authSession.session().tbs.length === 0) {
+        const refreshed = await authSession.refreshTbs(context);
+        if (!current()) { return '账号或页面已变化，未继续操作'; }
+        if (!refreshed.ok) { return '登录凭据未就绪，请重新登录后操作'; }
+      }
+      const session: TiebaSession = authSession.session();
+      const uid: number = action === 'delete' ? 0 : await this.resolveUid(context, session);
+      if (!current()) { return '账号或页面已变化，未继续操作'; }
+      const result: ApiResult = action === 'delete'
+        ? await this.api.deleteMyThread(device, session, item.forumId, item.tid)
+        : await this.api.setMyThreadVisibility(device, session, uid, item.forumId, item.tid, item.pid, hidden);
+      if (!current()) { return '账号或页面已变化，请刷新核对操作结果'; }
+      if (!result.ok) { return `${result.describeFailure()}；请下拉刷新核对后再操作`; }
+      if (action === 'delete') {
+        this.items = this.items.filter((row: MyListItem): boolean => row.tid !== item.tid);
+        return '帖子已删除';
+      }
+      item.hideFromProfile = hidden;
+      this.refreshItems();
+      return hidden ? '已设为主页不可见' : '已设为主页可见';
+    } catch (err) {
+      return '操作结果未确认，请下拉刷新核对后再操作';
+    } finally {
+      this.threadPendingTid = 0;
+      if (!this.disposed && confirmedOwner !== authSession.sessionKey()) {
+        this.syncPrivateAccount();
+        this.errorText = '账号已变化，请重新加载';
+      }
     }
   }
 
@@ -633,15 +696,23 @@ export class MyListVM {
     for (const it of list) {
       const row: MyListItem = new MyListItem();
       row.tid = it.tid;
-      row.pid = isThread ? 0 : it.pid;
+      row.pid = it.pid;
       row.key = isThread ? String(it.tid) : userReplyKey(it);
-      row.pieces = isThread ? [] : it.pieces;
+      row.pieces = it.pieces;
       row.isComment = !isThread && it.isComment;
       // 回复正文与来源帖标题分开，不再把正文伪装为标题。
-      row.title = isThread && it.title.length > 0 ? it.title
-        : (isThread ? (it.content.length > 0 ? it.content : `帖子 ${it.tid}`) : it.title);
+      row.title = it.title;
       row.content = it.content;
       row.forumName = it.forumName;
+      if (isThread) {
+        row.forumId = it.forumId;
+        row.postedTime = formatPostTime(it.createTimeMs, Date.now());
+        row.images = it.images;
+        row.originImages = it.originImages;
+        row.agreeCount = it.agreeNum;
+        row.replyCount = it.replyNum;
+        row.shareCount = it.shareNum;
+      }
       const parts: string[] = [];
       if (isThread && it.authorName.length > 0) {
         parts.push(it.authorName);

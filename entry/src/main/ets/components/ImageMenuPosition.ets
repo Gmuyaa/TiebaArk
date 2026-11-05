@@ -1,3 +1,5 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration } from '../common/appearance/MotionPolicy';
 import { common } from '@kit.AbilityKit';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { HoldingSession, holdingSide, clampFloating, positionRatio } from '../model/SmartReach';
@@ -55,7 +57,7 @@ export struct ImageMenuPosition {
       this.timer = -1;
       if (!this.alive || this.pressed || this.dragging || this.busy || !this.prefs.enabled ||
         !this.prefs.imageMenuEnabled || !this.prefs.foreground) { return; }
-      this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
         this.x = side === -1 ? this.minX() : this.maxX();
       });
     }, 400);

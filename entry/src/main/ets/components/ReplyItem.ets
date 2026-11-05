@@ -53,7 +53,7 @@ export struct ReplyItem {
 
   /** 点赞点击（本地乐观更新） */
   @Event onToggleLike: () => void = (): void => {};
-  /** 单击正文或气泡图标打开当前楼层的回复框 */
+  /** 单击正文打开当前楼层的回复框 */
   @Event onReply: () => void = (): void => {};
   /** 打开完整楼中楼 */
   @Event onOpenSubDetail: () => void = (): void => {};
@@ -127,13 +127,11 @@ export struct ReplyItem {
         .margin({ top: NAME_BODY_GAP })
         .onClick(() => { this.onReply(); })
 
-        // 底部：楼层靠左，楼主回复标签接在右侧，点赞和回复图标靠右。
-        // （不加右内边距：图标组右缘保持在 16vp 版心线）
+        // 底部：楼层靠左，楼主回复标签接在右侧，右侧仅保留点赞。
         ReplyMetaBar({
           floor: this.item.floor,
           hasAuthorReply: this.hasAuthorReply,
           agreeState: this.agreeState,
-          subReplyCount: this.subTotalCount,
           onToggleLike: this.onToggleLike,
           onReply: this.onReply
         })

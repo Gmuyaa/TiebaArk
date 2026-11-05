@@ -1,10 +1,11 @@
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MaterialTabs } from './MaterialTabs';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
 
-/** 与首页整片顶栏同一 HDS 承载方式；前景控件独立，避免原生 Tab 吞掉输入。 */
+/** 与首页整片顶栏同一官方材质承载；前景控件独立，避免 Tab 吞掉输入。 */
 @ComponentV2
 export struct SearchTopMaterial {
+  @Param slot: MaterialSlot = MaterialSlot.SEARCH_TOP_CONTINUOUS;
   @Param panelHeight: number = 100;
   @Local visibleWidth: number = 0;
 
@@ -13,6 +14,17 @@ export struct SearchTopMaterial {
   }
 
   build() {
+    if (materialManager.useArkUI) {
+      MaterialTabs({ slot: this.slot, barHeight: this.panelHeight, componentMaterial: true,
+        barContent: (): void => { this.ArkUIPanel(); } })
+        .width('100%').height(this.panelHeight).hitTestBehavior(HitTestMode.None)
+    } else {
+      this.CompatibilityPanel()
+    }
+  }
+
+  @Builder
+  CompatibilityPanel() {
     Stack({ alignContent: Alignment.Top }) {
       Row().width('100%').height(1)
         .onAreaChange((_old: Area, area: Area) => {
@@ -20,25 +32,18 @@ export struct SearchTopMaterial {
           if (width > 0 && Math.abs(width - this.visibleWidth) > 0.5) { this.visibleWidth = width; }
         })
       // 超宽胶囊两端的圆弧落在屏幕外，可见区是一整片矩形材质。
-      HdsTabs({ barPosition: BarPosition.End }) {
-        TabContent() {}.tabBar(this.EmptyBar())
-      }
-      .barHeight(this.panelHeight).barMode(BarMode.Fixed)
-      .scrollable(false).animationDuration(0).barOverlap(true)
-      .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
-      .barFloatingStyle({
-        barWidth: { smallWidth: this.nodeWidth(), mediumWidth: this.nodeWidth(), largeWidth: this.nodeWidth() },
-        barSideMargin: 0, barBottomMargin: 0,
-        gradientMask: SPLIT_PILL_GRADIENT_MASK, thermoCtrl: true,
-        systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.SEARCH_TOP_CONTINUOUS)
-      })
-      .borderRadius(this.panelHeight / 2).clip(true)
+      MaterialTabs({ slot: this.slot, barHeight: this.panelHeight,
+        barWidth: this.nodeWidth() })
+      .borderRadius(this.panelHeight / 2).clip(false)
       .width(this.nodeWidth()).height(this.panelHeight)
     }
-    .width('100%').height(this.panelHeight).clip(true)
+    .width('100%').height(this.panelHeight).clip(false)
     .hitTestBehavior(HitTestMode.None)
   }
 
   @Builder
-  EmptyBar() { Row() {} }
+  ArkUIPanel() {
+    Row().width('100%').height(this.panelHeight)
+      .systemMaterial(materialManager.officialOf(this.slot))
+  }
 }

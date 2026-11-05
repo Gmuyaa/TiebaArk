@@ -16,6 +16,7 @@ import { lowFlowStore } from '../common/appearance/LowFlowStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
+import { motionStore } from '../common/appearance/MotionStore';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
 import { restoreForumCache } from '../viewmodel/ForumReadCache';
@@ -36,6 +37,7 @@ export default class EntryAbility extends UIAbility {
     visualThemeStore.load(this.context);
     themeModeStore.load(this.context);
     smartReachStore.load(this.context);
+    motionStore.load(this.context);
 
     fontScaleStore.load(this.context);
 

@@ -1,3 +1,6 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
+import { motionDuration, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { RootPageHeader } from './PageHeader';
 import { PageState } from './PageState';
 import { followChanges } from '../viewmodel/FollowActionVM';
@@ -73,7 +76,7 @@ export struct FollowView {
     this.relationshipRefreshPending = false;
     this.vm.load(this.hostContext(), true);
   }
-  /** 列表**尾部占位项**高度（= 悬浮底栏最坏占位 `AppTheme.BAR_TOTAL_H`）：列表本身铺满整页，只让内容末尾留出这段。 */
+  /** 悬浮底栏实际遮挡高度；尾部占位让最后一行能滚到导航上方。 */
   @Param bottomBarOcclusion: number = 0;
   @Local vm: FollowVM = new FollowVM();
   @Local auth: AuthSession = authSession;
@@ -120,6 +123,7 @@ export struct FollowView {
         }.width('100%').height('100%')
       }
       .indicator(false).loop(false).cachedCount(1)
+      .duration(motionDuration(400)).curve(motionSwiperCurve())
       .onAnimationStart((_index: number, targetIndex: number): void => {
         if (targetIndex === 1) { this.squareVisited = true; }
       })
@@ -130,22 +134,26 @@ export struct FollowView {
 
   @Builder
   PageTabs() {
-    Row({ space: 20 }) {
+    Row({ space: 12 }) {
       this.PageTab('我的关注', false)
       this.PageTab('吧广场', true)
-    }
+    }.width('100%')
   }
 
   @Builder
   PageTab(title: string, square: boolean) {
-    Text(title).fontSize(UiLayout.ROOT_TITLE)
+    Text(title).fontSize(this.squareSelected === square ? UiLayout.ROOT_TITLE : UiLayout.HEADER_TITLE)
       .fontWeight(this.squareSelected === square ? FontWeight.Bold : FontWeight.Regular)
       .fontColor(this.squareSelected === square ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
-      .constraintSize({ minHeight: 44 }).maxLines(1)
+      .constraintSize({ minHeight: 48 }).maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .layoutWeight(square ? 3 : 4)
+      .borderRadius(12)
+      .id(square ? 'follow-tab-square' : 'follow-tab-following')
       .accessibilitySelected(this.squareSelected === square)
       .onClick((): void => {
         if (square) { this.squareVisited = true; }
-        this.pageSwiper.changeIndex(square ? 1 : 0, true);
+        this.pageSwiper.changeIndex(square ? 1 : 0, motionStore.isOn(MotionEffect.MOVE));
       })
   }
 
@@ -169,11 +177,11 @@ export struct FollowView {
   /** 头部：左「我的关注」标题 + 右侧沉浸光感日历签到圆按钮。 */
   @Builder
   HeaderActions() {
-    if (!this.squareSelected && authSession.snapshot.isLoggedIn()) {
+    // 签到按钮收起时仍保留槽位，避免两个标题的加权宽度随页签切换变化。
+    Stack() {
+      if (!this.squareSelected && authSession.snapshot.isLoggedIn()) {
         GlassCircleButton({
-          // 原生 calendar 的墨迹中心比布局中心右偏约 10px（本机 3.5px/vp），单独向左补偿。
           symbol: $r('sys.symbol.calendar'), diameter: 40, iconSize: 22, iconWeight: FontWeight.Regular,
-          iconOffsetX: -3,
           accessibilityLabel: this.vm.signingAll ? '正在签到' :
             (this.signStrategy.strategy === 2 ? '混合签到' : (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到')),
           onTap: (): void => {
@@ -184,7 +192,9 @@ export struct FollowView {
             });
           }
         }).enabled(!this.vm.signingAll && this.vm.forums.length > 0)
-    }
+          .opacity(!this.vm.signingAll && this.vm.forums.length > 0 ? 1 : 0.4)
+      }
+    }.width(40).height(40).id('follow-header-actions')
   }
 
   @Builder
@@ -220,10 +230,10 @@ export struct FollowView {
         // ⚠️ key 必须含 isSigned：VM 签到成功后整体替换数组，若 key 不变
         // ForEach 会复用旧组件（拿到旧 item 对象），按钮永远停在"签到"
       }, (item: FollowForumItem) => `${item.fid}-${item.fname}-${item.isSigned ? 1 : 0}-${item.signKnown ? 1 : 0}-${item.level}-${item.levelName}-${item.continuousCount}-${item.totalCount}`)
-
       ListItem() {
         Column().width('100%').height(this.bottomBarOcclusion)
-      }
+          .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
+      }.id('follow-bottom-occlusion')
     }
     .width('100%')
     .layoutWeight(1)
@@ -246,16 +256,16 @@ export struct FollowView {
 
       Column({ space: 3 }) {
         Text(item.fname.endsWith('吧') ? item.fname : `${item.fname}吧`)
-          .fontSize(14)
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(AppTheme.TEXT_MAIN)
-          .maxLines(1)
+          .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         Row({ space: 6 }) {
           ForumLevelBadge({ level: item.level, levelName: item.levelName }).flexShrink(0)
           Text(`连签 ${item.continuousCount >= 0 ? item.continuousCount : '--'} 天`)
-            .fontSize(10).fontColor(AppTheme.TEXT_SUB)
+            .fontSize(UiLayout.META).fontColor(AppTheme.TEXT_SUB)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
         }
@@ -290,11 +300,11 @@ export struct FollowView {
   SignButton(item: FollowForumItem) {
     Text(!item.signKnown ? '读取中…' : item.isSigned ? '已签到'
       : (this.vm.signingFname === item.fname ? '签到中…' : '签到'))
-      .fontSize(12)
+      .fontSize(UiLayout.STATE_BODY)
       .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      .constraintSize({ minHeight: 32, minWidth: 56, maxWidth: 88 }).flexShrink(0)
+      .constraintSize({ minHeight: 48, minWidth: 64 }).flexShrink(0)
       .textAlign(TextAlign.Center)
-      .fontColor(item.isSigned ? AppTheme.TEXT_MUTED : AppTheme.ACCENT_DARK)
+      .fontColor(item.isSigned ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK)
       .backgroundColor(item.isSigned ? Color.Transparent : AppTheme.ACCENT_LIGHT)
       .border({ width: item.isSigned ? 0.5 : 0, color: AppTheme.DIVIDER })
       .borderRadius(12)
@@ -304,6 +314,9 @@ export struct FollowView {
         top: 4,
         bottom: 4
       })
+      .opacity(this.vm.signingAll || this.vm.signingFname.length > 0 ? 0.5 : 1)
+      .accessibilityText(`${item.fname}，${!item.signKnown ? '读取中' : item.isSigned ? '已签到' :
+        this.vm.signingFname === item.fname ? '签到中' : '签到'}`)
       .onClick(() => {
         if (!item.signKnown) { void this.vm.load(this.hostContext(), true); return; }
         // 写操作防连点在 VM 内部（signingFname 占位）；结果用 toast 反馈

@@ -32,7 +32,7 @@ export struct SubReplyDetailItem {
   @Param isFloorAuthor: boolean = false;
   /** 正文（富文本），由页面提供，保证与主列表同一套渲染 */
   @BuilderParam bodyBuilder: () => void = this.emptyBody;
-  /** 回复点击由调用方选择实际支持的发送目标 */
+  /** 回复当前子评论，调用方保留本条及所属父楼层。 */
   @Event onReply: () => void = (): void => {};
   @Event onToggleLike: () => void = (): void => {};
   /** 正文里的图片点击 */
@@ -70,7 +70,8 @@ export struct SubReplyDetailItem {
 
           if (this.isFloorAuthor) {
             Text('层主')
-              .fontSize(10)
+              .fontSize(11)
+              .flexShrink(0)
               .fontColor(DetailTheme.ACCENT_DARK)
               .backgroundColor(DetailTheme.ACCENT_LIGHT)
               .borderRadius(4)
@@ -82,7 +83,8 @@ export struct SubReplyDetailItem {
           }
           if (this.sub.author.isBawu) {
             Text('吧务')
-              .fontSize(10)
+              .fontSize(11)
+              .flexShrink(0)
               .fontColor(DetailTheme.ACCENT_DARK)
               .backgroundColor(DetailTheme.ACCENT_LIGHT)
               .borderRadius(4)
@@ -107,7 +109,7 @@ export struct SubReplyDetailItem {
           onReply: this.onReply,
           onToggleLike: this.onToggleLike
         })
-          .margin({ top: 8 })
+          .margin({ top: 6 })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)

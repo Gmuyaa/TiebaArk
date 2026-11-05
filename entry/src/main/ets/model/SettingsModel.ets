@@ -50,7 +50,8 @@ export enum SettingsPane {
   FORUM_DEFAULT_TAB = 31,
   HDS_MATERIAL = 32,
   HIDDEN_THREADS = 33,
-  IMAGE_MENU = 34
+  IMAGE_MENU = 34,
+  MOTION = 35
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -144,8 +145,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.152';
-export const SETTINGS_VERSION_CODE: string = '2611004';
+export const SETTINGS_APP_VERSION: string = '1.0.176';
+export const SETTINGS_VERSION_CODE: string = '2611028';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -223,8 +224,8 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
     case SettingsPane.HARMONY_FEATURES:
 
       return [
-        paneEntry('material_mode', '弹层与玻璃厚度', state.materialLabel.trim(), SettingsPane.MATERIAL),
-        paneEntry('hds_material_level', '导航与胶囊材质', state.hdsMaterialLabel ?? '精美', SettingsPane.HDS_MATERIAL),
+        paneEntry('material_mode', '沉浸材质厚度', state.materialLabel.trim(), SettingsPane.MATERIAL),
+        paneEntry('hds_material_level', '兼容材质效果', state.hdsMaterialLabel ?? '精美', SettingsPane.HDS_MATERIAL),
         paneEntry('action_bar_style', '帖子页底栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
         paneEntry('home_top_nav_style', '首页顶栏样式', state.topNavLabel.trim(), SettingsPane.TOP_NAV),
         switchEntry('hide_status_bar', '隐藏状态栏', state.hideStatusBar),
@@ -238,7 +239,8 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
           state.smartReach ?? true),
         paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
         switchEntry('image_menu_smart_reach', '看图胶囊跟随握姿', state.imageMenuSmartReach ?? true, state.smartReach ?? true),
-        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true)
+        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true),
+        paneEntry('motion', '动效', '', SettingsPane.MOTION)
       ];
     case SettingsPane.PERSONALIZATION:
 
@@ -316,9 +318,9 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.SIGN_SETTINGS:
       return '签到设置';
     case SettingsPane.MATERIAL:
-      return '弹层与玻璃厚度';
+      return '沉浸材质厚度';
     case SettingsPane.HDS_MATERIAL:
-      return '导航与胶囊材质';
+      return '兼容材质效果';
     case SettingsPane.ACTION_BAR:
       return '帖子页底栏样式';
     case SettingsPane.TOP_NAV:
@@ -339,6 +341,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '浏览设置';
     case SettingsPane.HARMONY_FEATURES:
       return '鸿蒙特性设置';
+    case SettingsPane.MOTION:
+      return '动效';
     case SettingsPane.PERSONALIZATION:
       return '个性化';
     case SettingsPane.OTHER_SETTINGS:

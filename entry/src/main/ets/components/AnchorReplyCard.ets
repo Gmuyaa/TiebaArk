@@ -45,7 +45,8 @@ export struct AnchorReplyCard {
   @Builder
   Badge(text: string, filled: boolean) {
     Text(text)
-      .fontSize(10)
+      .fontSize(11)
+      .flexShrink(0)
       .fontColor(filled ? '#FFFFFF' : DetailTheme.ACCENT_DARK)
       .backgroundColor(filled ? DetailTheme.ACCENT : DetailTheme.ACCENT_LIGHT)
       .borderRadius(4)
@@ -111,7 +112,7 @@ export struct AnchorReplyCard {
           onToggleLike: this.onToggleLike,
           onReply: this.onReply
         })
-          .margin({ top: 8 })
+          .margin({ top: 6 })
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)

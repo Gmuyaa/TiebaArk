@@ -9,6 +9,9 @@ import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 import { AvatarComponent } from './AvatarComponent';
 import { PostContentInline } from './PostContentInline';
 import { TaggedThreadText } from './TaggedThreadText';
+import { materialManager } from '../common/material/MaterialManager';
+import { MaterialSlot } from '../common/material/MaterialConfig';
+import { popupMotion } from '../common/appearance/MotionPolicy';
 
 /** 标准帖子卡：页面传入展示值与动作，组件不发请求、不执行导航。 */
 @ComponentV2
@@ -17,6 +20,10 @@ export struct ThreadPreviewCard {
   @Param authorAvatar: string = '';
   @Param forumName: string = '';
   @Param forumAvatar: string = '';
+  /** 我的帖子复用吧内卡片布局，以吧身份替代作者身份。 */
+  @Param forumIdentity: boolean = false;
+  @Param headerStatus: string = '';
+  @Param menuBusy: boolean = false;
   /** 仅传已确认的发帖日期；不要将最后回复时间填到作者信息中。 */
   @Param postedTime: string = '';
   @Param title: string = '';
@@ -93,6 +100,12 @@ export struct ThreadPreviewCard {
     .layoutWeight(1).justifyContent(FlexAlign.Center)
     .accessibilityGroup(true)
     .constraintSize({ minHeight: 32 })
+    // 紧凑排布与点击范围分开；保留完整行热区，极大字号撑高时也不会裁掉响应范围。
+    .responseRegion([
+      { x: 0, y: 0, width: '100%', height: '100%' },
+      { x: 0, y: -8, width: '100%', height: 48 }
+    ])
+    .borderRadius(12)
     .id(label === '赞' ? 'thread-card-like' : (label === '评论' ? 'thread-card-comment' : 'thread-card-share'))
     .accessibilityText(`${label === '赞' && this.actionState?.liked() ? '取消点赞' : label} ${this.metricCount(label) < 0 ? '数量未知' : this.metricCount(label)}`)
     .onClick(() => { this.activateMetric(label); })
@@ -107,16 +120,37 @@ export struct ThreadPreviewCard {
 
   @Builder
   HeaderMenu() {
-    if (this.menu.length > 0) {
-      Text('⋯').fontSize(20).maxFontScale(1).fontColor(AppTheme.TEXT_SUB).width(32).height(24)
-        .responseRegion({ x: -4, y: -8, width: 40, height: 40 })
-        .textAlign(TextAlign.Center).accessibilityText('更多').bindMenu(this.menu)
+    if (this.headerStatus.length > 0 || this.menu.length > 0) {
+      Row({ space: 6 }) {
+        if (this.headerStatus.length > 0) {
+          Text(this.headerStatus).fontSize(11).fontColor(AppTheme.TEXT_SUB)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .backgroundColor(AppTheme.BG).borderRadius(4)
+            .maxLines(1).flexShrink(0).id('thread-card-header-status')
+        }
+        if (this.menu.length > 0) {
+          if (this.menuBusy) {
+            LoadingProgress().width(32).height(24).accessibilityText('正在处理帖子')
+          } else {
+            // SDK没有裸横向三点符号，复用官方圆点组合，避免文字字体的基线偏移。
+            Row() {
+              ForEach([0, 1, 2], (_index: number) => {
+                SymbolGlyph($r('sys.symbol.dot')).fontSize(8).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+              })
+            }.width(32).height(24).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+              .responseRegion({ x: -8, y: -12, width: 48, height: 48 })
+              .id('thread-card-more').accessibilityGroup(true).accessibilityText('更多').bindMenu(this.menu, {
+                systemMaterial: materialManager.officialOf(MaterialSlot.SHEET), transition: popupMotion()
+              })
+          }
+        }
+      }.alignItems(VerticalAlign.Center).flexShrink(0)
     }
   }
 
   @Builder
   IdentityHeader() {
-    if (this.forumName.length > 0) {
+    if (this.forumName.length > 0 && !this.forumIdentity) {
       Row({ space: ThreadCardLayout.SECTION_GAP }) {
         ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName,
           avatarSize: ThreadCardLayout.AVATAR_SIZE, radius: forumAvatarRadius(ThreadCardLayout.AVATAR_SIZE) })
@@ -149,14 +183,24 @@ export struct ThreadPreviewCard {
       }.width('100%').alignItems(VerticalAlign.Top)
     } else {
       Row({ space: ThreadCardLayout.SECTION_GAP }) {
-        AvatarComponent({ url: this.authorAvatar, avatarSize: ThreadCardLayout.AVATAR_SIZE,
-          fallbackName: this.authorName }).id('thread-card-primary-author-avatar')
-          .onClick(() => { this.openAuthor(); })
+        if (this.forumIdentity) {
+          ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName,
+            avatarSize: ThreadCardLayout.AVATAR_SIZE, radius: forumAvatarRadius(ThreadCardLayout.AVATAR_SIZE) })
+            .id('thread-card-primary-forum-avatar').onClick(() => { this.openForum(); })
+        } else {
+          AvatarComponent({ url: this.authorAvatar, avatarSize: ThreadCardLayout.AVATAR_SIZE,
+            fallbackName: this.authorName }).id('thread-card-primary-author-avatar')
+            .onClick(() => { this.openAuthor(); })
+        }
         Column({ space: 5 }) {
-          Text(this.authorName.length > 0 ? this.authorName : '贴吧用户')
+          Text(this.forumIdentity ? (this.forumName.length > 0
+            ? (this.forumName.endsWith('吧') ? this.forumName : `${this.forumName}吧`) : '贴吧')
+            : (this.authorName.length > 0 ? this.authorName : '贴吧用户'))
             .fontSize(ThreadCardLayout.AUTHOR_SIZE).fontWeight(FontWeight.Medium)
             .fontColor(AppTheme.TEXT_MAIN).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .id('thread-card-primary-author-name').width('100%').onClick(() => { this.openAuthor(); })
+            .id('thread-card-primary-author-name').width('100%').onClick(() => {
+              if (this.forumIdentity) { this.openForum(); } else { this.openAuthor(); }
+            })
           if (this.postedTime.length > 0) {
             Text(this.postedTime).fontSize(ThreadCardLayout.META_SIZE)
               .fontColor(AppTheme.TEXT_SUB).maxLines(1).accessibilityText(`发帖日期 ${this.postedTime}`)

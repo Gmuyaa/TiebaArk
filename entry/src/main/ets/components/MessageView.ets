@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 /** 消息页的通知列表与登录引导。 */
 
 import { RootPageHeader } from './PageHeader';
@@ -166,8 +167,11 @@ export struct MessageView {
                 .backgroundColor(this.msgTabIndex === idx ? AppTheme.ACCENT : Color.Transparent)
             }
             .layoutWeight(1)
+            .constraintSize({ minHeight: 48 })
             .padding({ top: 8, bottom: 8 })
             .justifyContent(FlexAlign.Center)
+            .accessibilityText(tab.label)
+            .accessibilitySelected(this.msgTabIndex === idx)
             .onClick(() => {
               this.msgTabIndex = idx;
             })
@@ -194,7 +198,7 @@ export struct MessageView {
   @Builder
   notifyList() {
     Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
-      List() {
+      List({ space: 10 }) {
         ForEach(notifyRows(), (row: NotifyRow) => {
           ListItem() {
             Row({ space: 14 }) {
@@ -209,6 +213,8 @@ export struct MessageView {
               .height(48)
               .backgroundColor(row.bg)
               .borderRadius(24)
+              .flexShrink(0)
+              .accessibilityLevel('no')
 
               Column({ space: 3 }) {
                 Text(row.title)
@@ -225,10 +231,16 @@ export struct MessageView {
               if (row.action.length > 0) {
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).maxFontScale(1)
                   .fontColor([AppTheme.ARROW_LIST])
+                  .flexShrink(0).accessibilityLevel('no')
               }
             }
             .width('100%')
             .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+            .borderRadius(AppTheme.CARD_RADIUS)
+            .backgroundColor(AppTheme.CARD)
+            .clip(true)
+            .accessibilityGroup(true)
+            .accessibilityText(row.title + '，' + this.preview(row))
             .enabled(row.action.length > 0)
             .onClick(() => {
               if (row.action === 'fans') {
@@ -247,8 +259,9 @@ export struct MessageView {
         }, (row: NotifyRow) => `${row.title}:${visualThemeStore.theme}`)
       }
       .width('100%')
+      .padding({ left: 16, right: 16, top: 12 })
       .layoutWeight(1)
-      .edgeEffect(EdgeEffect.Spring).scrollBar(BarState.Off)
+      .edgeEffect(motionEdgeEffect()).scrollBar(BarState.Off)
     }.layoutWeight(1).refreshOffset(PULL_REFRESH_OFFSET)
     .onStateChange((state: RefreshStatus): void => {
       this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;

@@ -50,7 +50,7 @@ import {
   AtMentionsParams, AuthorBlockParams, AvatarUploadParams, BawuTeamParams, CancelForbiddenForumParams,
   CreateForumParams, FollowParams, ForbiddenForumsParams, ForumMemberParams, FrsHeadlineParams,
   ImageUploadParams, ImageWatermarkParams, MemeEmojiParams, MessageSettingsParams, OfficialMessagesParams,
-  PersonalizedParams, PrivacyMarksParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
+  MyThreadParams, PersonalizedParams, PrivacyMarksParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
   TailsParams, TiebaCommonParams, TiebaDevice, TiebaHost, TiebaSession, TiebaVersion, UserPostParams,
   VideoFeedParams, VoiceAudioParams
 } from '../net/TiebaParams';
@@ -1404,6 +1404,46 @@ export class TiebaApi {
       return response;
     }
     return this.fetchPublicUserPosts(device, session, uid, isThread, page, pageSize);
+  }
+
+  /** 我的帖子：仅明确 error_code=0 才确认写入，不自动重发。 */
+  async setMyThreadVisibility(device: TiebaDevice, session: TiebaSession, uid: number,
+    fid: number, tid: number, pid: number, hidden: boolean): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    if (![uid, fid, tid, pid].every((id: number): boolean => Number.isSafeInteger(id) && id > 0)) {
+      response.failLocal('帖子或账号身份不完整，无法修改主页可见性'); return response;
+    }
+    if (!session.hasBduss() || session.tbs.length === 0) {
+      response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0) { response.failLocal(check); return response; }
+    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const text: string | undefined = await this.postJsonText(MyThreadParams.VISIBILITY_PATH,
+      MyThreadParams.visibility(device, session, uid, fid, tid, pid, hidden), response);
+    if (text === undefined) { return response; }
+    response.ok = privacyWriteConfirmed(text);
+    if (!response.ok) { response.failLocal('主页可见性修改结果未确认，请刷新核对'); }
+    return response;
+  }
+
+  async deleteMyThread(device: TiebaDevice, session: TiebaSession, fid: number, tid: number): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    if (![fid, tid].every((id: number): boolean => Number.isSafeInteger(id) && id > 0)) {
+      response.failLocal('帖子身份不完整，无法删除'); return response;
+    }
+    if (!session.hasBduss() || session.tbs.length === 0) {
+      response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0) { response.failLocal(check); return response; }
+    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const text: string | undefined = await this.postJsonText(MyThreadParams.DELETE_PATH,
+      MyThreadParams.deleteThread(device, session, fid, tid), response);
+    if (text === undefined) { return response; }
+    response.ok = privacyWriteConfirmed(text);
+    if (!response.ok) { response.failLocal('删除结果未确认，请刷新核对'); }
+    return response;
   }
 
   /** 他人主页的公开帖子；登录会话可选，服务端隐私/权限拒绝仍按业务失败处理。 */

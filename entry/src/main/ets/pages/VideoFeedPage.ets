@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { common } from '@kit.AbilityKit';
@@ -78,7 +79,7 @@ export struct VideoFeedPage {
             }
             if (this.vm.loaded) { ListItem() { this.Footer() } }
           }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 }).scrollBar(BarState.Off)
-            .edgeEffect(EdgeEffect.Spring).onReachEnd(() => {
+            .edgeEffect(motionEdgeEffect()).onReachEnd(() => {
               if (this.vm.moreError.length === 0) { void this.vm.loadMore(this.context()); }
             })
         }.refreshOffset(PULL_REFRESH_OFFSET)

@@ -11,6 +11,7 @@ import {
   resolveForumName, SubPostItem, SubPostThreadState, ThreadDetail, syncSubPostThreadStates, unsupportedAgreeTip
 } from '../model/ThreadDetail';
 import { MemePicItem } from '../model/MemeEmoji';
+import { subReplyContent } from '../model/ReplyEditor';
 import { EmojiPickerVM } from './EmojiPickerVM';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { AddPostTarget, AgreeObjType, TiebaDevice, TiebaSession } from '../net/TiebaParams';
@@ -208,6 +209,8 @@ export class ThreadDetailVM {
       this.errorText = '帖子 id 无效';
       return;
     }
+    const sameThread: boolean = this.tid === tid;
+    const previousSubPids: number[] = sameThread ? this.readSubPostIds() : [];
     this.tid = tid;
     this.loading = true;
     this.errorText = '';
@@ -283,6 +286,7 @@ export class ThreadDetailVM {
       // 新建/重置楼中楼状态；已有楼层数据不再保留，状态也应从零开始
       this.syncSubStates(this.posts, true);
       this.agreeFlowSnapshot('load-done');
+      if (sameThread) { await this.refreshSubPostPreviews(context, previousSubPids, seq); }
     } catch (err) {
       const e: Error = err as Error;
       this.errorText = `加载失败：${e.message}`;
@@ -307,6 +311,7 @@ export class ThreadDetailVM {
       return;
     }
     this.isRefreshing = true;
+    const previousSubPids: number[] = this.readSubPostIds();
     this.errorText = '';
     this.requestSeq++;
     const seq: number = this.requestSeq;
@@ -343,6 +348,7 @@ export class ThreadDetailVM {
       this.rebuildAgreeStates('refresh');
       this.syncSubStates(this.posts, true);
       this.agreeFlowSnapshot('refresh-done');
+      await this.refreshSubPostPreviews(context, previousSubPids, seq);
     } catch (err) {
       const e: Error = err as Error;
       this.errorText = `刷新失败：${e.message}`;
@@ -1054,7 +1060,7 @@ export class ThreadDetailVM {
 
   /** 发送回复。成功后更新对应列表，失败保留输入；不把请求已发送视为回复已发布。 */
   async submitReply(context: common.UIAbilityContext, content: string,
-    targetPid: number = 0, withTail?: boolean): Promise<string> {
+    targetPid: number = 0, withTail?: boolean, subPost?: SubPostItem): Promise<string> {
     const text: string = content.trim();
     if (text.length === 0) {
       return '回复内容为空';
@@ -1075,9 +1081,14 @@ export class ThreadDetailVM {
       return '帖子信息还没加载完';
     }
 
+    if (!Number.isSafeInteger(targetPid) || targetPid < 0 ||
+      (subPost !== undefined && (targetPid <= 0 || !Number.isSafeInteger(subPost.pid) || subPost.pid <= 0))) {
+      return '回复目标无效，请重新选择评论';
+    }
     const target: AddPostTarget | undefined = targetPid > 0
-      ? ThreadDetailVM.buildReplyTarget(targetPid)
+      ? ThreadDetailVM.buildReplyTarget(targetPid, subPost)
       : undefined;
+    const body: string = subPost === undefined ? text : subReplyContent(text, subPost);
 
     const session: TiebaSession = this.currentSession();
     const tid: number = this.tid;
@@ -1093,7 +1104,7 @@ export class ThreadDetailVM {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (!current()) { return '账号或帖子已变化，请重新确认回复'; }
       const response: ReplyResponse = await this.api.replyToThread(
-        device, session, tid, fid, forumName, text, target, withTail);
+        device, session, tid, fid, forumName, body, target, withTail);
       if (!current()) { return '账号或帖子已变化，已发出的回复需在原账号确认'; }
       if (!response.ok) {
         hilog.info(FLOW_DOMAIN, FLOW_TAG, 'source=replyFailed tid=%{public}d reason=%{public}s',
@@ -1103,6 +1114,12 @@ export class ThreadDetailVM {
       this.lastReplyPid = response.result.pid;
       hilog.info(FLOW_DOMAIN, FLOW_TAG,
         'source=replyAccepted tid=%{public}d pid=%{public}d', this.tid, response.result.pid);
+      if (targetPid > 0) {
+        // 回复该楼和回复子评论都落在同一楼中楼，不重建主列表或切换全帖排序。
+        await this.refreshRepliedFloor(context, targetPid);
+        if (!current()) { return '账号或帖子已变化，回复已受理，请在原账号查看'; }
+        return '';
+      }
       // 刷一次首屏，让新回复由服务端数据出现（顺序由服务端排序决定，本地不插队）
       await this.refresh(context);
       if (!current()) { return '账号或帖子已变化，回复已受理，请在原账号查看'; }
@@ -1136,10 +1153,51 @@ export class ThreadDetailVM {
   }
 
   /** 把"回复某楼层"包成 pb 请求需要的目标对象（空值一律不传，避免发出畸形的 post_id） */
-  private static buildReplyTarget(pid: number): AddPostTarget {
+  private static buildReplyTarget(pid: number, subPost?: SubPostItem): AddPostTarget {
     const target: AddPostTarget = new AddPostTarget();
     target.postId = String(pid);
+    if (subPost !== undefined) {
+      target.subPostId = String(subPost.pid);
+      if (Number.isSafeInteger(subPost.author.id) && subPost.author.id > 0) {
+        target.replyUid = String(subPost.author.id);
+      }
+    }
     return target;
+  }
+
+  /** 保留已显示内容刷新本层；换状态实例使发送前在途的旧分页结果失效。 */
+  private async refreshRepliedFloor(context: common.UIAbilityContext, pid: number): Promise<void> {
+    const previous: SubPostThreadState | undefined = this.findSubState(pid);
+    const state: SubPostThreadState = new SubPostThreadState();
+    state.pid = pid;
+    if (previous !== undefined) {
+      state.expanded = previous.expanded;
+      state.loadedOnce = previous.loadedOnce;
+      state.subPosts = previous.subPosts;
+      state.page = previous.page;
+      state.hasMore = previous.hasMore;
+    }
+    this.subStates = previous === undefined ? this.subStates.concat([state]) :
+      this.subStates.map((item: SubPostThreadState): SubPostThreadState => item.pid === pid ? state : item);
+    await this.loadSubPosts(context, pid, this.detail.author.id, 1);
+  }
+
+  /** 记住已尝试读取的楼层，详情接口的旧计数为0时也不能漏掉它们。 */
+  private readSubPostIds(): number[] {
+    return this.subStates.filter((state: SubPostThreadState): boolean => state.loadedOnce || state.loading ||
+      state.subPosts.length > 0 || state.errorText.length > 0).map((state: SubPostThreadState): number => state.pid);
+  }
+
+  /** 同 pid 刷新不会再触发可见区回调，显式补拉当前页预览，每批最多4层。 */
+  private async refreshSubPostPreviews(context: common.UIAbilityContext, previousPids: number[],
+    seq: number): Promise<void> {
+    const pids: number[] = this.posts.filter((post: PostItem): boolean => post.subPostCount > 0 ||
+      previousPids.indexOf(post.pid) >= 0).map((post: PostItem): number => post.pid);
+    for (let offset: number = 0; offset < pids.length; offset += 4) {
+      if (seq !== this.requestSeq) { return; }
+      await Promise.all(pids.slice(offset, offset + 4).map((pid: number): Promise<void> =>
+        this.refreshRepliedFloor(context, pid)));
+    }
   }
 
   /** 按 pid 取当前模型里的楼层（找不到返回 undefined） */
@@ -1240,6 +1298,14 @@ export class ThreadDetailVM {
       state.page = response.data;
       state.hasMore = response.data.hasMore;
       state.loadedOnce = true;
+      // floor 返回的总数同时更新主列表预览及主帖的楼中楼入口，不凭发送回执自增。
+      this.posts = this.posts.map((post: PostItem): PostItem => {
+        if (post.pid !== pid || post.subPostCount === response.data.totalCount) { return post; }
+        const updated: PostItem = copyPostItem(post);
+        updated.subPostCount = response.data.totalCount;
+        return updated;
+      });
+      this.syncVisiblePosts();
     } catch (err) {
       const e: Error = err as Error;
       const state: SubPostThreadState | undefined = this.findSubState(pid);

@@ -6,6 +6,8 @@ import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { SettingsOptionItem } from '../model/SettingsModel';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot } from '../common/material/MaterialConfig';
+import { popupMotion } from '../common/appearance/MotionPolicy';
+import { LengthMetrics } from '@kit.ArkUI';
 import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 
 /** 当前应用字体缩放比：摘要换行判定要按**实际渲染尺寸**算，不能按设计值算。 */
@@ -61,6 +63,7 @@ export struct SettingsGroupTitle {
 /** 行外壳：统一最小高度、内距与底部分隔线；选项行还在这里挂选项弹层。 */
 @ComponentV2
 struct RowShell {
+  private menuVisible: boolean = false;
   @Param tall: boolean = false;
   @Param showDivider: boolean = true;
   @Param dividerInset: number = SettingsLayout.ROW_PAD_L;
@@ -77,7 +80,8 @@ struct RowShell {
   emptyContent() {
   }
 
-  build() {
+  @Builder
+  shellContent() {
     Column() {
       Row() {
         this.content()
@@ -88,11 +92,6 @@ struct RowShell {
         left: SettingsLayout.ROW_PAD_L, right: SettingsLayout.ROW_PAD_R,
         top: SettingsLayout.ROW_PAD_V, bottom: SettingsLayout.ROW_PAD_V
       })
-      .onClick(() => {
-        if (this.clickable) {
-          this.onTap();
-        }
-      })
 
       if (this.showDivider) {
         Divider()
@@ -102,56 +101,50 @@ struct RowShell {
       }
     }
     .width('100%')
-    // 弹层几何与材质集中在这里：宽度/圆角/行高读 SettingsLayout，材质走 SHEET 槽位
-    .bindPopup(this.popupOpen && this.popupItems.length > 0, {
-      builder: (): void => {
-        this.menu()
-      },
-      placement: Placement.BottomRight,
-      enableArrow: false,
-      mask: true,
-      autoCancel: true,
-      width: SettingsLayout.POPUP_W,
-      radius: SettingsLayout.POPUP_RADIUS,
-      targetSpace: SettingsLayout.POPUP_TARGET_SPACE,
-      backgroundEffect: materialManager.glassOf(MaterialSlot.SHEET),
-      systemMaterial: materialManager.officialOf(MaterialSlot.SHEET),
-      onStateChange: (event: PopupStateChangeParam): void => {
-        if (!event.isVisible) {
-          this.onPopupClosed();
-        }
-      }
-    })
+  }
+
+  build() {
+    if (this.popupItems.length > 0) {
+      Column() { this.shellContent(); }.width('100%')
+        .onClick((): void => {
+          if (this.clickable) { this.onTap(); }
+        })
+        // 直接传 @Builder，编译器才会生成原生菜单所需的 builder 绑定。
+        .bindMenu(this.popupOpen, this.menu, {
+          placement: Placement.BottomRight, enableArrow: false, mask: true,
+          borderRadius: SettingsLayout.POPUP_RADIUS,
+          targetSpace: LengthMetrics.vp(SettingsLayout.POPUP_TARGET_SPACE),
+          systemMaterial: materialManager.officialOf(MaterialSlot.SHEET), transition: popupMotion(),
+          onAppear: (): void => { this.menuVisible = true; },
+          onDisappear: (): void => {
+            const wasVisible: boolean = this.menuVisible;
+            this.menuVisible = false;
+            if (wasVisible && this.popupOpen) { this.onPopupClosed(); }
+          }
+        })
+    } else {
+      Column() { this.shellContent(); }.width('100%')
+        .onClick((): void => { if (this.clickable) { this.onTap(); } })
+    }
   }
 
   /** 弹层内容：选项名 + 当前项勾选，分隔线左右缩进与文字对齐。 */
   @Builder
   menu() {
-    Column() {
+    Menu() {
       ForEach(this.popupItems, (item: SettingsOptionItem, index: number) => {
-        if (index > 0) {
-          this.menuLine()
-        }
-        this.menuRow(item, index)
+        MenuItem(this.menuRow(item))
+          .padding(0).onClick((): void => { this.onPopupPick(index); })
       }, (item: SettingsOptionItem) => item.key)
     }
-    .width('100%')
+    .width(SettingsLayout.POPUP_W).radius(SettingsLayout.POPUP_RADIUS)
+    .menuItemDivider({ strokeWidth: LengthMetrics.vp(SettingsLayout.POPUP_LINE_H), color: AppTheme.POPUP_LINE,
+      startMargin: LengthMetrics.vp(SettingsLayout.POPUP_LINE_INSET),
+      endMargin: LengthMetrics.vp(SettingsLayout.POPUP_LINE_INSET) })
   }
 
   @Builder
-  menuLine() {
-    Column() {
-      Row()
-        .width('100%')
-        .height(SettingsLayout.POPUP_LINE_H)
-        .backgroundColor(AppTheme.POPUP_LINE)
-    }
-    .width('100%')
-    .padding({ left: SettingsLayout.POPUP_LINE_INSET, right: SettingsLayout.POPUP_LINE_INSET })
-  }
-
-  @Builder
-  menuRow(item: SettingsOptionItem, index: number) {
+  menuRow(item: SettingsOptionItem) {
     Row() {
       Text(item.label)
         .fontSize(SettingsLayout.POPUP_LABEL_SIZE)
@@ -169,9 +162,6 @@ struct RowShell {
     .padding({
       left: SettingsLayout.POPUP_PAD_L, right: SettingsLayout.POPUP_PAD_R,
       top: 8, bottom: 8
-    })
-    .onClick(() => {
-      this.onPopupPick(index);
     })
   }
 }
@@ -293,14 +283,26 @@ export struct SettingsOptionRow {
 
   @Builder
   optionContent() {
-    Text(this.label)
-      .fontSize(SettingsLayout.LABEL_SIZE)
-      .fontColor(AppTheme.TEXT_MAIN)
-      .layoutWeight(1)
-    Text(this.value)
-      .fontSize(SettingsLayout.VALUE_SIZE)
-      .fontColor(AppTheme.VALUE_TEXT)
-      .margin({ left: 12, right: SettingsLayout.CHEVRON_INSET })
+    Column({ space: 3 }) {
+      Text(this.label)
+        .fontSize(SettingsLayout.LABEL_SIZE)
+        .fontColor(AppTheme.TEXT_MAIN)
+        .width('100%')
+      if (summaryBelow(this.label, this.value)) {
+        Text(this.value)
+          .fontSize(SettingsLayout.SUB_SIZE)
+          .fontColor(AppTheme.NOTE_TEXT)
+          .width('100%')
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    if (this.value.length > 0 && !summaryBelow(this.label, this.value)) {
+      Text(this.value)
+        .fontSize(SettingsLayout.VALUE_SIZE)
+        .fontColor(AppTheme.VALUE_TEXT)
+        .margin({ left: 12, right: SettingsLayout.CHEVRON_INSET })
+    }
     RowChevron()
   }
 }

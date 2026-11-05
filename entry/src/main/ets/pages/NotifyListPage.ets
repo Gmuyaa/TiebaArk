@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 
@@ -118,7 +119,7 @@ export struct NotifyListPage {
            * 底部**不留**安全区留白（全站列表同口径，见 AGENTS.md）。
            */
           }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
-          .edgeEffect(EdgeEffect.Spring)
+          .edgeEffect(motionEdgeEffect())
           .scrollBar(BarState.Off)
           .onReachEnd(() => {
             if (this.vm.loadMoreError.length === 0) { void this.vm.loadMore(this.context()); }

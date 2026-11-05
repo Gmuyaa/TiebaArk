@@ -4,6 +4,7 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { AuthSession, authSession } from '../auth/AuthSession';
 import { CommentTarget, commentLink, commentText } from '../model/CommentAction';
 import { materialManager } from '../common/material/MaterialManager';
+import { popupMotion } from '../common/appearance/MotionPolicy';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { DetailTheme } from '../theme/Theme';
 import { AuthorBlockVM, authorBlockAction } from '../viewmodel/AuthorBlockVM';
@@ -198,8 +199,9 @@ export struct CommentActionHost {
     .bindPopup(this.popup, {
       builder: (): void => { this.Menu(); }, placement: Placement.Top, enableArrow: false,
       width: this.menuWidth, radius: 14, targetSpace: 8, mask: { color: Color.Transparent }, autoCancel: true,
-      backgroundEffect: materialManager.glassOf(MaterialSlot.SHEET),
+
       systemMaterial: materialManager.officialOf(MaterialSlot.SHEET),
+      transition: popupMotion(),
       onStateChange: (event: PopupStateChangeParam): void => { if (!event.isVisible) { this.popup = false; } }
     })
     .bindSheet(this.copying, this.CopySheet(), {

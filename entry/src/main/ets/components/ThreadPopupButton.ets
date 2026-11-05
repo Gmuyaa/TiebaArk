@@ -1,7 +1,9 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionTransition, motionSpringCurve } from '../common/appearance/MotionPolicy';
+import { motionStore } from '../common/appearance/MotionStore';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { motion } from '@kit.MultimodalAwarenessKit';
-import { curves } from '@kit.ArkUI';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { MaterialSlot } from '../common/material/MaterialConfig';
@@ -130,7 +132,7 @@ export struct ThreadPopupButton {
       const b = threadActionBounds(this.viewportWidth, this.viewportHeight, this.topInset);
       const side = this.pendingSide;
       this.pendingSide = 0;
-      this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 170, 17) }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(300), curve: motionSpringCurve() }, (): void => {
         this.x = side === -1 ? b.minX : b.maxX;
       });
     }, 400);
@@ -159,7 +161,7 @@ export struct ThreadPopupButton {
     if (cancelled) { this.x = this.originX; this.y = this.originY; return; }
     const b = threadActionBounds(this.viewportWidth, this.viewportHeight, this.topInset);
     const dockedX: number = dockFloatingX(this.x, b);
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.x = dockedX;
     });
     this.prefs.setThreadPosition(positionRatio(dockedX, b.minX, b.maxX), positionRatio(this.y, b.minY, b.maxY),
@@ -225,9 +227,10 @@ export struct ThreadPopupButton {
           Stack() { this.action(index); }
           .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
           .position(this.fanPoint(index))
-          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({
+          .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE).combine(motionTransition(TransitionEffect.translate({
             x: this.x - this.fanPoint(index).x, y: this.y - this.fanPoint(index).y
-          })).animation({ duration: 180, curve: Curve.EaseOut }))
+          }), MotionEffect.MOVE)).animation({ duration: motionStore.enabled && motionStore.arkuiEnabled ? 180 : 0,
+            curve: Curve.EaseOut }))
         }, (index: number): string => `${index}`)
       }
       this.MainButton()

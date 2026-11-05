@@ -31,7 +31,10 @@ import { GlassCircleButton } from '../components/GlassCircleButton';
 import { GlassPillButton } from '../components/GlassPillButton';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
+import { SearchTopMaterial } from '../components/SearchTopMaterial';
 import { materialManager } from '../common/material/MaterialManager';
+import { MotionSettingsPane } from '../components/MotionSettingsPane';
+import { sliderMaterial } from '../common/appearance/MotionPolicy';
 import { ALL_HDS_LEVELS, hdsLevelLabel } from '../common/material/MaterialStrength';
 import { MessageSettingsPane } from '../components/MessageSettingsPane';
 import { OfficialMessagesPane } from '../components/OfficialMessagesPane';
@@ -213,6 +216,7 @@ struct SettingsPage {
   }
 
   private parentPaneOf(pane: SettingsPane): SettingsPane {
+    if (pane === SettingsPane.MOTION) { return SettingsPane.HARMONY_FEATURES; }
     if (pane === SettingsPane.FORBIDDEN_FORUMS || pane === SettingsPane.BLOCK_MANAGE ||
       pane === SettingsPane.HIDDEN_THREADS ||
       pane === SettingsPane.APP_PERMISSIONS || pane === SettingsPane.DATA_USE) {
@@ -1030,6 +1034,7 @@ struct SettingsPage {
         Text('A').fontSize(18).fontColor(AppTheme.TEXT_MAIN)
         Slider({ value: fontScaleStore.customSize, min: FONT_SIZE_MIN, max: FONT_SIZE_MAX, step: 1,
           style: SliderStyle.InSet })
+          .systemMaterial(sliderMaterial())
           .layoutWeight(1)
           .selectedColor(AppTheme.ACCENT)
           .onChange((value: number, mode: SliderChangeMode): void => {
@@ -1108,7 +1113,7 @@ struct SettingsPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(SettingsLayout.CHEVRON_SIZE)
+          .fontSize(SettingsLayout.CHEVRON_SIZE).maxFontScale(1)
           .fontColor([AppTheme.CHEVRON_TINT])
           .margin({ right: SettingsLayout.CHEVRON_INSET })
       }
@@ -1201,6 +1206,8 @@ struct SettingsPage {
     } else if (this.pane === SettingsPane.HARMONY_FEATURES) {
 
       this.HarmonyPane()
+    } else if (this.pane === SettingsPane.MOTION) {
+      MotionSettingsPane()
     } else if (this.pane === SettingsPane.MESSAGE) {
       MessageSettingsPane({
         onOpenOfficial: (): void => {
@@ -1701,6 +1708,11 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.HarmonyMaterialRow() }
     })
+    SettingsNote({ text: materialManager.useArkUI
+      ? '当前使用材质厚度档位；兼容效果仅在设备不支持时生效。'
+      : '当前使用兼容材质，请通过“兼容材质效果”调整。' })
+    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
+      content: (): void => { this.MotionEntryRow(); } })
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => { this.HarmonyStyleRows() }
@@ -1724,6 +1736,12 @@ struct SettingsPage {
       content: (): void => { this.HarmonySmartReachRow() } })
     SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => { this.HarmonyForumTabsFloatingRow() } })
+  }
+
+  @Builder
+  MotionEntryRow() {
+    SettingsEntryRow({ label: '动效', showDivider: false,
+      onTap: (): void => { this.navigateTo(SettingsPane.MOTION); } })
   }
 
   @Builder
@@ -1943,29 +1961,8 @@ struct SettingsPage {
   @Builder
   TitleBar() {
     Stack() {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(AppTheme.BG)
-
-      Column()
-        .width('100%')
-        .height('100%')
+      SearchTopMaterial({ slot: MaterialSlot.NAV_BAR, panelHeight: this.titleBarH() })
         .opacity(this.navGlass)
-        // 深色关于页的顶部与页面同底色，避免导航玻璃把参考图的黑色区域漂成灰色（沿用旧口径）
-
-        .backgroundColor(themeModeStore.isDark ? AppTheme.BG : AppTheme.NAV_FADE_CLEAR)
-        .backgroundEffect(themeModeStore.isDark ? undefined :
-          materialManager.glassOf(MaterialSlot.NAV_BAR))
-        .systemMaterial(themeModeStore.isDark ? undefined :
-          materialManager.officialOf(MaterialSlot.NAV_BAR))
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [AppTheme.NAV_FADE, 0.0],
-            [AppTheme.NAV_FADE_CLEAR, 1.0]
-          ]
-        })
 
       Row() {
         // 分类与内容页更换标题；具体选项仍是弹层，不换页（判据在 settingsPageTitle）。
@@ -1986,7 +1983,7 @@ struct SettingsPage {
        * 左内边距 = 按钮直径 40 + 左右各 12 的间隙。
        *
        * ⚠️ 返回按钮**已经不在这层里了**（见 build 内注释）：嵌在顶栏内部时它的
-       * `backgroundEffect` backdrop 采不到滚动内容，真机连续 8 帧圆内均值纹丝不动。
+       * 返回按钮保持独立，避免材质背板与标题内容互相影响。
        * 这里只负责给标题让出按钮原来的位置。
        */
       .padding({ left: 64, right: this.pane === SettingsPane.FORBIDDEN_FORUMS ?

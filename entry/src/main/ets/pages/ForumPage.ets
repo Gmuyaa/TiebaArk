@@ -1,3 +1,6 @@
+import { motionStore } from '../common/appearance/MotionStore';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PageState, ListFooter } from '../components/PageState';
 import { RefreshSpinner, FORUM_REFRESH_OFFSET } from '../components/RefreshSpinner';
@@ -20,7 +23,7 @@ import { openUserByIdentity } from '../navigation/UserNavigation';
 import { common } from '@kit.AbilityKit';
 import { DirectoryKind } from '../model/PageDirectory';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction, curves, AnimatorResult } from '@kit.ArkUI';
+import { promptAction, AnimatorResult } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { ForumTab, ThreadBrief } from '../model/ThreadList';
 import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
@@ -71,8 +74,8 @@ interface ImageCompleteInfo {
 
 const FORUM_PAGE_STATES: Map<string, ForumPageState> = new Map<string, ForumPageState>();
 const FORUM_IDENTITY_MIN_HEIGHT: number = 116;
-const FORUM_IDENTITY_BOTTOM_GAP: number = 16;
-const FORUM_IDENTITY_CARD_GAP: number = 12;
+const FORUM_IDENTITY_BOTTOM_GAP: number = 12;
+const FORUM_IDENTITY_CARD_GAP: number = 8;
 /** 封面始终维持原尺寸；只有纯色/平滑背景将身份和帖子前移。 */
 const FORUM_COVER_FULL_HEIGHT: number = 184;
 const FORUM_HEADER_LIFT: number = 56;
@@ -80,7 +83,6 @@ const FORUM_COVER_OVERLAP: number = 24;
 const FORUM_IDENTITY_PANEL_RADIUS: number = 20;
 /** 顶部工具栏内容行高；内容列表视口从其下沿开始。 */
 const FORUM_TOOLBAR_HEIGHT: number = 56;
-const FORUM_TAB_HANDLE_HEIGHT: number = 12;
 const FORUM_PANEL_RADIUS: number = 9;
 const FORUM_POST_ORDER_HEIGHT: number = 28;
 
@@ -254,7 +256,7 @@ export struct ForumPage {
   private openForumSearch(): void {
     if (this.forumSearchExpanded) { return; }
     this.forumSearchExpanded = true;
-    this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(260, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.forumSearchProgress = 1;
     });
     setTimeout((): void => {
@@ -267,7 +269,7 @@ export struct ForumPage {
   private closeForumSearch(): void {
     this.getUIContext().getFocusController().clearFocus();
     this.forumSearchExpanded = false;
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.forumSearchProgress = 0;
     });
   }
@@ -299,7 +301,7 @@ export struct ForumPage {
           setTimeout(() => {
             if (!this.active) { return; }
             const top: number = this.heroHeight() - FORUM_TOOLBAR_HEIGHT;
-            this.scroller.scrollTo({ xOffset: 0, yOffset: top, animation: true });
+            this.scroller.scrollTo({ xOffset: 0, yOffset: top, animation: motionStore.isOn(MotionEffect.MOVE) });
             if (this.pageState !== undefined) { this.pageState.scrollOffset = top; }
           }, 16);
         }
@@ -322,7 +324,7 @@ export struct ForumPage {
   }
 
   private settlePullDistance(distance: number): void {
-    this.getUIContext().animateTo({ duration: 420, curve: curves.springMotion(0.38, 0.8) }, () => {
+    this.getUIContext().animateTo({ duration: motionDuration(420), curve: motionSpringCurve() }, () => {
       this.pullDistance = distance;
     });
   }
@@ -619,7 +621,8 @@ export struct ForumPage {
     this.stopCoverLift();
     this.coverFlat = compact;
     // 加载遮罩内直接准备最终布局；只有已显示的页面需要连续过渡。
-    if (!this.active || !this.pageVisible || (this.vm.loading && !this.vm.loadedOnce) || this.coverLift === target) {
+    if (!motionStore.isOn(MotionEffect.MOVE) || !this.active || !this.pageVisible ||
+      (this.vm.loading && !this.vm.loadedOnce) || this.coverLift === target) {
       this.coverLift = target;
       return;
     }
@@ -718,13 +721,14 @@ export struct ForumPage {
                 onSubmit: (): void => { this.submitForumSearch(); } })
                 .opacity(this.forumSearchProgress)
                 .hitTestBehavior(this.forumSearchExpanded ? HitTestMode.Default : HitTestMode.None)
-              GlassCircleButton({ symbol: $r('sys.symbol.magnifyingglass'), iconSize: 22, iconOffsetX: -3,
+              GlassCircleButton({ symbol: $r('sys.symbol.magnifyingglass'), iconSize: 22,
                 accessibilityLabel: '搜索吧内帖子', onTap: (): void => { this.openForumSearch(); } })
                 .opacity(1 - this.forumSearchProgress)
                 .hitTestBehavior(this.forumSearchExpanded ? HitTestMode.None : HitTestMode.Default)
             }
             .width(40 + Math.max(0, this.forumSearchSlotWidth - 40) * this.forumSearchProgress)
-            .height(40).clip(true).id('forum-search-expand')
+            // 圆形按钮自行裁剪材质；外层保留阴影，避免被40vp矩形截成方块。
+            .height(40).clip(false).id('forum-search-expand')
           }
           .layoutWeight(1).height(40)
           .onAreaChange((_old: Area, area: Area): void => {
@@ -803,7 +807,7 @@ export struct ForumPage {
   }
 
   private forumHeaderHeight(): number {
-    return this.categoryPrefs.forumTabsFloating ? 0 : 46 + FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress);
+    return this.categoryPrefs.forumTabsFloating ? 0 : 46;
   }
   private revealTopCategory(): void {
     if (this.categoryPrefs.forumTabsFloating) { return; }
@@ -814,7 +818,7 @@ export struct ForumPage {
         const width: number = this.topTabWidths.get(tab.id) ?? tab.name.length * 16;
         if (tab.id === this.vm.targetTabId()) {
           this.topTabsScroller.scrollTo({ xOffset: Math.max(0, start + width / 2 - this.viewportWidth / 2),
-            yOffset: 0, animation: { duration: 220, curve: Curve.EaseOut } });
+            yOffset: 0, animation: { duration: motionDuration(220), curve: Curve.EaseOut } });
           return;
         }
         start += width + 26;
@@ -827,13 +831,6 @@ export struct ForumPage {
   ForumTabs() {
     Column() {
       if (!this.categoryPrefs.forumTabsFloating) {
-        Row() {
-          Row().width(36).height(4).borderRadius(2).backgroundColor(AppTheme.TEXT_MUTED).opacity(0.25)
-        }.width('100%').height(FORUM_TAB_HANDLE_HEIGHT * (1 - this.tabsNavProgress))
-          .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-          .opacity(1 - this.tabsNavProgress).clip(true)
-      }
-      if (!this.categoryPrefs.forumTabsFloating) {
         Scroll(this.topTabsScroller) {
           Row({ space: 26 }) {
             ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
@@ -842,7 +839,7 @@ export struct ForumPage {
                   .fontWeight(tab.id === this.vm.targetTabId() ? FontWeight.Bold : FontWeight.Normal)
                   .fontColor(tab.id === this.vm.targetTabId() ? AppTheme.NAV_SELECTED : AppTheme.TEXT_SUB)
                 Row().width(tab.id === this.vm.targetTabId() ? 20 : 0).height(2).borderRadius(2)
-                  .backgroundColor(AppTheme.NAV_SELECTED).animation({ duration: 220, curve: Curve.EaseOut })
+                  .backgroundColor(AppTheme.NAV_SELECTED).animation({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut })
               }.height(46).justifyContent(FlexAlign.Center)
                 .onClick((): void => { void this.selectForumTab(tab, index); })
                 .onAreaChange((_old: Area, area: Area): void => {
@@ -927,7 +924,7 @@ export struct ForumPage {
     const direction: number = index >= previous ? 1 : -1;
     const revision: number = ++this.tabAnimation;
     const offset: number = Math.min(this.scroller.currentOffset().yOffset, this.heroHeight() - FORUM_TOOLBAR_HEIGHT);
-    this.getUIContext().animateTo({ duration: 100, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(100, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.contentShift = -12 * direction;
       this.contentOpacity = 0.65;
     });
@@ -945,13 +942,13 @@ export struct ForumPage {
       });
       setTimeout((): void => {
         if (!this.active || revision !== this.tabAnimation) { return; }
-        this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseOut }, (): void => {
+        this.getUIContext().animateTo({ duration: motionDuration(260, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
           this.contentShift = 0;
           this.contentOpacity = 1;
         });
       }, 16);
     } else {
-      this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
         this.contentShift = 0;
         this.contentOpacity = 1;
       });
@@ -1045,8 +1042,8 @@ export struct ForumPage {
                     }.width('100%').alignItems(VerticalAlign.Top)
                   }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
                     top: visualThemeStore.isPaper ? 0 : 8 })
-                    .translate({ x: this.categoryPrefs.forumTabsFloating ? 0 : this.contentShift })
-                    .opacity(this.categoryPrefs.forumTabsFloating ? 1 : this.contentOpacity)
+                    .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
+                    .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }
                 ListItem() { this.PageFooter() }.padding({ left: 8, right: 8 })
               } else if (this.vm.threads.length === 0) {
@@ -1062,8 +1059,8 @@ export struct ForumPage {
                   }
                   .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
                     top: visualThemeStore.isPaper ? 0 : 8 })
-                  .translate({ x: this.categoryPrefs.forumTabsFloating ? 0 : this.contentShift })
-                  .opacity(this.categoryPrefs.forumTabsFloating ? 1 : this.contentOpacity)
+                  .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
+                  .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }
 
                 ForEach(this.regularThreads(), (item: ThreadBrief) => {
@@ -1081,8 +1078,8 @@ export struct ForumPage {
                   }
                   .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
                     top: visualThemeStore.isPaper ? 0 : 8 })
-                  .translate({ x: this.categoryPrefs.forumTabsFloating ? 0 : this.contentShift })
-                  .opacity(this.categoryPrefs.forumTabsFloating ? 1 : this.contentOpacity)
+                  .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
+                  .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }, (item: ThreadBrief) => `${item.tid}`)
 
                 ListItem() {
@@ -1095,8 +1092,8 @@ export struct ForumPage {
             .borderRadius({ topLeft: this.categoryPrefs.forumTabsFloating ? 0 : FORUM_PANEL_RADIUS * (1 - this.tabsNavProgress),
               topRight: this.categoryPrefs.forumTabsFloating ? 0 : FORUM_PANEL_RADIUS * (1 - this.tabsNavProgress) })
             // 顶部模式沿用旧版逐项动画，避免把吸顶分类栏和底色一起移走。
-            .translate({ x: this.categoryPrefs.forumTabsFloating ? this.contentShift : 0 })
-            .opacity(this.categoryPrefs.forumTabsFloating ? this.contentOpacity : 1)
+            .translate({ x: this.categoryPrefs.forumTabsFloating && motionStore.isOn(MotionEffect.MOVE) ? this.contentShift : 0 })
+            .opacity(this.categoryPrefs.forumTabsFloating && motionStore.isOn(MotionEffect.FADE) ? this.contentOpacity : 1)
           }
           .width('100%')
           .layoutWeight(1)

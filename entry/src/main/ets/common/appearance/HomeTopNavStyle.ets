@@ -11,7 +11,7 @@ export enum HomeTopNavStyle {
   UNIFIED_GLASS = 3,
   /** 已退役，加载时迁移到官方沉浸。 */
   LIGHT_LABELS = 4,
-  /** 双排内容由 HomeDualRowTopBar 的 HDS 悬浮面承载。 */
+  /** 双排内容由 HomeDualRowTopBar 的官方悬浮面承载，ArkUI 优先、HDS 回退。 */
   OFFICIAL_DUAL_ROW = 5
 }
 

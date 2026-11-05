@@ -21,8 +21,7 @@ export struct GlassMoreButton {
       onTap: this.onTap,
       accessibilityLabel: '更多操作',
       diameter: this.diameter,
-      iconSize: this.iconSize,
-      iconOffsetX: -(this.iconSize * 0.093)
+      iconSize: this.iconSize
     })
   }
 }

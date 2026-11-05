@@ -28,6 +28,7 @@ export struct ForumLevelBadge {
   @Param forceOfficial: boolean = false;
   private preference = forumLevelStore;
   @Local titleStretchWidth: number = 0;
+  @Local badgeWidth: number = 86 / 3;
 
   /** 官方 xl7.c() 对应 CAM_X0309 / 0306 / 0305 / 0319。 */
   private titleColor(): string {
@@ -62,15 +63,23 @@ export struct ForumLevelBadge {
       if (this.levelName.length > 0) {
         // 移植 TbLevelView：完整 NinePatch 背景承载称号，而非裁图＋另画底色。
         // 固定高13vp，无需纵向拉伸；图形区按86:39原比例缩放。
-        Text(this.levelName).fontSize(8.7).maxFontScale(1).fontWeight(FontWeight.Bold)
-          .fontColor(this.titleColor()).height(13)
-          .padding({ left: 16.3, right: 3.3 })
-          .background(this.OfficialBackground)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .constraintSize({ minWidth: 86 / 3, maxWidth: 82.4 })
-          .id('forum-level-badge')
-          .flexShrink(0)
-          .accessibilityText(`等级 ${this.level} ${this.levelName}`)
+        Stack({ alignContent: Alignment.TopStart }) {
+          // 普通叠层随主题重绘；自定义 Text.background 在真机颜色模式切换后会丢失底图。
+          Column() { this.OfficialBackground() }
+            .width(this.badgeWidth).height(13).position({ x: 0, y: 0 })
+            .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+          Text(this.levelName).fontSize(8.7).maxFontScale(1).fontWeight(FontWeight.Bold)
+            .fontColor(this.titleColor()).height(13)
+            .padding({ left: 16.3, right: 3.3 })
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ minWidth: 86 / 3, maxWidth: 82.4 })
+            .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions): void => {
+              const width: number = Number(newValue.width);
+              if (width > 0 && Math.abs(width - this.badgeWidth) >= 0.5) { this.badgeWidth = width; }
+            })
+            .id('forum-level-badge')
+            .accessibilityText(`等级 ${this.level} ${this.levelName}`)
+        }.height(13).flexShrink(0)
       } else {
         // 官方空称号分支使用 icon_forum_level_N，布局 tbds44×tbds39。
         Image(SIMPLE_LEVEL_ICONS[this.level - 1]).width(14.7).height(13)

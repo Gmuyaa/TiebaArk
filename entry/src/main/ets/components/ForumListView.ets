@@ -1,3 +1,6 @@
+import { motionStore } from '../common/appearance/MotionStore';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionSpringCurve, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from './PageState';
@@ -6,7 +9,7 @@ import { followChanges } from '../viewmodel/FollowActionVM';
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { curves, promptAction, router } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import { ThreadPreviewCard } from './ThreadPreviewCard';
 import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { buildThreadCardMenu } from './ThreadCardMenu';
@@ -220,7 +223,7 @@ export struct ForumListView {
   /** 按真实滚动方向累积一小段距离，统一控制首页状态栏与上下导航。 */
   private trackStatusBarScroll(channel: string, offset: number, state: ScrollState): void {
     if (channel !== this.selectedChannel || state === ScrollState.Idle ||
-      Date.now() < this.suppressScrollUntil || Math.abs(offset) < 1) {
+      Date.now() < this.suppressScrollUntil || !Number.isFinite(offset) || offset === 0) {
       return;
     }
     const direction: number = offset > 0 ? 1 : -1;
@@ -313,7 +316,7 @@ export struct ForumListView {
   private changeChannel(channel: FeedChannel): void {
     const index: number = CHANNELS.indexOf(channel);
     if (index >= 0) {
-      this.channelSwiper.changeIndex(index, true);
+      this.channelSwiper.changeIndex(index, motionStore.isOn(MotionEffect.MOVE));
     }
   }
 
@@ -491,11 +494,11 @@ export struct ForumListView {
   /** 底栏「首页」单击只移动当前频道，保留关注／推荐／热榜各自的滚动位置。 */
   private scrollCurrentToTop(): void {
     if (this.selectedChannel === '关注') {
-      this.followScroller.scrollToIndex(0, true, ScrollAlign.START);
+      this.followScroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
     } else if (this.selectedChannel === '热榜') {
-      this.hotScroller.scrollToIndex(0, true, ScrollAlign.START);
+      this.hotScroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
     } else {
-      this.recommendScroller.scrollToIndex(0, true, ScrollAlign.START);
+      this.recommendScroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
     }
   }
 
@@ -560,6 +563,7 @@ export struct ForumListView {
       }
       .indicator(false)
       .loop(false)
+      .duration(motionDuration(400)).curve(motionSwiperCurve())
       // 初始页落位（无动画）：`.index()` 不绑，见 channelSwiper 处的说明
       .onAppear(() => {
         const index: number = this.channelIndex();
@@ -622,10 +626,11 @@ export struct ForumListView {
     .padding({ top: this.statusBarH + 8, left: 14, right: 14 })
     .scale({ x: this.topNavigationHidden ? 0.04 : 1, y: this.topNavigationHidden ? 0.04 : 1,
       centerX: '50%', centerY: 0 })
+    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
     .translate({ y: this.topNavigationHidden ? -this.statusBarH - 8 : 0 })
+    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
     .opacity(this.topNavigationHidden ? 0 : 1)
-    .animation({ duration: this.topNavigationHidden ? 300 : 440,
-      curve: this.topNavigationHidden ? Curve.EaseIn : curves.springMotion(0.38, 0.64) })
+    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve() })
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.headerH = Number(newArea.height);
       hilog.info(0x0, 'TiebaTop', 'headerH=%{public}s gY=%{public}s gX=%{public}s',

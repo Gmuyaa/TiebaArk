@@ -4,49 +4,32 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { uiMaterial } from '@kit.ArkUI';
-// `BackgroundEffectOptions` 是 ArkUI 的**环境类型**（组件声明里全局可见），不需要 import
+import { MotionEffect } from '../appearance/MotionConfig';
+import { motionStore } from '../appearance/MotionStore';
 import {
-  CapsuleEdge,
-  DEFAULT_MODE,
-  GlassSpec,
-  HdsMaterialEffect,
-  MaterialBackend,
-  MaterialMode,
-  MaterialSlot,
-  MATERIAL_KEY_MODE,
-  MATERIAL_KEY_HDS_LEVEL,
-  MATERIAL_STORE,
-  SlotScrollSpec,
-  immersiveStyleOf,
-  edgeShadeOf,
-  glassSpecAtProgress,
-  glassSpecOf,
-  hdsLevelOf,
-  hdsTypeOf,
-  materialBackendOf,
-  modeLabel,
-  normalizeMode,
-  resolveMode,
-  scrollProgressOf,
-  scrollSpecOf,
-  tintToColor
+  DEFAULT_MODE, HdsMaterialEffect, MaterialMode, MaterialSlot,
+  MATERIAL_KEY_MODE, MATERIAL_KEY_HDS_LEVEL, MATERIAL_STORE,
+  immersiveStyleOf, hdsLevelOf, hdsTypeOf, modeLabel, normalizeMode, resolveMode
 } from './MaterialConfig';
 import { DEFAULT_HDS_LEVEL, HdsMaterialLevelPref, normalizeHdsLevel } from './MaterialStrength';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'TiebaMaterial';
 
-/** 官方材质对象**按「槽位 × 档位」缓存**：`ImmersiveMaterial` 不必每次 build 都 new */
-type MaterialCache = Map<string, uiMaterial.Material>;
+/** 官方材质对象按「槽位 × 档位 × 阴影开关」缓存：`ImmersiveMaterial` 不必每次 build 都 new */
+type MaterialCache = Map<string, uiMaterial.ImmersiveMaterial>;
 
 @ObservedV2
 export class MaterialManager {
   /** 用户偏好档位。默认 `SYSTEM`（需求：当前阶段先使用统一默认值） */
   @Trace mode: MaterialMode = DEFAULT_MODE;
   @Trace hdsLevel: HdsMaterialLevelPref = DEFAULT_HDS_LEVEL;
+  /** 由已就绪页面的 UI 作用域检测；ArkUI 不可用时悬浮面才回退 HDS。 */
+  @Trace useArkUI: boolean = true;
 
-  private cache: MaterialCache = new Map<string, uiMaterial.Material>();
+  private cache: MaterialCache = new Map<string, uiMaterial.ImmersiveMaterial>();
   private loaded: boolean = false;
+  private feedbackKey: string = '';
 
   /**
    * 启动时读一次持久化偏好。
@@ -69,11 +52,26 @@ export class MaterialManager {
       this.hdsLevel = normalizeHdsLevel(rawHds);
       this.loaded = true;
       hilog.info(DOMAIN, TAG, 'material mode loaded: %{public}s',
-        `${this.mode}(${modeLabel(this.mode)})`);
+        this.describe());
     } catch (e) {
       this.loaded = true;
       hilog.warn(DOMAIN, TAG, 'material mode load failed, fallback to SYSTEM: %{public}s',
         String(e));
+    }
+  }
+
+  /**
+   * 仅由已就绪页面通过 UIContext.runScopedTask 调用。
+   * Ability.onCreate 中无 UI 容器，查询可能返回 false，不能据此全局关闭材质。
+   * load 只加载偏好，不做依赖 UI 作用域的能力判断。
+   */
+  refreshCapabilities(): void {
+    try {
+      this.useArkUI = uiMaterial.isImmersiveMaterialSupported();
+      hilog.info(DOMAIN, TAG, 'ArkUI material capability in UI scope: %{public}s', `${this.useArkUI}`);
+    } catch (error) {
+      this.useArkUI = false;
+      hilog.warn(DOMAIN, TAG, 'ArkUI material capability query failed: %{public}s', String(error));
     }
   }
 
@@ -119,67 +117,28 @@ export class MaterialManager {
     return resolveMode(slot, this.mode);
   }
 
-  /** 某槽位当前走哪条通道（官方 / 自绘） */
-  backendOf(slot: MaterialSlot): MaterialBackend {
-    return materialBackendOf(slot);
-  }
-
-  /**
-   * 自绘玻璃参数；当前通道是 `OFFICIAL` 时返回 `undefined`（= 不施加任何背景效果）。
-   *
-   * 直接喂给 `.backgroundEffect(...)`，该 API 的签名是
-   * `backgroundEffect(options: Optional<BackgroundEffectOptions>)`，吃 undefined。
-   */
-  glassOf(slot: MaterialSlot): BackgroundEffectOptions | undefined {
-    if (this.backendOf(slot) !== MaterialBackend.GLASS) {
+  /** 官方材质按用途、厚度与阴影开关复用；不提供自绘模糊回退。 */
+  officialOf(slot: MaterialSlot, applyShadow: boolean = true): uiMaterial.ImmersiveMaterial | undefined {
+    if (!this.useArkUI) {
       return undefined;
     }
-    const spec: GlassSpec = glassSpecOf(slot, this.modeOf(slot));
-    return {
-      radius: spec.radius,
-      saturation: spec.saturation,
-      brightness: spec.brightness,
-      color: tintToColor(spec.tint)
-    };
-  }
-
-  capsuleEdgeOf(slot: MaterialSlot): CapsuleEdge | undefined {
-    return edgeShadeOf(slot);
-  }
-
-  glassAtOffset(slot: MaterialSlot, scrollOffset: number): BackgroundEffectOptions | undefined {
-    if (this.backendOf(slot) !== MaterialBackend.GLASS) {
-      return undefined;
-    }
-    const spec: SlotScrollSpec | undefined = scrollSpecOf(slot);
-    const progress: number = spec === undefined ? 1 : scrollProgressOf(spec, scrollOffset);
-    const glass: GlassSpec = glassSpecAtProgress(slot, this.modeOf(slot), progress);
-    return {
-      radius: glass.radius,
-      saturation: glass.saturation,
-      brightness: glass.brightness,
-      color: tintToColor(glass.tint)
-    };
-  }
-
-  /**
-   * 官方沉浸材质对象；当前通道是 `GLASS` 时返回 `undefined`
-   * （官方语义：`undefined` = 恢复组件默认的沉浸光感效果，**不等于**关闭）。
-   *
-   * 直接喂给 `.systemMaterial(...)`，签名 `systemMaterial(material: SystemUiMaterial | undefined)`。
-   */
-  officialOf(slot: MaterialSlot): uiMaterial.Material | undefined {
-    if (this.backendOf(slot) !== MaterialBackend.OFFICIAL) {
-      return undefined;
+    const interactive: boolean = motionStore.isOn(MotionEffect.DEFORMATION);
+    const light: boolean = motionStore.isOn(MotionEffect.TOUCH_LIGHT);
+    const feedbackKey: string = `${interactive}:${light}`;
+    if (feedbackKey !== this.feedbackKey) {
+      this.cache.clear();
+      this.feedbackKey = feedbackKey;
     }
     const mode: MaterialMode = this.modeOf(slot);
-    const key: string = `${slot}:${mode}`;
-    const hit: uiMaterial.Material | undefined = this.cache.get(key);
+    const key: string = `${slot}:${mode}:${applyShadow}`;
+    const hit: uiMaterial.ImmersiveMaterial | undefined = this.cache.get(key);
     if (hit !== undefined) {
       return hit;
     }
-    const created: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-      style: immersiveStyleOf(mode)
+    const created: uiMaterial.ImmersiveMaterial = new uiMaterial.ImmersiveMaterial({
+      style: immersiveStyleOf(mode), applyShadow: applyShadow,
+      interactive: interactive, lightEffect: light ? {} : null,
+      materialColor: slot === MaterialSlot.FORUM_TAB_SELECTION ? '#30569CFF' : undefined
     });
     this.cache.set(key, created);
     return created;
@@ -195,7 +154,7 @@ export class MaterialManager {
 
   /** 日志用的一行摘要 */
   describe(): string {
-    return `mode=${this.mode}(${modeLabel(this.mode)})`;
+    return `backend=${this.useArkUI ? 'ArkUI' : 'HDS'},mode=${this.mode}(${modeLabel(this.mode)})`;
   }
 }
 

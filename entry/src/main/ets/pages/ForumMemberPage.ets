@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { ForumLevelBadge } from '../components/ForumLevelBadge';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
@@ -91,7 +92,7 @@ export struct ForumMemberPage {
             }
 
           }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
-          .edgeEffect(EdgeEffect.Spring)
+          .edgeEffect(motionEdgeEffect())
         }.refreshOffset(PULL_REFRESH_OFFSET)
         .onStateChange((state: RefreshStatus) => {
           this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;

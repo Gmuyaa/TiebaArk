@@ -1,11 +1,11 @@
-/** 一级回复下方的时间、回复入口与点赞操作行。 */
+/** 评论下方的楼层、楼主回复提示与点赞操作行；详情模式保留左侧文字回复入口。 */
 
 import { AgreeState } from '../viewmodel/ThreadDetailVM';
 import { DetailTheme } from '../theme/Theme';
 
 @ComponentV2
 export struct ReplyMetaBar {
-  /** 完整回复详情：只保留回复和点赞，操作行直接容纳 44vp 点击区。 */
+  /** 完整回复详情：32vp 视觉操作行，点击区向上下各延伸 6vp。 */
   @Param detailLayout: boolean = false;
   /** 一级评论楼层号；缺失时不补占位。 */
   @Param floor: number = 0;
@@ -13,11 +13,9 @@ export struct ReplyMetaBar {
   @Param hasAuthorReply: boolean = false;
 
   @Require @Param agreeState: AgreeState;
-  /** 该父评论下的楼中楼数量；没有回复时只显示气泡。 */
-  @Param subReplyCount: number = 0;
   /** 点赞点击 */
   @Event onToggleLike: () => void = (): void => {};
-  /** 气泡图标（详情模式另有文字入口）打开当前父楼层的回复框 */
+  /** 详情模式的文字入口回复当前评论，由调用方区分父楼层与子评论。 */
   @Event onReply: () => void = (): void => {};
 
   @Builder
@@ -45,8 +43,14 @@ export struct ReplyMetaBar {
           .fontColor(this.agreeState.liked() ? DetailTheme.ACCENT : DetailTheme.COMMENT_ACTION)
       }
     }
-    .constraintSize({ minWidth: this.detailLayout ? 44 : 40, minHeight: this.detailLayout ? 44 : 0 })
+    .constraintSize({ minWidth: this.detailLayout ? 44 : 40, minHeight: this.detailLayout ? 32 : 0 })
     .justifyContent(FlexAlign.Center)
+    .responseRegion(this.detailLayout
+      ? [{ x: 0, y: 0, width: '100%', height: '100%' }, { x: 0, y: -6, width: '100%', height: 44 }]
+      : { x: 0, y: 0, width: '100%', height: '100%' })
+    .borderRadius(8)
+    .accessibilityGroup(true)
+    .accessibilityText(this.agreeState.liked() ? '取消点赞' : '点赞')
     .onClick(() => {
       this.onToggleLike();
     })
@@ -58,8 +62,11 @@ export struct ReplyMetaBar {
         Text('回复')
           .fontSize(12)
           .fontColor(DetailTheme.COMMENT_ACTION)
-          .constraintSize({ minWidth: 48, minHeight: 44 })
+          .constraintSize({ minWidth: 48, minHeight: 32 })
           .textAlign(TextAlign.Start)
+          .responseRegion([{ x: 0, y: 0, width: '100%', height: '100%' },
+            { x: 0, y: -6, width: '100%', height: 44 }])
+          .borderRadius(8)
           .onClick(() => { this.onReply(); })
       }
       if (this.floor > 0) {
@@ -73,30 +80,9 @@ export struct ReplyMetaBar {
       Blank()
         .layoutWeight(1)
 
-      Row({ space: 8 }) {
-        this.LikeEntry()
-        if (!this.detailLayout) {
-          Row({ space: 2 }) {
-            SymbolGlyph($r('sys.symbol.message'))
-              .fontSize(15)
-              .fontColor([DetailTheme.COMMENT_ACTION])
-            if (this.subReplyCount > 0) {
-              Text(`${this.subReplyCount}`)
-                .fontSize(12)
-                .fontColor(DetailTheme.COMMENT_ACTION)
-            }
-          }
-          // 触控区向右延伸 15vp 进页边距（负 margin 不占布局宽），互动组右缘正好
-          // 落在 16vp 版心线上；图标与数字间距 2vp，两组之间间距 8vp。
-          .padding({ right: 15 })
-          .margin({ right: -15 })
-          .onClick(() => {
-            this.onReply();
-          })
-        }
-      }
+      this.LikeEntry()
     }
-    // 外层保持内容高度；详情模式由 44vp 点击区撑开，不额外叠加上下内边距。
+    // 外层保持内容高度，详情点击区扩展不撑大视觉行。
     .width('100%')
   }
 }

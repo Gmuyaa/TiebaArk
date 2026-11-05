@@ -9,7 +9,7 @@ import { ForumLevelBadge } from '../components/ForumLevelBadge';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { FollowButton } from '../components/FollowButton';
-import { commentText, postCommentTarget } from '../model/CommentAction';
+import { commentText, postCommentTarget, subCommentTarget } from '../model/CommentAction';
 /**
  * 帖子详情页。
  *
@@ -33,7 +33,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import { FrameCallback, LengthMetrics, promptAction, window } from '@kit.ArkUI';
 
-import { HdsNavDestination, HdsTabs, ScrollEffectType } from '@kit.UIDesignKit';
+import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
   ContentBlock, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
   REPLY_EMOTICON_CODES, collectPreviewImageUrls, emojiCodeFromReplyToken, emojiImageUrl,
@@ -69,7 +69,11 @@ import { SubReplyDetailSheet } from '../components/SubReplyDetailSheet';
 import { AppTheme as BrandTheme, DetailTheme as AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
+import { motionDuration, popupMotion } from '../common/appearance/MotionPolicy';
+import { MaterialTabs } from '../components/MaterialTabs';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 // 底部操作栏样式：设置页「鸿蒙特性设置」可切，`@Trace` 下一帧生效。
 import { ThreadActionBarStyle } from '../common/appearance/ThreadActionBarStyle';
 import { threadActionBarStore } from '../common/appearance/ThreadActionBarStore';
@@ -261,11 +265,13 @@ export struct ThreadDetailPage {
   @Local videoComments: boolean = false;
   /**
    * 回复目标楼层 pid：**0 = 对主帖发表一级评论**，>0 = 回复某一层楼。
-   * 协议上两者只是 `post_from` 不同（`AddPostParams.POST_FROM_*`），合并成一个入口。
+   * 子评论再由 replyTargetSubPost 指定，三种入口共用编辑器。
    */
   @Local replyTargetPid: number = 0;
   /** 回复目标的作者昵称，资料暂不可用时作为提示行回退。 */
   @Local replyTargetName: string = '';
+  /** 回复某条楼中楼时，独立保留子评论；replyTargetPid 仍指所属父楼层。 */
+  @Local replyTargetSubPost: SubPostItem | undefined = undefined;
 
   @Local showEmojiPanel: boolean = false;
 
@@ -274,13 +280,7 @@ export struct ThreadDetailPage {
   richCtl: RichEditorController = new RichEditorController();
   /** 顶部更多菜单是否可见 */
   @Local showMore: boolean = false;
-  /**
-   * 列表当前滚动位置（vp，`scroller.currentOffset().yOffset`，onDidScroll 回报）。
-   *
-   * 只喂给 `materialManager.glassAtOffset(NAV_BAR, …)` 做顶栏渐变 —— 页面不知道
-   * startOffset/endOffset，也不算 alpha/radius（职责边界见 MaterialManager 注释）。
-   * 负值（Refresh 下拉过冲）由 `scrollProgressOf` clamp 到 0。
-   */
+  /** 列表滚动位置（vp），由 onDidScroll 回报；标题栏渐变由原生导航负责。 */
   @Local navScrollOffset: number = 0;
   /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移 */
   private scroller: ListScroller = new ListScroller();
@@ -335,9 +335,9 @@ export struct ThreadDetailPage {
           this.getUIContext().runScopedTask(() => {
             setTimeout(() => {
               if (index === 0) {
-                this.scroller.scrollToIndex(0, true, ScrollAlign.START);
+                this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
               } else {
-                this.scroller.scrollToItemInGroup(2, index - 1, true, ScrollAlign.START);
+                this.scroller.scrollToItemInGroup(2, index - 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
               }
             }, 200);
           });
@@ -506,8 +506,16 @@ export struct ThreadDetailPage {
   }
 
   private previewSubPosts(item: PostItem): SubPostItem[] {
-    const source: SubPostItem[] = this.vm.subState(item.pid).subPosts;
-    return source.length > 3 ? source.slice(0, 3) : source;
+    // 展示上限只由预览组件负责，页面不再提前丢弃第四、第五条。
+    return this.vm.subState(item.pid).subPosts;
+  }
+
+  /** ForEach 同 pid 会复用原回调，数量必须读当前状态，不能取闭包里的旧楼层。 */
+  private subPreviewCount(item: PostItem): number {
+    const state = this.vm.subState(item.pid);
+    if (state.loadedOnce) { return state.page.totalCount; }
+    const current: PostItem | undefined = this.vm.postByPid(item.pid);
+    return current === undefined ? item.subPostCount : current.subPostCount;
   }
 
   /** 楼中楼里是否出现过楼主回复。预览没加载出来时不猜，按"没有"处理 */
@@ -606,12 +614,13 @@ export struct ThreadDetailPage {
     this.viewerUrl = url;
   }
 
-  private openReplyBox(pid: number): void {
+  private openReplyBox(pid: number, sub?: SubPostItem): void {
     if (this.vm.replyPending) { return; }
     this.replyEditEpoch++;
     this.replyImages.reset();
     this.replyTargetPid = pid > 0 ? pid : 0;
-    this.replyTargetName = pid > 0 ? this.authorNameOf(pid) : '';
+    this.replyTargetSubPost = sub;
+    this.replyTargetName = sub !== undefined ? sub.author.displayName : pid > 0 ? this.authorNameOf(pid) : '';
     // RichEditor 是同一 controller 跨弹窗复用：先清掉上一次的图文残留
     this.richCtl.deleteSpans();
     this.replyText = '';
@@ -665,15 +674,15 @@ export struct ThreadDetailPage {
       // 替换卡片时两张卡从同一位置交接；收面板时新卡随面板一起滑回屏底。
       dialogTransition: replacing ? (lifted ? TransitionEffect.IDENTITY
         : TransitionEffect.translate({ y: -this.emojiPanelHeight() })
-          .animation({ duration: REPLY_PANEL_TRANSITION_MS })) : undefined,
+          .animation({ duration: motionDuration(REPLY_PANEL_TRANSITION_MS) })) : popupMotion(),
       maskTransition: replacing ? TransitionEffect.IDENTITY : undefined,
       autoCancel: true,
+      transition: popupMotion(),
 
       width: this.screenWvp > 0 ? this.screenWvp - REPLY_SHEET_SIDE_MARGIN * 2 : 336,
       cornerRadius: REPLY_SHEET_RADIUS,
 
       systemMaterial: materialManager.officialOf(MaterialSlot.REPLY_SHEET),
-      backgroundEffect: materialManager.glassOf(MaterialSlot.REPLY_SHEET),
       onWillAppear: (): void => {
         if (oldId !== 0 && !oldClosed && this.replyDialogSeq === seq) {
           oldClosed = true;
@@ -816,7 +825,7 @@ export struct ThreadDetailPage {
       offset: { dx: 0, dy: EMOJI_PANEL_BOTTOM_INSET_COMP },
       keyboardAvoidMode: KeyboardAvoidMode.NONE,
       dialogTransition: TransitionEffect.translate({ y: this.emojiPanelHeight() })
-        .animation({ duration: REPLY_PANEL_TRANSITION_MS }),
+        .animation({ duration: motionDuration(REPLY_PANEL_TRANSITION_MS) }),
       width: this.screenWvp > 0 ? this.screenWvp : 360,
       // 顶角 16 / 底角 0：只有 ID 通道的 cornerRadius 支持逐角（BorderRadiuses）
       cornerRadius: {
@@ -829,8 +838,9 @@ export struct ThreadDetailPage {
       isModal: false,
       autoCancel: false,
       // 与输入卡片同一槽位同一配方（同一张"玻璃家族"的两张面，见 MaterialConfig）
+      transition: popupMotion(),
       systemMaterial: materialManager.officialOf(MaterialSlot.REPLY_SHEET),
-      backgroundEffect: materialManager.glassOf(MaterialSlot.REPLY_SHEET),
+
       onWillDismiss: (action: DismissDialogAction): void => {
         // Back 只收面板、不动输入卡片（对齐输入法面板的返回语义）；
         // 必须走 setEmojiPanel——除了关弹窗还要把输入卡片落回原位
@@ -1010,8 +1020,10 @@ export struct ThreadDetailPage {
     const text: string = this.replyImages.content(this.replyText);
     const editEpoch: number = this.replyEditEpoch;
     const targetPid: number = this.replyTargetPid;
+    const targetSubPost: SubPostItem | undefined = this.replyTargetSubPost;
 
-    const tip: string = await this.vm.submitReply(this.hostContext(), text, targetPid);
+    const tip: string = await this.vm.submitReply(this.hostContext(), text, targetPid,
+      undefined, targetSubPost);
     if (editEpoch !== this.replyEditEpoch) { return; }
     if (tip.length > 0) {
       promptAction.showToast({ message: tip, duration: 2200 });
@@ -1022,6 +1034,12 @@ export struct ThreadDetailPage {
     this.richCtl.deleteSpans();
     this.replyText = '';
     this.replyImages.reset();
+    if (targetPid > 0) {
+      const visible: boolean = this.vm.subState(targetPid).subPosts.some(
+        (sub: SubPostItem): boolean => sub.pid === this.vm.lastReplyPid);
+      promptAction.showToast({ message: visible ? '回复已发布' : '回复已发布，可在本层回复里查看', duration: 2200 });
+      return;
+    }
     /*
      * 成功后能否看到刚发的那条，VM 已经处理过了（正序时它会切到倒序把新回复带到首屏）。
      * 这里只负责如实描述这两种结果——**不假装两种都一样**。
@@ -1060,7 +1078,7 @@ export struct ThreadDetailPage {
     const posts: PostItem[] = this.vm.visiblePosts;
     for (let i: number = 0; i < posts.length; i++) {
       if (posts[i].pid === pid) {
-        this.scroller.scrollToIndex(i, true, ScrollAlign.START);
+        this.scroller.scrollToIndex(i, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
         return;
       }
     }
@@ -1183,10 +1201,10 @@ export struct ThreadDetailPage {
       for (let i = 0; i < posts.length; i++) {
         if (posts[i].floor === floor) {
           if (i === 0) {
-            this.scroller.scrollToIndex(0, true);
+            this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE));
           } else {
 
-            this.scroller.scrollToItemInGroup(2, i - 1, true, ScrollAlign.START);
+            this.scroller.scrollToItemInGroup(2, i - 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
           }
           break;
         }
@@ -1369,15 +1387,15 @@ export struct ThreadDetailPage {
       .titleBar({
         style: {
           scrollEffectOpts: {
-            enableScrollEffect: true,
+            enableScrollEffect: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR),
             scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
           },
           scrollEffectStyle: {
             backgroundStyle: {
               // maskExtraHeight 只控渐隐带长度（SDK 默认 32）；blurRadius 控模糊强度
               //（0~128，仅两种 GRADIENT 模式生效）。取实验页同款观感值。
-              maskExtraHeight: 32,
-              blurRadius: 80
+              maskExtraHeight: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 32 : 0,
+              blurRadius: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 80 : 0
             }
           }
           // systemMaterialEffect 实测与效果主体（渐变模糊本身）几乎无叠加差异，先不开；
@@ -1494,9 +1512,10 @@ export struct ThreadDetailPage {
           });
       },
       onReply: (): void => {
-        // 面板里回复的是**锚点那层楼**（一级回复），不是楼中楼——
-        // 楼中楼需要 `subPostId`，本协议尚未取证，所以这里只接一级回复那一半。
         this.openReplyBox(this.subDetailPid);
+      },
+      onReplySub: (sub: SubPostItem): void => {
+        this.openReplyBox(this.subDetailPid, sub);
       },
       onRetry: (): void => {
         this.retrySubSheet(this.subDetailPid);
@@ -1593,6 +1612,7 @@ export struct ThreadDetailPage {
         width: 120, radius: 16, targetSpace: 8,
         mask: { color: Color.Transparent }, autoCancel: true,
         systemMaterial: materialManager.officialOf(MaterialSlot.SHEET),
+        transition: popupMotion(),
         onStateChange: (event: PopupStateChangeParam): void => {
           this.showMore = event.isVisible;
         }
@@ -1724,7 +1744,7 @@ export struct ThreadDetailPage {
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
         .onClick(() => {
-          this.scroller.scrollToIndex(0, true);
+          this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE));
           this.showMore = false;
         })
 
@@ -2010,6 +2030,13 @@ export struct ThreadDetailPage {
     if (this.replyTargetPid <= 0) {
       return '';
     }
+    const sub: SubPostItem | undefined = this.replyTargetSubPost;
+    if (sub !== undefined) {
+      const text: string = commentText(subCommentTarget(sub, this.vm.tid, this.replyTargetPid,
+        this.vm.detail.title));
+      const name: string = sub.author.displayName;
+      return text.length > 0 ? `回复 ${name}：${text}` : `回复 ${name}`;
+    }
     const target: PostItem | undefined = this.vm.postByPid(this.replyTargetPid);
     const name: string = target === undefined ? this.replyTargetName : target.author.displayName;
     if (name.length === 0) { return '回复该评论'; }
@@ -2150,11 +2177,11 @@ export struct ThreadDetailPage {
                   ReplyItem({
                     tid: this.vm.tid,
                     threadTitle: this.vm.detail.title,
-                    item: item,
+                    item: this.vm.postByPid(item.pid) ?? item,
                     isThreadAuthor: item.author.id === this.vm.detail.author.id,
                     agreeState: this.vm.agreeState(item.pid),
                     subPosts: this.previewSubPosts(item),
-                    subTotalCount: item.subPostCount,
+                    subTotalCount: this.subPreviewCount(item),
                     subLoading: this.vm.subState(item.pid).loading,
                     subErrorText: this.vm.subState(item.pid).errorText,
                     hasAuthorReply: this.hasAuthorReply(item),
@@ -2549,40 +2576,18 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 左胶囊 ——「分离式」：玻璃由 `HdsTabs` 的**官方悬浮面**提供。
+   * 左胶囊 ——「分离式」：玻璃由 `MaterialTabs` 的**官方悬浮面**提供。
    *
-   * 与首页底栏逐字同参（`IMMERSIVE` + `EXQUISITE`，经 `MaterialSlot.BOTTOM_BAR` 下发）。
-   * 这里**一个自绘玻璃属性都不挂**（`backgroundEffect` / `border` / `borderRadius` 全无），
-   * 否则分不清看到的玻璃是系统画的还是我们自己画的 —— 而"到底谁在画"正是本样式的全部意义。
+   * 与首页底栏共用 BOTTOM_BAR 槽位，优先使用 ArkUI 官方薄材质。
+   * 外层只控制布局与圆角，不裁剪官方材质向外绘制的阴影。
    */
   @Builder
   SplitImmersiveReplyPill() {
-    HdsTabs({ barPosition: BarPosition.End }) {
-      TabContent() {
-      }
-      .tabBar(this.SplitReplyTab())
-    }
-    .barHeight(ACTION_PILL_HEIGHT)
-    .barMode(BarMode.Fixed)
-    .scrollable(false)
-    .animationDuration(0)
-    .barOverlap(true)
-    // 把系统自带的整块底衬让出来（与首页底栏同一处理）
-    .barBackgroundColor(Color.Transparent)
-    .barBackgroundBlurStyle(BlurStyle.NONE)
-    // 钉宽的理由：不显式给 barWidth，官方悬浮面会被系统压到 84vp，「回复楼主…」折行。
-    .barFloatingStyle({
-      barWidth: { smallWidth: REPLY_PILL_WIDTH, mediumWidth: REPLY_PILL_WIDTH, largeWidth: REPLY_PILL_WIDTH },
-      barSideMargin: 0,
-      barBottomMargin: 0,
-
-      gradientMask: SPLIT_PILL_GRADIENT_MASK,
-      thermoCtrl: true,
-      systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
-    })
+    MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: ACTION_PILL_HEIGHT, barWidth: REPLY_PILL_WIDTH,
+        barContent: (): void => { this.SplitReplyTab(); } })
 
     .borderRadius(ACTION_PILL_RADIUS)
-    .clip(true)
+    .clip(false)
     .width(REPLY_PILL_WIDTH)
     .height(ACTION_PILL_HEIGHT)
   }
@@ -2615,36 +2620,15 @@ export struct ThreadDetailPage {
    *
    * 宽度钉 `ACTION_PILL_WIDTH`（现网右大胶囊实测 197vp）：底栏行可用宽 348vp，
    * 左 143 + 间距 8 + 右 197 正好填满。
-   * ★ 与左胶囊一样**不做任何负 margin / scale / clip 补偿** —— 两个系统承载器
-   *   只要需要"硬凑"才成立，这个方案就该被否掉。
+   * 与左胶囊一样保留官方悬浮面及其外部阴影。
    */
   @Builder
   SplitImmersiveActionPill() {
-    HdsTabs({ barPosition: BarPosition.End }) {
-      TabContent() {
-      }
-      .tabBar(this.SplitActionTab())
-    }
-    .barHeight(ACTION_PILL_HEIGHT)
-    .barMode(BarMode.Fixed)
-    .scrollable(false)
-    .animationDuration(0)
-    .barOverlap(true)
-    .barBackgroundColor(Color.Transparent)
-    .barBackgroundBlurStyle(BlurStyle.NONE)
-    // 钉宽的理由：不显式给 barWidth，官方悬浮面会被系统压到 84vp，四个操作挤成一团。
-    .barFloatingStyle({
-      barWidth: { smallWidth: ACTION_PILL_WIDTH, mediumWidth: ACTION_PILL_WIDTH, largeWidth: ACTION_PILL_WIDTH },
-      barSideMargin: 0,
-      barBottomMargin: 0,
-
-      gradientMask: SPLIT_PILL_GRADIENT_MASK,
-      thermoCtrl: true,
-      systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
-    })
+    MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: ACTION_PILL_HEIGHT, barWidth: ACTION_PILL_WIDTH,
+        barContent: (): void => { this.SplitActionTab(); } })
 
     .borderRadius(ACTION_PILL_RADIUS)
-    .clip(true)
+    .clip(false)
     .width(ACTION_PILL_WIDTH)
     .height(ACTION_PILL_HEIGHT)
   }
@@ -2673,7 +2657,7 @@ export struct ThreadDetailPage {
     } else if (index === 1) {
       this.PopupMenuItem($r('sys.symbol.message'), `${this.displayedReplyCount()}`, 'comments', '查看评论', (): void => {
         this.popupMenuShow = false;
-        this.scroller.scrollToIndex(1, true, ScrollAlign.START);
+        this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
       });
     } else if (index === 2) {
       this.PopupMenuItem(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
@@ -2743,20 +2727,9 @@ export struct ThreadDetailPage {
   /** 纸境单片悬浮操作面，业务操作和键盘处理沿用原入口。 */
   @Builder
   PaperActionBar() {
-    HdsTabs({ barPosition: BarPosition.End }) {
-      TabContent() {}.tabBar(this.PaperActionContent())
-    }
-    .barHeight(56).barMode(BarMode.Fixed).scrollable(false).animationDuration(0).barOverlap(true)
-    .barBackgroundColor(AppTheme.BOTTOM_BAR).barBackgroundBlurStyle(BlurStyle.NONE)
-    .barFloatingStyle({
-      barWidth: { smallWidth: Math.max(240, this.popupViewportWidth - 24),
-        mediumWidth: Math.max(240, this.popupViewportWidth - 24),
-        largeWidth: Math.max(240, this.popupViewportWidth - 24) },
-      barSideMargin: 0, barBottomMargin: 0, gradientMask: SPLIT_PILL_GRADIENT_MASK,
-      thermoCtrl: true, systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
-    })
-    .width(Math.max(240, this.popupViewportWidth - 24)).height(56).borderRadius(28).clip(true)
-    .border({ width: 0.5, color: AppTheme.DIVIDER })
+    MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: 56, barWidth: Math.max(240, this.popupViewportWidth - 24),
+        barContent: (): void => { this.PaperActionContent(); } })
+    .width(Math.max(240, this.popupViewportWidth - 24)).height(56).borderRadius(28).clip(false)
     .margin({ bottom: BOTTOM_BAR_BOTTOM_MARGIN })
     .id('paper-thread-action-bar')
   }
@@ -2784,7 +2757,7 @@ export struct ThreadDetailPage {
     .width('100%').height('100%')
   }
 
-  /** 「分离式」：左右各一个 `HdsTabs`，玻璃全由官方系统材质提供 */
+  /** 「分离式」：左右各一个 `MaterialTabs`，玻璃全由官方系统材质提供 */
   @Builder
   SplitImmersiveActionBar() {
     Row({ space: ACTION_PILL_GAP }) {
@@ -2796,7 +2769,6 @@ export struct ThreadDetailPage {
       .height(ACTION_PILL_HEIGHT)
 
       .borderRadius(ACTION_PILL_RADIUS)
-      .shadow({ radius: 18, color: AppTheme.BOTTOM_FLOAT_SHADOW, offsetX: 0, offsetY: 6 })
 
       Stack() {
         this.SplitImmersiveActionPill()
@@ -2804,7 +2776,7 @@ export struct ThreadDetailPage {
       .width(ACTION_PILL_WIDTH)
       .height(ACTION_PILL_HEIGHT)
       .borderRadius(ACTION_PILL_RADIUS)
-      .shadow({ radius: 18, color: AppTheme.BOTTOM_FLOAT_SHADOW, offsetX: 0, offsetY: 6 })
+
     }
     .width('100%')
     .padding({
@@ -2922,7 +2894,7 @@ export struct ThreadDetailPage {
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
 
-      this.scroller.scrollToIndex(1, true, ScrollAlign.START);
+      this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
     })
   }
 
@@ -2954,7 +2926,7 @@ export struct ThreadDetailPage {
         PageState({ compact: true, message: '当前显示定位回复', actionLabel: '查看全部回复',
           onAction: (): void => {
             this.vm.load(this.hostContext(), this.vm.tid).then(() => {
-              this.scroller.scrollToIndex(1, true, ScrollAlign.START);
+              this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
             });
           } })
       } else {

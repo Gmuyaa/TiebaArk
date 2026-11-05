@@ -1,6 +1,7 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionTransition, motionSpringCurve } from '../common/appearance/MotionPolicy';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { curves } from '@kit.ArkUI';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession } from '../model/SmartReach';
@@ -111,7 +112,7 @@ export struct ForumRefreshButton {
       const side = this.pendingSide;
       this.pendingSide = 0;
       this.onMoveStart();
-      this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 170, 17) }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(300), curve: motionSpringCurve() }, (): void => {
         this.left = side === -1;
         this.x = this.left ? b.minX : b.maxX;
         this.avoidTabs();
@@ -145,7 +146,7 @@ export struct ForumRefreshButton {
     this.dragging = false; this.pressed = false; this.suppressClickUntil = Date.now() + 300;
     this.cancelPending();
     const b = floatingBounds(this.viewportWidth, this.viewportHeight, this.topInset);
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.x = dockFloatingX(this.x, b);
       this.avoidTabs();
     });
@@ -163,7 +164,7 @@ export struct ForumRefreshButton {
 
   @Builder
   Button(left: boolean) {
-    // HdsTabs 内部手势不参与拖拽仲裁，外层统一处理点击与移动。
+    // 材质承载器内部手势不参与拖拽仲裁，外层统一处理点击与移动。
     Stack() {
       GlassCircleButton({ symbol: $r('sys.symbol.arrow_clockwise'), diameter: 48, iconSize: 24 })
         .hitTestBehavior(HitTestMode.None)
@@ -177,7 +178,8 @@ export struct ForumRefreshButton {
       .onClick((): void => {
         if (!this.dragging && Date.now() >= this.suppressClickUntil && !this.busy) { this.onRefresh(); }
       })
-      .transition(TransitionEffect.translate({ x: left ? -80 : 80 }).animation({ curve: curves.interpolatingSpring(0, 1, 170, 17) }))
+      .transition(motionTransition(TransitionEffect.translate({ x: left ? -80 : 80 }), MotionEffect.MOVE)
+        .animation({ duration: motionDuration(300), curve: motionSpringCurve() }))
       .onTouch((event: TouchEvent): void => {
         event.stopPropagation();
         if (event.type === TouchType.Down) { this.pressed = true; }

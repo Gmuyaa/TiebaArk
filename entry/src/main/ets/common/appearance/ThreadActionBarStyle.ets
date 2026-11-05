@@ -5,7 +5,7 @@ export enum ThreadActionBarStyle {
   /** 弹出式：单个沉浸光感按钮展开帖子操作菜单。 */
   POPUP = 1,
   /**
-   * 分离式（默认）：左右各一个 `HdsTabs`，材质由系统沉浸光感提供。
+   * 分离式（默认）：左右各一个 `MaterialTabs`，材质优先 ArkUI、不支持时回退 HDS。
    *
    * 编号是 3 而不是 2 —— 2 号是已淘汰的「悬浮 Dock」，见 `RETIRED_FLOATING_DOCK`。
    * **不许把 2 重新分给别的样式**：老设备上存着 2，重新分配会让那台设备静默换样式。

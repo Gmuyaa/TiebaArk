@@ -5,11 +5,10 @@ import { AppTheme } from '../theme/Theme';
 import { AvatarComponent } from './AvatarComponent';
 import { searchFieldHeight, homeChannelHeight } from '../common/appearance/UiLayout';
 import { homeDualRowHeight } from '../common/appearance/HomeTopNavStyle';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MaterialTabs } from './MaterialTabs';
 import { SearchField } from './SearchField';
 import { TopLabelItem } from './TopLabelItem';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 
@@ -93,29 +92,12 @@ export struct HomeDualRowTopBar {
           if (w <= 0 || Math.abs(w - this.visW) < 0.5) { return; }
           this.visW = w;
         })
-      HdsTabs({ barPosition: BarPosition.End }) {
-        TabContent() {
-        }
-        .tabBar(this.PanelContent())
-      }
-      .barHeight(this.panelH())
-      .barMode(BarMode.Fixed)
-      .scrollable(false)
-      .animationDuration(0)
-      .barOverlap(true)
-      .barBackgroundColor(Color.Transparent)
-      .barBackgroundBlurStyle(BlurStyle.NONE)
-      .barFloatingStyle({
-        barWidth: { smallWidth: this.nodeW(), mediumWidth: this.nodeW(), largeWidth: this.nodeW() },
-        barSideMargin: 0,
-        barBottomMargin: 0,
-        gradientMask: SPLIT_PILL_GRADIENT_MASK,
-        thermoCtrl: true,
-        systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.HOME_TOP_CONTINUOUS)
-      })
+      MaterialTabs({ slot: MaterialSlot.HOME_TOP_CONTINUOUS, barHeight: this.panelH(),
+        barWidth: this.nodeW(),
+        barContent: (): void => { this.PanelContent(); } })
 
       .borderRadius(this.panelH() / 2)
-      .clip(true)
+      .clip(false)
       .width(this.nodeW())
       .height(this.panelH())
 
@@ -184,12 +166,13 @@ export struct HomeDualRowTopBar {
     .width('100%')
     /*
      * 高度随收起态在 `DUAL_SEARCH_ROW_H ↔ 0` 之间变化（不是条件渲染，见 PanelContent 注释）：
-     * 内容垂直居中 + `clip(true)`，收起时搜索框上下对称地被"压扁"，
+     * 内容垂直居中，收起时搜索框上下对称地被"压扁"，
      * 与面板高度的收缩同步 —— 展开时同样长回来，不会突然跳出。
      * ⚠️ 过渡同样**不挂 `.animation()`**（会拖慢频道选中态），由宿主 `animateTo` 驱动。
      */
     .height(this.collapsed ? 0 : Math.max(DUAL_SEARCH_ROW_H, searchFieldHeight(this.scaleValue()) + 8))
-    .clip(true)
+    // 展开时让官方 Search 材质自由形变；仅收起时裁掉被压缩的搜索行。
+    .clip(this.collapsed)
     .padding({ left: 16, right: 16 })
     .alignItems(VerticalAlign.Center)
   }

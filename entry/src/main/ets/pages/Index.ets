@@ -1,19 +1,19 @@
 import { visualThemeStore, VisualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 /**
- * 应用外壳：HdsNavigation 承载共享内容栈，HdsTabs 承载首页、关注、消息和我的。
- * 底栏使用自定义 tabBuilder 绘制图标与文字，背景和沉浸材质由 HDS 提供。
+ * 应用外壳：HdsNavigation 承载共享内容栈，MaterialTabs 承载首页、进吧、消息和我的。
+ * 底栏使用自定义 tabBuilder 绘制图标与文字，背景优先使用 ArkUI 官方材质，设备不支持时回退 HDS。
  * Settings、Login、WebLogin 继续通过 router 打开，内容页面走 AppRoute。
  */
 
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
-import { curves, display, window } from '@kit.ArkUI';
+import { AnimatorResult, curves, display, window } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-import { HdsNavigation, HdsTabs, HdsTabsController, BlurStrategy, ScrollEffectType } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsTabsController, BlurStrategy, ScrollEffectType } from '@kit.UIDesignKit';
 import { ThreadDetailPage } from './ThreadDetail';
 import { portraitUrl } from '../model/ThreadDetail';
 import { ForumPage } from './ForumPage';
@@ -35,6 +35,10 @@ import {
   ForumMemberPageParams
 } from '../navigation/AppNavigation';
 import { materialManager } from '../common/material/MaterialManager';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
+import { motionDuration } from '../common/appearance/MotionPolicy';
+import { MaterialTabs } from '../components/MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { ForumListView } from '../components/ForumListView';
 
@@ -67,6 +71,12 @@ interface TabSlot {
   label: string;
 }
 
+interface BottomBarPose {
+  scale: number;
+  offsetY: number;
+  alpha: number;
+}
+
 /** 底栏首页连续点击的识别窗口；首次点击始终立即回顶。 */
 const HOME_DOUBLE_TAP_MS: number = 350;
 
@@ -96,6 +106,12 @@ struct Index {
   @Local viewerUrls: string[] = [];
   @Local viewerIndex: number = 0;
   @Local homeScrollHidden: boolean = false;
+  @Local private homeBottomScale: number = 1;
+  @Local private bottomBarCollapsed: boolean = false;
+  private bottomMotionVersion: number = 0;
+  private bottomAnimator: AnimatorResult | undefined = undefined;
+  @Local private bottomOffsetY: number = 0;
+  private bottomAlpha: number = 1;
   @Local homePillRevealReady: boolean = true;
   @Local homeSelectedChannel: string = '推荐';
   /** HDS builder 的显式响应桥：同时覆盖冷启动异步读偏好与设置页即时切换。 */
@@ -126,8 +142,9 @@ struct Index {
   private homeChangeChannel: (label: string) => void = (_label: string): void => {};
 
   @Local barSideMargin: number = AppTheme.BAR_SIDE;
-  /** 当前 HdsTabs 的控制器，供底栏点击切换页签。 */
-  private tabsController: HdsTabsController = new HdsTabsController();
+  /** ArkUI 与 HDS 各使用自己的控制器，避免兼容承载器截获原生页签切换。 */
+  private tabsController: TabsController = new TabsController();
+  private fallbackTabsController: HdsTabsController = new HdsTabsController();
 
   private appNavStack: NavPathStack = new NavPathStack();
   private homeRecommendScroller: ListScroller = new ListScroller();
@@ -154,6 +171,9 @@ struct Index {
     }
   }
   onPageShow(): void {
+    this.appNavStack.disableAnimation(!motionStore.isOn(MotionEffect.MOVE));
+    // uiMaterial 的能力查询依赖当前 UI 容器，不能放在 Ability.onCreate 的偏好加载中。
+    this.getUIContext().runScopedTask((): void => { materialManager.refreshCapabilities(); });
     this.pageVisible = true;
     // 只记"外壳页真的回到前台"（含我们页当前页签），用来和状态发布时间对齐。
     avatarTrace('page-visible', 0, `page=index tab=${this.currentIndex}`);
@@ -191,6 +211,79 @@ struct Index {
     return this.homeScrollHidden && homeNavigationHideStore.hideBottomNavigation;
   }
 
+  private bottomBarScaleFactor(): number {
+    return materialManager.useArkUI && motionStore.isOn(MotionEffect.SCALE) ? this.homeBottomScale : 1;
+  }
+
+  /** 浮面统一以展开时的中心定位；补偿缩小后的半高差，避免底边锚点与控制器平移叠加。 */
+  private bottomBarBottomMargin(): number {
+    if (!materialManager.useArkUI) { return AppTheme.BAR_SAFE_H; }
+    return AppTheme.BAR_SAFE_H + AppTheme.BAR_CONTENT_H * (1 - this.bottomBarScaleFactor()) / 2 - this.bottomOffsetY;
+  }
+
+  /** 宽高、前景与底距共用声明进度；控制器仅调整透明度，不再参与定位。 */
+  private setBottomBarPose(scale: number, offsetY: number, alpha: number): void {
+    this.homeBottomScale = scale;
+    this.bottomOffsetY = offsetY;
+    this.bottomAlpha = alpha;
+    this.tabsController.setTabBarOpacity(motionStore.isOn(MotionEffect.FADE) ? alpha : 1);
+  }
+
+  private animateBottomBar(hidden: boolean): void {
+    if (!materialManager.useArkUI) { return; }
+    if (!hidden && !this.bottomAnimator && this.homeBottomScale === 1 &&
+      this.bottomOffsetY === 0 && this.bottomAlpha === 1) { return; }
+    const interrupted: boolean = this.bottomAnimator !== undefined;
+    const version: number = ++this.bottomMotionVersion;
+    this.bottomAnimator?.cancel();
+    this.bottomAnimator = undefined;
+    this.bottomBarCollapsed = false;
+    const hiddenY: number = AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H;
+    const context: UIContext = this.getUIContext();
+    if (!motionStore.isOn(MotionEffect.MOVE)) {
+      context.animateTo({ duration: 0 }, (): void => {
+        this.setBottomBarPose(hidden ? 0.25 : 1, hidden ? hiddenY : 0, hidden ? 0 : 1);
+        this.tabsController.setTabBarOpacity(hidden ? 0 : 1);
+        this.bottomBarCollapsed = hidden;
+      });
+      return;
+    }
+    // 中途反向直接续接当前姿态，不重新提起/放大到固定关键帧。
+    const spring: boolean = motionStore.isOn(MotionEffect.SPRING) && !interrupted;
+    const start: BottomBarPose = { scale: this.homeBottomScale, offsetY: this.bottomOffsetY, alpha: this.bottomAlpha };
+    const animator: AnimatorResult = context.createAnimator({ duration: spring ? (hidden ? 370 : 500) : 280,
+      easing: 'linear', delay: 0, fill: 'forwards', direction: 'normal', iterations: 1, begin: 0, end: 1 });
+    this.bottomAnimator = animator;
+    animator.onFrame = (progress: number): void => {
+      if (version === this.bottomMotionVersion) { this.renderBottomBarFrame(progress, hidden, spring, start); }
+    };
+    animator.onFinish = (): void => {
+      if (version !== this.bottomMotionVersion) { return; }
+      this.setBottomBarPose(hidden ? 0.25 : 1, hidden ? hiddenY : 0, hidden ? 0 : 1);
+      if (hidden && this.bottomNavigationHidden()) { this.tabsController.setTabBarOpacity(0); }
+      // 控制器变换会被后续浮面布局重置；完成后以声明状态同时撤销栏面、布局与前景。
+      this.bottomBarCollapsed = hidden && this.bottomNavigationHidden();
+      if (!hidden && !this.homeScrollHidden) { this.bottomMaskVisible = true; }
+      this.bottomAnimator = undefined;
+    };
+    animator.play();
+  }
+
+  /** 同机酷安参考：轻提后向下缩淡；展开上提放大后回落。每帧同步原生尺寸与前景，避免跨组件关键帧跳变。 */
+  private renderBottomBarFrame(progress: number, hidden: boolean, spring: boolean, start: BottomBarPose): void {
+    const end: BottomBarPose = { scale: hidden ? 0.25 : 1,
+      offsetY: hidden ? AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H : 0, alpha: hidden ? 0 : 1 };
+    const split: number = hidden ? 190 / 370 : 200 / 500;
+    const lift: BottomBarPose = { scale: hidden ? 0.95 : 1.015, offsetY: hidden ? -16 : -18, alpha: 1 };
+    const first: boolean = !spring || progress <= split;
+    const from: BottomBarPose = first ? start : lift;
+    const to: BottomBarPose = !spring || !first ? end : lift;
+    const raw: number = Math.max(0, Math.min(1, !spring ? progress : (first ? progress / split : (progress - split) / (1 - split))));
+    const blend: number = spring && !first && hidden ? raw * raw : 1 - Math.pow(1 - raw, 3);
+    this.setBottomBarPose(from.scale + (to.scale - from.scale) * blend,
+      from.offsetY + (to.offsetY - from.offsetY) * blend, from.alpha + (to.alpha - from.alpha) * blend);
+  }
+
   /** 首页滚动共用一个方向信号，三处区域分别按设置决定是否隐藏。 */
   private setHomeScrollHidden(hidden: boolean): void {
     const target: boolean = hidden && this.currentIndex === 0 && this.homeNavVisible;
@@ -205,10 +298,11 @@ struct Index {
       });
     }
     animateTo({
-      duration: target ? 300 : 440,
-      curve: target ? Curve.EaseIn : curves.springMotion(0.38, 0.64),
+      duration: motionDuration(target ? 300 : 440),
+      curve: target || !motionStore.isOn(MotionEffect.SPRING) ? Curve.EaseIn : curves.springMotion(0.38, 0.64),
       onFinish: () => {
-        if (!target && version === this.statusBarRequestVersion) {
+        if (version !== this.statusBarRequestVersion) { return; }
+        if (!target) {
           this.bottomMaskVisible = true;
         }
       }
@@ -218,6 +312,7 @@ struct Index {
         this.homePillRevealReady = false;
       }
     });
+    this.animateBottomBar(target && homeNavigationHideStore.hideBottomNavigation);
     if (!target) {
       // 原生顶栏滚动效果恢复后再显示胶囊，避开材质首次取样的浅灰过渡帧。
       setTimeout((): void => {
@@ -255,6 +350,7 @@ struct Index {
       hilog.warn(0x0, 'TiebaTop', 'status bar visibility failed: %{public}s', e.message);
       if (version === this.statusBarRequestVersion) {
         this.homeScrollHidden = false;
+        this.animateBottomBar(false);
       }
     });
   }
@@ -266,7 +362,97 @@ struct Index {
     HdsNavigation(this.appNavStack) {
       Stack({ alignContent: Alignment.BottomEnd }) {
 
-    HdsTabs({ controller: this.tabsController }) {
+    MaterialTabs({ controller: this.tabsController, fallbackController: this.fallbackTabsController,
+      slot: MaterialSlot.BOTTOM_BAR,
+      barHeight: AppTheme.BAR_CONTENT_H * this.bottomBarScaleFactor(),
+      barWidth: this.barSideMargin * 4 * this.bottomBarScaleFactor(),
+      barSideMargin: this.barSideMargin, barBottomMargin: this.bottomBarBottomMargin(),
+      barVisible: materialManager.useArkUI ? !this.bottomBarCollapsed : !this.bottomNavigationHidden(),
+      maskColor: this.bottomMaskVisible ? AppTheme.BOTTOM_BAR_MASK : Color.Transparent,
+      maskHeight: this.bottomMaskVisible ? 92 : 0,
+      pages: (): void => { this.HomePages(); },
+      onChange: (index: number): void => {
+        this.currentIndex = index;
+        this.refreshMyProfile();
+        if (index !== 0) { this.lastHomeTapMs = 0; this.setHomeScrollHidden(false); }
+      }
+    })
+    .width('100%')
+    .height('100%')
+
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
+      [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .backgroundColor(AppTheme.BG)
+      if (this.currentIndex === 0 && this.homeNavVisible && this.viewerUrls.length === 0) {
+        HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
+          topInset: this.homeStatusBarH + this.homeTopNavRowH,
+          active: this.pageVisible,
+          onCompose: (): void => { NavigationService.openCompose(); } })
+      }
+      } // Stack
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.homeViewportWidth = Number(area.width);
+        this.homeViewportHeight = Number(area.height);
+      })
+    }
+    .navDestination(this.PageMap)
+    .onNavBarStateChange((isVisible: boolean) => {
+      this.homeNavVisible = isVisible;
+      if (!isVisible) {
+        this.setHomeScrollHidden(false);
+      }
+    })
+
+    .titleBar({
+      style: {
+
+        // 所有首页材质由 MaterialTabs 提供，导航标题栏不再叠加另一层 HDS 背景。
+        blurStrategy: BlurStrategy.DISABLE,
+        scrollEffectOpts: { enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR },
+        scrollEffectStyle: { backgroundStyle: { backgroundColor: Color.Transparent,
+          maskExtraHeight: 0, blurRadius: 0 } },
+        originalStyle: { backgroundStyle: { backgroundColor: Color.Transparent,
+          maskExtraHeight: 0, blurRadius: 0 } }
+
+      },
+      /*
+       * 顶栏内容**结构对所有样式一致**（`stackBuilder` 一个入口，内部按当前样式分叉）：
+       * 这样运行时切换样式时 builder 重跑就能换内容 —— HDS 只在创建时固化 style 配置，
+       * builder 内容本身是响应式的（0~4 四套样式即时切换就是靠这条）。
+       * 「官方沉浸」（值 5）**不在标题栏里画任何东西**：它的玻璃由页面根 Stack 的
+       * 浮层承载（见 build 里的 HomeDualRowOverlay），避免标题栏顶部那段系统固有
+       * 标题区（真机实测 73vp）把双排整体压低、首卡被压在玻璃后面。
+       */
+      content: {
+        stackBuilder: (): void => { this.HomeTitleBarContent(); }
+      }
+    })
+    .hideTitleBar(this.currentIndex !== 0 || this.viewerUrls.length > 0)
+    .bindToScrollable([this.homeRecommendScroller, this.homeFollowScroller, this.homeHotScroller])
+    .systemBarStyle(
+      { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
+      { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
+    )
+    .mode(NavigationMode.Stack)
+
+      if (this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
+        && this.currentIndex === 0 && this.viewerUrls.length === 0) {
+        this.HomeDualRowOverlay()
+      }
+      if (this.viewerUrls.length > 0) {
+        ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
+          onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
+          .zIndex(100)
+      }
+    }
+    .width('100%').height('100%')
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
+      [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  HomePages() {
       TabContent() {
         ForumListView({
           onOpenImages: (urls: string[], index: number): void => {
@@ -315,128 +501,6 @@ struct Index {
         ProfileView()
       }
       .tabBar(this.tabBuilder('我的', 3, this.slots[3]))
-    }
-    .vertical(false)
-    .barPosition(BarPosition.End)
-    .barMode(BarMode.Fixed)
-    .scrollable(false)
-    .animationDuration(0)
-    .barHeight(this.bottomNavigationHidden() ? 0 : AppTheme.BAR_CONTENT_H)
-    .barOverlap(true)
-    /** 底栏保留HDS原生玻璃；纸境只调整导航图标、文字的配色与字重。 */
-    .barFloatingStyle({
-
-      barSideMargin: this.barSideMargin,
-      // 宽度与栏高一起收至屏幕下缘中点；只改 sideMargin 会被 HDS 的栏宽约束裁成空胶囊。
-      // 展开时用弹簧曲线，让整个胶囊从中点回弹到屏宽的 2/3。
-      barWidth: { smallWidth: this.bottomNavigationHidden() ? 4 : this.barSideMargin * 4,
-        mediumWidth: this.bottomNavigationHidden() ? 4 : this.barSideMargin * 4,
-        largeWidth: this.bottomNavigationHidden() ? 4 : this.barSideMargin * 4 },
-
-      barBottomMargin: this.bottomNavigationHidden() ? 0 : AppTheme.BAR_SAFE_H,
-
-      // 渐变遮罩独立于 barOpacity；收起开始时立即隐藏，展开结束再恢复。
-      gradientMask: {
-        maskColor: this.bottomMaskVisible ? AppTheme.BOTTOM_BAR_MASK : Color.Transparent,
-        maskHeight: this.bottomMaskVisible ? 92 : 0
-      },
-      barOpacity: this.bottomNavigationHidden() ? 0 : 1,
-      thermoCtrl: true,
-
-      systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.BOTTOM_BAR)
-    })
-    .onChange((index: number) => {
-      this.currentIndex = index;
-      this.refreshMyProfile();
-      if (index !== 0) {
-        this.lastHomeTapMs = 0;
-        this.setHomeScrollHidden(false);
-      }
-    })
-
-    .barBackgroundColor(Color.Transparent)
-    .barBackgroundBlurStyle(BlurStyle.NONE)
-    .width('100%')
-    .height('100%')
-
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
-      [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
-    .backgroundColor(AppTheme.BG)
-      if (this.currentIndex === 0 && this.homeNavVisible && this.viewerUrls.length === 0) {
-        HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
-          topInset: this.homeStatusBarH + this.homeTopNavRowH,
-          active: this.pageVisible,
-          onCompose: (): void => { NavigationService.openCompose(); } })
-      }
-      } // Stack
-      .onAreaChange((_old: Area, area: Area): void => {
-        this.homeViewportWidth = Number(area.width);
-        this.homeViewportHeight = Number(area.height);
-      })
-    }
-    .navDestination(this.PageMap)
-    .onNavBarStateChange((isVisible: boolean) => {
-      this.homeNavVisible = isVisible;
-      if (!isVisible) {
-        this.setHomeScrollHidden(false);
-      }
-    })
-
-    .titleBar({
-      style: {
-
-        blurStrategy: this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-          ? BlurStrategy.DISABLE : BlurStrategy.ADAPTIVE,
-        scrollEffectOpts: {
-          enableScrollEffect: false,
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
-        },
-        scrollEffectStyle: this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-          ? { backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: 0, blurRadius: 0 } }
-          : (this.homeTopNavStyle === HomeTopNavStyle.FLOATING_ISLANDS
-            ? { backgroundStyle: { maskExtraHeight: 0, blurRadius: 0 } }
-            : { backgroundStyle: { maskExtraHeight: 80, blurRadius: 120 } }),
-        originalStyle: this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-          ? { backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: 0, blurRadius: 0 } }
-          : undefined,
-        thermoCtrl: true,
-        systemMaterialEffect: this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-          ? materialManager.hdsEffectOf(MaterialSlot.HOME_TOP_CONTINUOUS)
-          : undefined
-      },
-      /*
-       * 顶栏内容**结构对所有样式一致**（`stackBuilder` 一个入口，内部按当前样式分叉）：
-       * 这样运行时切换样式时 builder 重跑就能换内容 —— HDS 只在创建时固化 style 配置，
-       * builder 内容本身是响应式的（0~4 四套样式即时切换就是靠这条）。
-       * 「官方沉浸」（值 5）**不在标题栏里画任何东西**：它的玻璃由页面根 Stack 的
-       * 浮层承载（见 build 里的 HomeDualRowOverlay），避免标题栏顶部那段系统固有
-       * 标题区（真机实测 73vp）把双排整体压低、首卡被压在玻璃后面。
-       */
-      content: {
-        stackBuilder: (): void => { this.HomeTitleBarContent(); }
-      }
-    })
-    .hideTitleBar(this.currentIndex !== 0 || this.viewerUrls.length > 0)
-    .bindToScrollable([this.homeRecommendScroller, this.homeFollowScroller, this.homeHotScroller])
-    .systemBarStyle(
-      { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
-      { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
-    )
-    .mode(NavigationMode.Stack)
-
-      if (this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-        && this.currentIndex === 0 && this.viewerUrls.length === 0) {
-        this.HomeDualRowOverlay()
-      }
-      if (this.viewerUrls.length > 0) {
-        ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
-          onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
-          .zIndex(100)
-      }
-    }
-    .width('100%').height('100%')
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
-      [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
   }
 
   /** 整片沉浸顶栏的浮层容器，高度随搜索行收起状态变化。 */
@@ -564,21 +628,21 @@ struct Index {
   @Builder
   tabBuilder(label: string, index: number, slot: TabSlot) {
 
-    Column({ space: 2 }) {
+    Column({ space: 2 * this.bottomBarScaleFactor() }) {
 
       if (index === this.currentIndex) {
         SymbolGlyph(slot.iconFill)
-          .fontSize(24)
+          .fontSize(24 * this.bottomBarScaleFactor())
           .maxFontScale(1)
           .fontColor([this.slotColor(index)])
       } else {
         SymbolGlyph(slot.icon)
-          .fontSize(24)
+          .fontSize(24 * this.bottomBarScaleFactor())
           .maxFontScale(1)
           .fontColor([this.slotColor(index)])
       }
       Text(label)
-        .fontSize(10)
+        .fontSize(10 * this.bottomBarScaleFactor())
         .fontWeight(visualThemeStore.isPaper ? (index === this.currentIndex ? FontWeight.Bold : FontWeight.Medium) : FontWeight.Normal)
         .maxFontScale(1)
         .fontColor(this.slotColor(index))
@@ -586,6 +650,9 @@ struct Index {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
+    .id(`main-tab-${index}`)
+    .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
+    .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
     .onClick(() => {
       if (this.currentIndex === index) {
         if (index === 0) {
@@ -594,12 +661,12 @@ struct Index {
         return;
       }
       this.lastHomeTapMs = 0;
-      // 先改 currentIndex（驱动配色），再让 HdsTabs 切页 —— 顺序有意如此
+      // 先改 currentIndex（驱动配色），再让页签承载器切页 —— 顺序有意如此
       this.currentIndex = index;
       if (index !== 0) {
         this.setHomeScrollHidden(false);
       }
-      this.tabsController.changeIndex(index);
+      this.changeTabIndex(index);
     })
   }
 
@@ -619,7 +686,12 @@ struct Index {
     if (idx !== 0) {
       this.setHomeScrollHidden(false);
     }
-    this.tabsController.changeIndex(idx);
+    this.changeTabIndex(idx);
+  }
+
+  private changeTabIndex(index: number): void {
+    if (materialManager.useArkUI) { this.tabsController.changeIndex(index); }
+    else { this.fallbackTabsController.changeIndex(index); }
   }
 
 }

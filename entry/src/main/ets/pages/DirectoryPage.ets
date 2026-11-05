@@ -1,3 +1,4 @@
+import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { FollowButton } from '../components/FollowButton';
@@ -159,7 +160,7 @@ export struct DirectoryPage {
             }
 
           }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
-          .edgeEffect(EdgeEffect.Spring).onReachEnd(() => {
+          .edgeEffect(motionEdgeEffect()).onReachEnd(() => {
             if (this.vm.pagingError.length === 0) { this.reload(true); }
           })
         }.refreshOffset(PULL_REFRESH_OFFSET)

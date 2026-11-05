@@ -1185,6 +1185,30 @@ export class ReplyMeParams {
   }
 }
 
+/** 我的主题帖：主页可见权限与删除的独立参数。 */
+export class MyThreadParams {
+  static readonly VISIBILITY_PATH: string = '/c/c/thread/setPrivacy';
+  static readonly DELETE_PATH: string = '/c/c/bawu/delthread';
+
+  /** 官方 SetPrivacyModel：帖子级范围，不使用全局 opt/val。 */
+  static visibility(device: TiebaDevice, session: TiebaSession, uid: number, fid: number,
+    tid: number, pid: number, hidden: boolean): SignParam[] {
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('user_id', String(uid)), new SignParam('forum_id', String(fid)),
+      new SignParam('thread_id', String(tid)), new SignParam('post_id', String(pid)),
+      new SignParam('is_hide', hidden ? '1' : '0'));
+    return params;
+  }
+
+  /** 单主题删除；is_frs_mask=0 为删除，不能用主页隐藏替代。 */
+  static deleteThread(device: TiebaDevice, session: TiebaSession, fid: number, tid: number): SignParam[] {
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('fid', String(fid)), new SignParam('z', String(tid)),
+      new SignParam('is_frs_mask', '0'));
+    return params;
+  }
+}
+
 /** 官方 PrivateInfoNetMessage：当前账号 uid，GetPrivateInfoReq data=1{uid=1,common=2}。 */
 export class PrivacyMarksParams {
   static readonly WRITE_PATH: string = '/c/c/thread/setPrivacy';

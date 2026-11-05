@@ -1,6 +1,7 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { curves } from '@kit.ArkUI';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { homeComposeBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession } from '../model/SmartReach';
@@ -101,7 +102,7 @@ export struct HomeComposeButton {
       const b = homeComposeBounds(this.viewportWidth, this.viewportHeight, this.topInset);
       const side = this.pendingSide;
       this.pendingSide = 0;
-      this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 170, 17) }, (): void => {
+      this.getUIContext().animateTo({ duration: motionDuration(300), curve: motionSpringCurve() }, (): void => {
         this.x = side === -1 ? b.minX : b.maxX;
       });
     }, 400);
@@ -111,7 +112,7 @@ export struct HomeComposeButton {
     this.dragging = false; this.pressed = false; this.suppressClickUntil = Date.now() + 300;
     this.cancelPending();
     const b = homeComposeBounds(this.viewportWidth, this.viewportHeight, this.topInset);
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
       this.x = dockFloatingX(this.x, b);
     });
     this.savePosition();
@@ -127,7 +128,7 @@ export struct HomeComposeButton {
 
   @Builder
   Button() {
-    // HdsTabs 内部手势不参与拖拽仲裁，外层统一处理点击与移动。
+    // 材质承载器内部手势不参与拖拽仲裁，外层统一处理点击与移动。
     Stack() {
       GlassCircleButton({ symbol: $r('sys.symbol.plus'), diameter: 52, iconSize: 26 })
         .hitTestBehavior(HitTestMode.None)

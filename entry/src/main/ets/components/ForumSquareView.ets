@@ -41,7 +41,7 @@ export struct ForumSquareView {
     Text(name).fontSize(13)
       .fontWeight(this.vm.selected === id ? FontWeight.Bold : FontWeight.Regular)
       .fontColor(this.vm.selected === id ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
-      .width('100%').constraintSize({ minHeight: 40 }).padding({ left: 8, right: 8, top: 9, bottom: 9 })
+      .width('100%').constraintSize({ minHeight: 48 }).padding({ left: 8, right: 8, top: 9, bottom: 9 })
       .backgroundColor(this.vm.selected === id ? AppTheme.ACCENT_LIGHT : Color.Transparent)
       .borderRadius(10).textAlign(TextAlign.Center)
       .accessibilitySelected(this.vm.selected === id)
@@ -54,12 +54,15 @@ export struct ForumSquareView {
       Column({ space: 3 }) {
         Text(item.name.endsWith('吧') ? item.name : `${item.name}吧`).fontSize(14)
           .fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (item.members.length > 0 || item.threads.length > 0) {
-          Text((item.members.length > 0 ? `关注 ${formatCount(Number(item.members))}` : '') +
-            (item.members.length > 0 && item.threads.length > 0 ? ' · ' : '') +
-            (item.threads.length > 0 ? `帖子 ${formatCount(Number(item.threads))}` : ''))
-            .fontSize(10).fontColor(AppTheme.TEXT_MUTED).maxLines(1)
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (item.members.length > 0) {
+          Text(`关注 ${formatCount(Number(item.members))}`)
+            .fontSize(12).fontColor(AppTheme.TEXT_SUB).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        if (item.threads.length > 0) {
+          Text(`帖子 ${formatCount(Number(item.threads))}`)
+            .fontSize(12).fontColor(AppTheme.TEXT_SUB).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -76,6 +79,7 @@ export struct ForumSquareView {
       Row({ space: 6 }) {
         ForEach(this.vm.subcategories, (name: string) => {
           Text(name).fontSize(12).padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .constraintSize({ minHeight: 48 })
             .fontColor(this.vm.selectedSub === name ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
             .backgroundColor(this.vm.selectedSub === name ? AppTheme.ACCENT_LIGHT : Color.Transparent)
             .borderRadius(10).accessibilitySelected(this.vm.selectedSub === name)
@@ -95,7 +99,10 @@ export struct ForumSquareView {
         ForEach(this.vm.categories, (item: SquareCategory) => {
           ListItem() { this.Category(item.name, item.id) }
         }, (item: SquareCategory): string => item.id)
-        ListItem() { Column().height(this.bottomBarOcclusion) }
+        ListItem() {
+          Column().width('100%').height(this.bottomBarOcclusion)
+            .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
+        }.id('square-category-bottom-occlusion')
       }.width(88).height('100%').padding({ left: 6, right: 6 }).scrollBar(BarState.Off)
       Column() {
         if (this.vm.subcategories.length > 0) { this.Subcategories() }
@@ -119,7 +126,10 @@ export struct ForumSquareView {
               onAction: (): void => { void this.vm.load(this.context(), true); } })
           }
         }
-        ListItem() { Column().height(this.bottomBarOcclusion) }
+        ListItem() {
+          Column().width('100%').height(this.bottomBarOcclusion)
+            .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
+        }.id('square-forums-bottom-occlusion')
         }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
         .onReachEnd((): void => {
           if (this.active && this.vm.error.length === 0) { void this.vm.load(this.context(), true); }

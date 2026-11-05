@@ -24,9 +24,7 @@ const HEADER_BUTTON: number = 44;
 const HEADER_ICON: number = 22;
 /** 两颗按钮之间、以及按钮与标题之间的最小间距（Blank 撑开剩余空间） */
 
-const SETTINGS_ICON_OFFSET: number = -1;
-
-const ROW_HEIGHT: number = 60;
+const STAT_MIN_HEIGHT: number = 48;
 
 /** 内容入口描述。`kind` 保持原路由参数，不随展示文案变化。 */
 interface ProfileRow {
@@ -153,7 +151,6 @@ export struct ProfileView {
             symbol: $r('sys.symbol.gearshape'),
             diameter: HEADER_BUTTON,
             iconSize: HEADER_ICON,
-            iconOffsetX: SETTINGS_ICON_OFFSET,
             onTap: (): void => { router.pushUrl({ url: 'pages/Settings' }); }
           })
             .accessibilityText('设置')
@@ -177,18 +174,18 @@ export struct ProfileView {
               .fontSize(21)
               .fontWeight(FontWeight.Medium)
               .fontColor(AppTheme.TEXT_MAIN)
-              .maxLines(1)
+              .maxLines(2)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             if (this.accountIdLine(authSession.snapshot).length > 0) {
               Text(this.accountIdLine(authSession.snapshot))
-                .fontSize(12)
+                .fontSize(SettingsLayout.SUB_SIZE)
                 .fontColor(AppTheme.TEXT_SUB)
-                .maxLines(1)
+                .maxLines(2)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
             }
             if (this.noteLine(authSession.snapshot).length > 0) {
               Text(this.noteLine(authSession.snapshot))
-                .fontSize(12)
+                .fontSize(SettingsLayout.SUB_SIZE)
                 .fontColor(AppTheme.TEXT_SUB)
                 .maxLines(2)
             }
@@ -197,17 +194,23 @@ export struct ProfileView {
           .layoutWeight(1)
           if (!authSession.snapshot.isLoggedIn()) {
             Button('登录')
-              .fontSize(13)
-              .height(34)
-              .borderRadius(17)
+              .fontSize(SettingsLayout.VALUE_SIZE)
+              .constraintSize({ minWidth: 64, minHeight: 48 })
+              .borderRadius(AppTheme.PILL_RADIUS)
               .backgroundColor(AppTheme.ACCENT)
               .fontColor(Color.White)
               .onClick(() => { router.pushUrl({ url: 'pages/Login' }); })
+          } else {
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(SettingsLayout.CHEVRON_SIZE).maxFontScale(1)
+              .fontColor([AppTheme.CHEVRON_TINT])
+              .margin({ right: SettingsLayout.CHEVRON_INSET })
           }
         }
         .width('100%')
         .constraintSize({ minHeight: 84 })
         .padding({ top: 6, bottom: 6 })
+        .borderRadius(SettingsLayout.CARD_RADIUS)
         .margin({ top: 16 })
         .onClick(() => {
           if (authSession.snapshot.isLoggedIn()) {
@@ -227,7 +230,7 @@ export struct ProfileView {
             this.StatCell('关注吧', this.countText(authSession.snapshot, authSession.snapshot.likeForumNum))
           }
           .width('100%')
-          .constraintSize({ minHeight: ROW_HEIGHT })
+          .constraintSize({ minHeight: SettingsLayout.ROW_MIN_H })
           .padding({ left: 6, right: 6, top: 8, bottom: 8 })
           .borderRadius(SettingsLayout.CARD_RADIUS)
           .backgroundColor(visualThemeStore.isPaper ? AppTheme.GOLD_LIGHT : AppTheme.CARD)
@@ -247,6 +250,7 @@ export struct ProfileView {
         SettingsEntryRow({ label: '设置', icon: $r('sys.symbol.gearshape'), showDivider: false,
           onTap: (): void => { router.pushUrl({ url: 'pages/Settings' }); } })
           .backgroundColor(AppTheme.CARD).borderRadius(SettingsLayout.CARD_RADIUS)
+          .clip(true)
           .margin({ top: SettingsLayout.ROW_GAP })
       }
       .width('100%')
@@ -255,7 +259,7 @@ export struct ProfileView {
       // 左右边距用设置页的 PAGE_GUTTER（16vp）：两页卡片同宽。
       .padding({
         left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER,
-        top: 0, bottom: AppTheme.BAR_TOTAL_H + 24
+        top: 0
       })
     }
     .scrollBar(BarState.Off).align(Alignment.Top)
@@ -279,10 +283,15 @@ export struct ProfileView {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(label)
-        .fontSize(11)
+        .fontSize(SettingsLayout.SUB_SIZE)
         .fontColor(AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
+    .constraintSize({ minHeight: STAT_MIN_HEIGHT })
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(12)
+    .accessibilityGroup(true)
+    .accessibilityText(label + '，' + value)
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
       const uid: number = authSession.snapshot.uid;
@@ -304,5 +313,6 @@ export struct ProfileView {
     SettingsEntryRow({ label: row.label, icon: row.symbol, imageIcon: row.icon, showDivider: false,
       onTap: (): void => { NavigationService.openMyList({ kind: row.kind }); } })
       .backgroundColor(AppTheme.CARD).borderRadius(SettingsLayout.CARD_RADIUS)
+      .clip(true)
   }
 }

@@ -1,13 +1,14 @@
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 /**
  * 首页与设置预览共用。四套样式：当前样式（委托 `HomeChannelPills`）/ 悬浮双岛 /
  * 一体玻璃 / 轻盈标签；后三套的几何与材质配方都集中在本文件顶部，模糊来自各自
  * 的玻璃槽位（「轻盈标签」另有一层通栏明度遮罩）。
  */
-import { curves, FrameCallback } from '@kit.ArkUI';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { FrameCallback } from '@kit.ArkUI';
+import { MaterialTabs } from './MaterialTabs';
 import { AppTheme } from '../theme/Theme';
-import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { fontScaleStore, FontSizeScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import {
@@ -81,8 +82,7 @@ const UNIFIED_PAD_R: number = 4;
 const UNIFIED_RADIUS: number = 16;
 /** 频道滚入可视范围的动画时长（超宽项居中） */
 const SCROLL_MS: number = 220;
-/** 一体玻璃容器的柔和阴影；选中项不重复绘制容器阴影。 */
-const GLASS_SHADOW: ShadowOptions = { radius: 14, color: '#12000000', offsetY: 3 };
+
 
 /** 选中底的三种形态 */
 const FILL_ACCENT: number = 0;
@@ -120,6 +120,7 @@ export struct HomeTopNav {
   @Local viewportW: number = 0;
   /** 「悬浮双岛」本行实测可用宽度（外层 Row）；首帧 0 = 用 `ISLAND_ROW_FALLBACK` 兜底 */
   @Local islandsRowW: number = 0;
+  @Local unifiedWidth: number = 0;
   private channelScroller: Scroller = new Scroller();
   private layoutVersion: number = 0;
   private mounted: boolean = false;
@@ -165,7 +166,7 @@ export struct HomeTopNav {
    * 频道岛宽度（vp）：吃满本行剩余宽度，上限 `CHANNEL_MAX_W`。
    *
    * 这个值要**同时**喂给两个地方，否则官方悬浮面与节点对不上：
-   *   - `HdsTabs.width(...)`：节点尺寸；
+   *   - `MaterialTabs.width(...)`：节点尺寸；
    *   - `barFloatingStyle.barWidth`：官方悬浮面尺寸（不显式钉宽会被压到 84vp 下限）。
    * 本行宽度由外层 Row 的 `onAreaChange` 实测（首帧用 `ISLAND_ROW_FALLBACK` 兜底）。
    */
@@ -279,7 +280,7 @@ export struct HomeTopNav {
       this.channelWidth(this.selectedIndex()), this.stripWidth() + inset * 2, this.viewportW, current);
     if (Math.abs(target - current) < 0.5) { return; }
     this.channelScroller.scrollTo({ xOffset: target, yOffset: 0,
-      animation: { duration: SCROLL_MS, curve: Curve.EaseInOut } });
+      animation: { duration: motionDuration(SCROLL_MS), curve: Curve.EaseInOut } });
   }
 
   @Builder
@@ -302,7 +303,7 @@ export struct HomeTopNav {
                 this.scheduleCorrection();
               }
             })
-            .animation({ duration: this.isIslands() ? ISLAND_ANIM_MS : ANIM_MS, curve: Curve.EaseInOut })
+            .animation({ duration: motionDuration(this.isIslands() ? ISLAND_ANIM_MS : ANIM_MS, MotionEffect.MOVE), curve: Curve.EaseInOut })
         }
         .width(this.channelWidth(index))
         .height(this.itemHeight())
@@ -339,7 +340,7 @@ export struct HomeTopNav {
         .backgroundColor(AppTheme.ACCENT_LIGHT)
         .margin({ top: (this.itemHeight() - ISLAND_INNER_H) / 2 })
         .translate({ x: this.islandFillX() })
-        .animation({ duration: ISLAND_ANIM_MS, curve: Curve.EaseInOut })
+        .animation({ duration: motionDuration(ISLAND_ANIM_MS, MotionEffect.MOVE), curve: Curve.EaseInOut })
     } else {
       Row()
         .width(kind === FILL_LINE ? 14 : this.channelWidth(this.selectedIndex()))
@@ -352,7 +353,7 @@ export struct HomeTopNav {
           : (this.itemHeight() - SELECTED_H) / 2 })
         .translate({ x: this.selectedX() + (kind === FILL_LINE
           ? (this.channelWidth(this.selectedIndex()) - 14) / 2 : 0) })
-        .animation({ duration: 200, curve: Curve.EaseInOut })
+        .animation({ duration: motionDuration(200, MotionEffect.MOVE), curve: Curve.EaseInOut })
     }
   }
 
@@ -401,31 +402,11 @@ export struct HomeTopNav {
   /** 频道岛的系统材质承载器，内容层只绘制文字与选中状态。 */
   @Builder
   FloatingChannelIsland() {
-    HdsTabs({ barPosition: BarPosition.End }) {
-      TabContent() {
-      }
-      .tabBar(this.IslandChannelTab())
-    }
-    .barHeight(ISLAND_H)
-    .barMode(BarMode.Fixed)
-    .scrollable(false)
-    .animationDuration(0)
-    .barOverlap(true)
-    // 让出系统自带的整块底衬（与首页底栏、详情页分离式同一处理）
-    .barBackgroundColor(Color.Transparent)
-    .barBackgroundBlurStyle(BlurStyle.NONE)
-    .barFloatingStyle({
-      barWidth: { smallWidth: this.islandWidth(), mediumWidth: this.islandWidth(),
-        largeWidth: this.islandWidth() },
-      barSideMargin: 0,
-      barBottomMargin: 0,
-      gradientMask: SPLIT_PILL_GRADIENT_MASK,
-      thermoCtrl: true,
-      systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.HOME_TOP_ISLAND)
-    })
-    // 裁掉弧外楔形区里被节点 bounds 硬裁的系统软阴影
+    MaterialTabs({ slot: MaterialSlot.HOME_TOP_ISLAND, barHeight: ISLAND_H, barWidth: this.islandWidth(),
+        barContent: (): void => { this.IslandChannelTab(); } })
+    // 官方阴影需要越过胶囊边界，承载器保持不裁剪。
     .borderRadius(ISLAND_RADIUS)
-    .clip(true)
+    .clip(false)
     .width(this.islandWidth())
     .height(ISLAND_H)
   }
@@ -458,35 +439,17 @@ export struct HomeTopNav {
   /**
    * 「悬浮双岛」的**官方材质承载器**（搜索岛）。
    *
-   * 与频道岛同一个 `HdsTabs` + 同一个 `HOME_TOP_ISLAND` 槽位，只把节点/悬浮面钉成
+   * 与频道岛同一个 `MaterialTabs` + 同一个 `HOME_TOP_ISLAND` 槽位，只把节点/悬浮面钉成
    * 48×48 —— 官方悬浮面是"高 = 栏高、圆角 = 半高"的胶囊，方节点即整圆。
    * 图标 22vp、容器居中；点击区覆盖整个圆（内容盒只有 40vp 高，用 `responseRegion`
    * 把命中区补回 48vp，见 `IslandSearchTab`）。
    */
   @Builder
   FloatingSearchIsland() {
-    HdsTabs({ barPosition: BarPosition.End }) {
-      TabContent() {
-      }
-      .tabBar(this.IslandSearchTab())
-    }
-    .barHeight(ISLAND_H)
-    .barMode(BarMode.Fixed)
-    .scrollable(false)
-    .animationDuration(0)
-    .barOverlap(true)
-    .barBackgroundColor(Color.Transparent)
-    .barBackgroundBlurStyle(BlurStyle.NONE)
-    .barFloatingStyle({
-      barWidth: { smallWidth: SEARCH_BOX, mediumWidth: SEARCH_BOX, largeWidth: SEARCH_BOX },
-      barSideMargin: 0,
-      barBottomMargin: 0,
-      gradientMask: SPLIT_PILL_GRADIENT_MASK,
-      thermoCtrl: true,
-      systemMaterialEffect: materialManager.hdsEffectOf(MaterialSlot.HOME_TOP_ISLAND)
-    })
+    MaterialTabs({ slot: MaterialSlot.HOME_TOP_ISLAND, barHeight: ISLAND_H, barWidth: SEARCH_BOX,
+        barContent: (): void => { this.IslandSearchTab(); } })
     .borderRadius(SEARCH_BOX / 2)
-    .clip(true)
+    .clip(false)
     .width(SEARCH_BOX)
     .height(SEARCH_BOX)
     // 搜索岛是**辅助但不可压缩**的：窄视口下宁可让频道岛少占一点，
@@ -534,7 +497,7 @@ export struct HomeTopNav {
   /**
    * 悬浮双岛：左侧频道玻璃岛（**吃满本行剩余宽度**，上限 320vp）+ 12vp + 右侧圆形搜索岛。
    *
-   * 两个岛**都由官方 `HdsTabs` 悬浮面承载材质**（同一个 `HOME_TOP_ISLAND` 槽位映射），
+   * 两个岛**都由官方 `MaterialTabs` 悬浮面承载材质**（同一个 `HOME_TOP_ISLAND` 槽位映射），
    * 这里只负责把它们排成一组：同高 48vp、间隔 12vp、由外层 Row 的
    * `justifyContent(Center)` 整组居中 —— 宽屏时多出来的宽度落在组的两侧，
    * 而不是把频道岛拉长、也不是把两岛推开。
@@ -548,17 +511,23 @@ export struct HomeTopNav {
   /** 一体玻璃：频道与搜索共用一条悬浮玻璃容器（左右对齐页面边距） */
   @Builder
   UnifiedGlassContent() {
-    Row() {
-      this.ChannelViewport(FILL_ACCENT)
-      this.SearchGlyph()
+    Stack() {
+      if (this.unifiedWidth > 0) {
+        MaterialTabs({ slot: MaterialSlot.NAV_BAR, barHeight: CONTAINER_H, barWidth: this.unifiedWidth })
+          .width(this.unifiedWidth).height(CONTAINER_H).hitTestBehavior(HitTestMode.None)
+      }
+      Row() {
+        this.ChannelViewport(FILL_ACCENT)
+        this.SearchGlyph()
+      }
+      .width('100%').height(CONTAINER_H)
+      .padding({ left: UNIFIED_PAD_L, right: UNIFIED_PAD_R })
     }
-    .layoutWeight(1)
-    .height(this.style === HomeTopNavStyle.LIGHT_LABELS ? this.rowHeight() : CONTAINER_H)
-    .padding({ left: UNIFIED_PAD_L, right: UNIFIED_PAD_R })
-    .borderRadius(UNIFIED_RADIUS)
-    .backgroundEffect(materialManager.glassOf(MaterialSlot.NAV_BAR))
-    .systemMaterial(materialManager.officialOf(MaterialSlot.NAV_BAR))
-    .shadow(GLASS_SHADOW)
+    .layoutWeight(1).height(CONTAINER_H).borderRadius(UNIFIED_RADIUS).clip(false)
+    .onAreaChange((_old: Area, area: Area): void => {
+      const width: number = Number(area.width);
+      if (width > 0 && Math.abs(width - this.unifiedWidth) > 0.5) { this.unifiedWidth = width; }
+    })
   }
 
   /** 轻盈标签：无整条容器，文字频道与短线选中标识；搜索只显示图标 */
@@ -629,10 +598,11 @@ export struct HomeTopNav {
       .alignItems(VerticalAlign.Center)
       .scale({ x: this.hidden ? 0.04 : 1, y: this.hidden ? 0.04 : 1,
         centerX: '50%', centerY: 0 })
+      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
       .translate({ y: this.hidden ? -this.rowHeight() - 10 : 0 })
+      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
       .opacity(this.hidden ? 0 : 1)
-      .animation({ duration: this.hidden ? 300 : 440,
-        curve: this.hidden ? Curve.EaseIn : curves.springMotion(0.38, 0.64) })
+      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve() })
       // 隐藏后不留可点击的透明区域：整行退出命中测试，手势落到下层内容
       .hitTestBehavior(this.hidden ? HitTestMode.None : HitTestMode.Default)
     }

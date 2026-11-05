@@ -1,5 +1,16 @@
 import { AtCandidate, AtEditorMention, prepareAtMention } from './AtCandidates';
-import { emojiTokenFromUrl } from './ThreadDetail';
+import { emojiTokenFromUrl, SubPostItem } from './ThreadDetail';
+import { avatarIdentity } from './UserProfile';
+
+/** 官方写入链在 protobuf 编码前添加被回复者前缀；身份来自点击的子评论作者。 */
+export function subReplyContent(content: string, sub: SubPostItem): string {
+  const name: string = sub.author.displayName.trim();
+  if (name.length === 0) { return content; }
+  const portrait: string = avatarIdentity(sub.author.portraitUrl);
+  // 缺头像身份或昵称含 token 分隔符时用普通文字前缀，ID 目标仍由请求字段承载。
+  if (portrait.length === 0 || /[(),\r\n]/.test(name)) { return `回复 ${name} :${content}`; }
+  return `回复 #(reply, ${portrait}, ${name}) :${content}`;
+}
 
 /** 仅记录显式选人的编辑区间；修改名字后不再推断为已确认提及。 */
 export class ReplyMentionRange {

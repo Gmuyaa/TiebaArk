@@ -1,10 +1,13 @@
-/** 使用等宽高 HdsTabs 承载圆形系统玻璃面。内层裁剪圆角，外层 Stack 绘制阴影；透明渐变遮罩避免矩形暗底。组件使用 V2 状态以响应材质配置变化。 */
+/** 圆面优先使用 ArkUI 官方材质，设备不支持时回退 HDS；图标和触控沿用原尺寸。 */
 
-import { HdsTabs } from '@kit.UIDesignKit';
+import { MaterialTabs } from './MaterialTabs';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
-import { MaterialSlot, SPLIT_PILL_GRADIENT_MASK } from '../common/material/MaterialConfig';
 import { AppTheme } from '../theme/Theme';
 import { CloseIcon } from './CloseIcon';
+import { MotionEffect, MotionGroup } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
+import { motionSpringCurve } from '../common/appearance/MotionPolicy';
 
 /** 圆直径默认值（vp）。全站统一 40，顶栏高度 52~60 都能容纳 */
 const DIAMETER: number = 40;
@@ -20,6 +23,7 @@ const ICON_COLOR: ResourceColor = AppTheme.TEXT_MAIN;
  */
 @ComponentV2
 export struct GlassCircleButton {
+  @Local pressed: boolean = false;
   /** 圆内 Symbol 资源。名字必须查 SDK 原始表，写错不报错、只渲染空白 */
   @Param symbol: Resource = $r('sys.symbol.chevron_left');
   /** 非空时在同一沉浸光感圆面内显示文字。 */
@@ -33,9 +37,9 @@ export struct GlassCircleButton {
   /** 图标字号（vp），默认 24 */
   @Param iconSize: number = ICON_SIZE;
   @Param iconWeight: FontWeight = FontWeight.Bold;
-  /** 按页面需要关闭额外外阴影，HDS 系统材质保持不变。 */
+  /** 按页面需要关闭官方材质阴影。 */
   @Param shadowEnabled: boolean = true;
-  /** 材质槽位。小型圆形悬浮控件统一用 BACK_BUTTON 档（HDS 通道下各槽位同参数） */
+  /** 材质槽位。小型圆形悬浮控件统一用 BACK_BUTTON 档，厚度随全站设置 */
   @Param slot: MaterialSlot = MaterialSlot.BACK_BUTTON;
 
   @Param iconOffsetX: number = 0;
@@ -56,12 +60,10 @@ export struct GlassCircleButton {
   @BuilderParam customIcon: () => void = this.emptyIcon;
 
   @Builder
-  SymbolTab() {
+  SymbolContent() {
     Row() {
       if (this.useCustomIcon) {
-        // 自绘图标同样吃 `iconOffsetX`：对称路径一般不需要（实测确实不偏），但这是
-        // 自绘图形唯一能微调的入口，留着与字形分支行为一致（见 `iconOffsetX` 注释）。
-        // `@BuilderParam` 不能链属性，外面套一层零尺寸 Column 承接 offset。
+        // Builder 外包一层容器承接光学偏移，始终由圆面尺寸的前景居中。
         Column() {
           this.customIcon();
         }
@@ -75,8 +77,8 @@ export struct GlassCircleButton {
           .offset({ x: this.iconOffsetX, y: this.labelOffsetY })
           .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : this.label)
       } else if (this.symbol.id === $r('sys.symbol.xmark').id) {
-        // 关闭图标在材质层外绘制，避免 HDS tabBar 的内部窄内容盒影响居中。
-        Row().width('100%').height('100%')
+        CloseIcon({ iconSize: this.iconSize, iconWeight: this.iconWeight, color: ICON_COLOR })
+          .width(this.iconSize).height(this.iconSize).offset({ x: this.iconOffsetX })
       } else {
         SymbolGlyph(this.symbol)
           .fontSize(this.iconSize).maxFontScale(1)
@@ -85,76 +87,63 @@ export struct GlassCircleButton {
           .offset({ x: this.iconOffsetX })
       }
     }
-    .height('100%')
-    .width('100%')
+    .height(this.diameter)
+    .width(this.diameter)
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .accessibilityGroup(true)
-    .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : this.label)
-    .onClick(() => {
-      this.onTap();
-    })
+    .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel :
+      (!this.useCustomIcon && this.label.length === 0 && this.symbol.id === $r('sys.symbol.xmark').id ? '关闭' : this.label))
+    .opacity(this.pressed && motionStore.isOn(MotionEffect.FADE) ? 0.8 : 1)
+    .translate({ y: this.pressed && motionStore.isOn(MotionEffect.MOVE) ? 1 : 0 })
+    .scale({ x: this.pressed && motionStore.isOn(MotionEffect.SCALE) ? 0.95 : 1,
+      y: this.pressed && motionStore.isOn(MotionEffect.SCALE) ? 0.95 : 1 })
+    .rotate({ angle: this.pressed && motionStore.isOn(MotionEffect.ROTATE) ? 4 : 0 })
+    .animation({ duration: motionStore.groupEnabled(MotionGroup.ARKUI) ? 160 : 0, curve: motionSpringCurve() })
+    .hitTestBehavior(HitTestMode.None).zIndex(1)
+    // 触屏点击由宿主手势接收；前景保留无障碍激活动作。
+    .onClick((): void => { this.onTap(); })
+  }
+
+  @Builder
+  MaterialTab() {
+    if (materialManager.useArkUI) {
+      // 官方组件材质必须位于合法区域；这里使用真实圆形 Button，不给普通内容区空挂材质。
+      Button({ type: ButtonType.Circle }) {
+        Row().width('100%').height('100%')
+      }
+      .width(this.diameter).height(this.diameter).margin(0).padding(0)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(materialManager.officialOf(this.slot, this.shadowEnabled))
+      .accessibilityLevel('no')
+      // 原生按钮接收触摸反馈，业务动作仍由外层手势统一分发。
+      .onClick((): void => {})
+    } else {
+      Row().width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+    }
   }
 
   build() {
 
     Stack() {
-      HdsTabs({ barPosition: BarPosition.End }) {
-        TabContent() {
-        }
-        .tabBar(this.SymbolTab())
-      }
-      .barHeight(this.diameter)
-      .barMode(BarMode.Fixed)
-      .scrollable(false)
-      .animationDuration(0)
-      .barOverlap(true)
-      // 让出系统自带的整块底衬（与首页底栏 / 分离式胶囊同一处理）
-      .barBackgroundColor(Color.Transparent)
-      .barBackgroundBlurStyle(BlurStyle.NONE)
-
-      .barFloatingStyle({
-        barWidth: { smallWidth: this.diameter, mediumWidth: this.diameter, largeWidth: this.diameter },
-        barSideMargin: 0,
-        barBottomMargin: 0,
-
-        gradientMask: SPLIT_PILL_GRADIENT_MASK,
-        thermoCtrl: true,
-        systemMaterialEffect: materialManager.hdsEffectOf(this.slot)
-      })
-
-      .borderRadius(this.diameter / 2)
-      .clip(true)
-      .width(this.diameter)
-      .height(this.diameter)
-      .hitTestBehavior(!this.useCustomIcon && this.label.length === 0 &&
-        this.symbol.id === $r('sys.symbol.xmark').id ? HitTestMode.None : HitTestMode.Default)
-
-      if (!this.useCustomIcon && this.label.length === 0 && this.symbol.id === $r('sys.symbol.xmark').id) {
-        Row() {
-          CloseIcon({ iconSize: this.iconSize, iconWeight: this.iconWeight, color: ICON_COLOR })
-            .width(this.iconSize).height(this.iconSize).offset({ x: this.iconOffsetX })
-        }.width(this.diameter).height(this.diameter).justifyContent(FlexAlign.Center)
-          .alignItems(VerticalAlign.Center).accessibilityGroup(true)
-          .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : '关闭')
-          .onClick((): void => { this.onTap(); })
-      }
+      // 保留已实测生效的官方圆面，不叠加按压增亮或彩色光场。
+      MaterialTabs({ slot: this.slot, barHeight: this.diameter, barWidth: this.diameter,
+        applyShadow: this.shadowEnabled, componentMaterial: true,
+        barContent: (): void => { this.MaterialTab(); } })
+        .borderRadius(this.diameter / 2).clip(false)
+        .width(this.diameter).height(this.diameter)
+      // 图标保持独立，保留现有位移、缩放、旋转与淡入淡出。
+      this.SymbolContent()
     }
     .width(this.diameter)
     .height(this.diameter)
     .borderRadius(this.diameter / 2)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) { this.pressed = true; }
+      if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.pressed = false; }
+    })
+    // 与原生 TabBar 的材质手势并行，点击只从宿主分发一次。
+    .parallelGesture(TapGesture().onAction((): void => { this.onTap(); }))
 
-    .shadow({ radius: this.shadowEnabled ? 18 : 0, color: this.shadowEnabled ? '#28000000' : '#00000000',
-      offsetX: 0, offsetY: this.shadowEnabled ? 6 : 0 })
   }
 }
-
-/*
- * 备查：
- * - 官方悬浮面自带 1px 白描边（TD-18，无公开开关），白底详情页上不可见、
- *   深色内容经过时与胶囊一样显形 —— 与底部胶囊同一视觉语言，不另画描边。
- * - 旧「自绘 backgroundEffect」实现见 git 历史前的注释存档：
- *   Stack + `.backgroundEffect(materialManager.glassOf(slot))` +
- *   `.systemMaterial(materialManager.officialOf(slot))` + 1vp `rgba(0,0,0,0.10)` 暗边。
- *   若官方 HdsTabs 通道在小尺寸上有硬伤（如 barWidth 被钳到 84vp），按此回退。
- */

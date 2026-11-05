@@ -14,7 +14,7 @@ import { ContentPiece, SubPostItem, collectPreviewImageUrls } from '../model/Thr
 import { PostContentInline } from './PostContentInline';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { DetailTheme } from '../theme/Theme';
-import { SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT } from '../common/appearance/PostTypography';
+import { SUB_REPLY_BODY_SIZE, SUB_REPLY_PREVIEW_LINE_HEIGHT } from '../common/appearance/PostTypography';
 import {
   ThreadAuthorBadge, ThreadAuthorBadgeImage, ThreadAuthorBadgeInline, loadThreadAuthorBadgeImage
 } from './ThreadAuthorBadge';
@@ -27,7 +27,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 const PREVIEW_IMAGE_HINT: string = '查看图片';
 
 /**
- * 行内表情边长（vp）：正文 14fp／行高 21vp，表情 18vp 不撑行。
+ * 行内表情边长（vp）：正文14fp，预览行高约18.67vp，表情18vp不撑行。
  */
 const PREVIEW_EMOJI_SIZE: number = 18;
 
@@ -90,10 +90,10 @@ export struct SubReplyPreviewItem {
         ThreadAuthorBadgeInline({ badge: this.badge });
       }
       if (this.sub.replyToName.length > 0) {
-        Span(' 回复')
+        Span(' 回复 ')
           .fontColor(DetailTheme.COMMENT_ACTION)
         Span(this.sub.replyToName)
-          .fontColor(DetailTheme.COMMENT_ACTION)
+          .fontColor(DetailTheme.SUB_REPLY_NAME)
         if (this.sub.replyToIsThreadAuthor) {
           ThreadAuthorBadgeInline({ badge: this.badge });
         }
@@ -118,7 +118,7 @@ export struct SubReplyPreviewItem {
       }
     }
     .fontSize(SUB_REPLY_BODY_SIZE)
-    .lineHeight(SUB_REPLY_LINE_HEIGHT)
+    .lineHeight(SUB_REPLY_PREVIEW_LINE_HEIGHT)
     .width('100%')
   }
 }
