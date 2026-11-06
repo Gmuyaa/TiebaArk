@@ -1,6 +1,8 @@
 import { ComponentContent, LevelMode, LevelOrder, UIContext, window } from '@kit.ArkUI';
-import { animateImageTransition } from './ImageTransition';
+import { animateImageTransition, imageFadeDuration } from './ImageTransition';
 import { motionGeometryId } from '../common/appearance/MotionPolicy';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 
 /** 仅持有当前按压的一张预览；抬手收回后释放，不新增文件缓存。 */
 @ObservedV2
@@ -35,6 +37,7 @@ struct SavedEmojiPreviewLayer {
     }
     .width('100%').height('100%')
     .backgroundColor(this.state.visible ? '#55000000' : Color.Transparent)
+    .animation({ duration: imageFadeDuration(), curve: Curve.EaseOut })
     .hitTestBehavior(HitTestMode.None)
     .focusable(false)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
@@ -96,7 +99,9 @@ export class SavedEmojiPreview {
     const context: UIContext | undefined = this.context;
     if (context === undefined) { return; }
     animateImageTransition(context, (): void => { this.state.visible = false; });
-    this.cleanupTimer = setTimeout((): void => { this.dispose(); }, 340);
+    const duration: number = Math.max(motionStore.isOn(MotionEffect.SHARED_ELEMENT) ? 300 : 0, imageFadeDuration());
+    if (duration === 0) { this.dispose(); }
+    else { this.cleanupTimer = setTimeout((): void => { this.dispose(); }, duration + 40); }
   }
 
   dispose(): void {

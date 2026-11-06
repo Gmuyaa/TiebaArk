@@ -1,7 +1,7 @@
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AppTheme } from '../theme/Theme';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
-import { PaperLayout } from '../common/appearance/VisualTheme';
+import { PaperLayout, VisualTheme } from '../common/appearance/VisualTheme';
 
 /** 首页频道与搜索分类共用的文字标签：字重与标记表达选中，纸境使用短线、经典保留圆点。 */
 @ComponentV2
@@ -16,7 +16,10 @@ export struct TopLabelItem {
   }
   private labelColor(): ResourceColor {
     if (visualThemeStore.isPaper) { return this.selected ? AppTheme.NAV_SELECTED : AppTheme.TEXT_SUB; }
-    if (this.selected) { return themeModeStore.isDark ? Color.White : Color.Black; }
+    if (this.selected) {
+      return visualThemeStore.theme === VisualTheme.CLASSIC
+        ? (themeModeStore.isDark ? Color.White : Color.Black) : AppTheme.NAV_SELECTED;
+    }
     return themeModeStore.isDark ? AppTheme.TEXT_MUTED : AppTheme.BAR_TAB_TEXT;
   }
 

@@ -22,6 +22,7 @@ import { displayName, formatCount, ProfileForum } from '../model/UserProfile';
 import { NavigationService, UserPageParams } from '../navigation/AppNavigation';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { UserPageVM } from '../viewmodel/UserPageVM';
+import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
 import { AppTheme } from '../theme/Theme';
 import { avatarTrace } from '../utils/AvatarTrace';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
@@ -49,6 +50,16 @@ export struct UserPage {
   @Local refreshing: boolean = false;
   private changes = followChanges;
   private relationshipRefreshPending: boolean = false;
+  private deletionRevision: number = contentDeletionRevision();
+
+  @Monitor('vm.loading', 'vm.loadingMore', 'pageVisible')
+  refreshAfterDeletion(): void {
+    if (!this.pageVisible || this.vm.loading || this.vm.loadingMore ||
+      this.deletionRevision === contentDeletionRevision()) { return; }
+    this.deletionRevision = contentDeletionRevision();
+    this.relationshipRefreshPending = true;
+    this.applyRelationshipRefresh();
+  }
   @Monitor('changes.users', 'changes.forums')
   refreshRelationships(): void {
     this.relationshipRefreshPending = true;
@@ -214,6 +225,7 @@ export struct UserPage {
     })
     .onShown(() => {
       this.pageVisible = true;
+      this.refreshAfterDeletion();
       if (authSession.isLoggedIn() && this.routeParams?.uid === authSession.snapshot.uid) {
         void this.foreground.refreshAvatar(this.context());
       }

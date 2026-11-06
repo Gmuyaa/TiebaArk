@@ -1185,10 +1185,32 @@ export class ReplyMeParams {
   }
 }
 
-/** 我的主题帖：主页可见权限与删除的独立参数。 */
+/** 独立的消息计数读取；bookmark=1 与消息列表读取分离。 */
+export class NotifyUnreadParams {
+  static readonly PATH: string = '/c/s/msg';
+  static build(device: TiebaDevice, session: TiebaSession): SignParam[] {
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('bookmark', '1'));
+    return params;
+  }
+}
+
+/** 移除单个粉丝；只改变TA对我的关注，不执行拉黑或取消我对TA的关注。 */
+export class RemoveFanParams {
+  static readonly PATH: string = '/c/c/user/removeFans';
+  static build(device: TiebaDevice, session: TiebaSession, uid: number): SignParam[] {
+    if (!session.hasBduss() || session.tbs.length === 0 || !Number.isSafeInteger(uid) || uid <= 0) { return []; }
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('fans_uid', String(uid)));
+    return params;
+  }
+}
+
+/** 本人内容：主题主页可见权限，以及主题、普通回复、楼中楼的删除参数。 */
 export class MyThreadParams {
   static readonly VISIBILITY_PATH: string = '/c/c/thread/setPrivacy';
   static readonly DELETE_PATH: string = '/c/c/bawu/delthread';
+  static readonly DELETE_POST_PATH: string = '/c/c/bawu/delpost';
 
   /** 官方 SetPrivacyModel：帖子级范围，不使用全局 opt/val。 */
   static visibility(device: TiebaDevice, session: TiebaSession, uid: number, fid: number,
@@ -1205,6 +1227,17 @@ export class MyThreadParams {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('fid', String(fid)), new SignParam('z', String(tid)),
       new SignParam('is_frs_mask', '0'));
+    return params;
+  }
+
+  /** 官方 ForumManageModel 本人回复分支；楼中楼传子回复 pid，不传所属楼层 pid。 */
+  static deletePost(device: TiebaDevice, session: TiebaSession, fid: number, tid: number,
+    pid: number, isSubPost: boolean): SignParam[] {
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('fid', String(fid)), new SignParam('z', String(tid)),
+      new SignParam('pid', String(pid)), new SignParam('isfloor', isSubPost ? '1' : '0'),
+      new SignParam('src', isSubPost ? '3' : '1'), new SignParam('delete_my_post', '1'),
+      new SignParam('is_vipdel', '0'));
     return params;
   }
 }

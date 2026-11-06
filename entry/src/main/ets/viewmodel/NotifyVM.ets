@@ -3,7 +3,9 @@ import { common } from '@kit.AbilityKit';
 import { NotifyResponse, TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { NotifyCursor, NotifyItem, NotifyKind } from '../model/Notify';
+import { notifyActionPreview } from '../model/NotifyUnread';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { notifyUnreadVM } from './NotifyUnreadVM';
 
 function owner(): string {
   return authSession.isLoggedIn() ? `${authSession.sessionKey()}:${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
@@ -78,11 +80,14 @@ export class NotifyVM {
   /** 发一次请求并合并结果；返回"是否真的拿到了新条目" */
   private async fetch(context: common.UIAbilityContext, mine: number, replace: boolean,
     request: NotifyCursor): Promise<boolean> {
+    const previewAccount: string = authSession.isLoggedIn() ? authSession.sessionKey() : '';
+    const session = authSession.session();
+    const uid: number = authSession.snapshot.uid;
     try {
       const device = await DeviceIdentity.ensure(context);
       if (!this.current(mine)) { return false; }
       const response: NotifyResponse = await this.api.fetchNotifyFeed(
-        device, authSession.session(), this.kind, request.page, request.agreeId, authSession.snapshot.uid);
+        device, session, this.kind, request.page, request.agreeId, uid);
       if (!this.current(mine)) { return false; }
       if (!response.ok) {
         if (replace) {
@@ -103,6 +108,8 @@ export class NotifyVM {
           if (seen.has(key)) { return false; }
           seen.add(key); return true;
         });
+        notifyUnreadVM.acceptPreview(this.kind,
+          notifyActionPreview(this.items.length > 0 ? this.items[0] : undefined), previewAccount);
       } else {
         // 三类通知统一使用模型的精确记录键，点赞优先使用 AgreeList.id。
         const seen: Set<string> = new Set<string>();

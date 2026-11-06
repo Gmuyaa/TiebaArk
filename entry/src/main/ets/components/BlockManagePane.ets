@@ -1,11 +1,14 @@
 
 
 import { common } from '@kit.AbilityKit';
+import { authSession } from '../auth/AuthSession';
+import { AppTheme } from '../theme/Theme';
 import { BlockedUser, HiddenThread } from '../model/ThreadBlock';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
 import { threadBlockActions } from '../viewmodel/ThreadBlockActions';
 import {
-  SettingsCard, SettingsEntryRow, SettingsGroupTitle, SettingsInfoRow, SettingsNote
+  SettingsCard, SettingsEntryRow, SettingsGroupTitle, SettingsInfoRow, SettingsNote,
+  SettingsStatusKind, SettingsStatusLine
 } from './SettingsComponents';
 
 @ComponentV2
@@ -13,6 +16,7 @@ export struct BlockManagePane {
   @Param hiddenThreads: boolean = false;
   /** 页面顶栏刷新序号：自增即重读本机记录（初值 0 不触发） */
   @Param refreshSeq: number = 0;
+  @Local actionBusy: boolean = false;
 
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -30,7 +34,8 @@ export struct BlockManagePane {
   }
 
   private async reload(): Promise<void> {
-    await threadBlockStore.load(this.context());
+    if (this.actionBusy) { return; }
+    await threadBlockStore.reload(this.context());
   }
 
   private toast(message: string): void {
@@ -38,29 +43,45 @@ export struct BlockManagePane {
   }
 
   private async confirmUnblock(user: BlockedUser): Promise<void> {
-    const who: string = user.name.length > 0 ? user.name : `用户 ${user.uid}`;
-    const confirm = await this.getUIContext().getPromptAction().showDialog({
-      title: '解除拉黑',
-      message: `解除后 ${who} 的内容会重新出现；该操作会同步到服务端。`,
-      buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-        { text: '解除', color: $r('app.color.detail_accent') }]
-    });
-    if (confirm.index !== 1) { return; }
-    const message: string = await threadBlockActions.unblockAuthor(this.context(), user.uid);
-    this.toast(message.length > 0 ? message : `已解除对 ${who} 的拉黑`);
+    if (this.actionBusy || threadBlockStore.reading || threadBlockStore.saving) { return; }
+    this.actionBusy = true;
+    const owner: string = authSession.sessionKey();
+    try {
+      const who: string = user.name.length > 0 ? user.name : `用户 ${user.uid}`;
+      const confirm = await this.getUIContext().getPromptAction().showDialog({
+        title: '解除拉黑',
+        message: `解除后 ${who} 的内容会重新出现；该操作会同步到服务端。`,
+        buttons: [{ text: '取消', color: AppTheme.TEXT_SUB },
+          { text: '解除', color: AppTheme.ACCENT_DARK }]
+      });
+      if (confirm.index !== 1) { return; }
+      if (owner !== authSession.sessionKey()) { this.toast('账号已变化，请重新读取'); return; }
+      const message: string = await threadBlockActions.unblockAuthor(this.context(), user.uid);
+      this.toast(message.length > 0 ? message : `已解除对 ${who} 的拉黑`);
+    } catch (err) { this.toast('操作未完成，请重试'); }
+    finally { this.actionBusy = false; }
   }
 
   private async confirmUnhide(item: HiddenThread): Promise<void> {
-    const what: string = item.title.length > 0 ? item.title : `帖子 ${item.tid}`;
-    const confirm = await this.getUIContext().getPromptAction().showDialog({
-      title: '恢复该贴',
-      message: `恢复后「${what}」会重新出现在本机列表中。`,
-      buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-        { text: '恢复', color: $r('app.color.detail_accent') }]
-    });
-    if (confirm.index !== 1) { return; }
-    await threadBlockStore.unhide(this.context(), item.tid);
-    this.toast('已恢复该贴');
+    if (this.actionBusy || threadBlockStore.reading || threadBlockStore.saving) { return; }
+    this.actionBusy = true;
+    const owner: string = authSession.sessionKey();
+    try {
+      const what: string = item.title.length > 0 ? item.title : `帖子 ${item.tid}`;
+      const confirm = await this.getUIContext().getPromptAction().showDialog({
+        title: '恢复该贴',
+        message: `恢复后「${what}」会重新出现在本机列表中。`,
+        buttons: [{ text: '取消', color: AppTheme.TEXT_SUB },
+          { text: '恢复', color: AppTheme.ACCENT_DARK }]
+      });
+      if (confirm.index !== 1) { return; }
+      if (owner !== authSession.sessionKey()) { this.toast('账号已变化，请重新读取'); return; }
+      await threadBlockStore.unhide(this.context(), item.tid);
+      if (owner !== authSession.sessionKey()) { this.toast('账号已变化，请重新读取'); return; }
+      if (threadBlockStore.hiddenSaveError.length > 0) { this.toast(threadBlockStore.hiddenSaveError); return; }
+      this.toast(threadBlockStore.isHidden(item.tid) ? '恢复未完成，请重新读取后重试' : '已恢复该贴');
+    } catch (err) { this.toast('操作未完成，请重试'); }
+    finally { this.actionBusy = false; }
   }
 
   build() {
@@ -69,6 +90,16 @@ export struct BlockManagePane {
         this.HiddenSection()
       } else {
         this.UsersSection()
+      }
+      if (threadBlockStore.readError.length > 0) {
+        SettingsStatusLine({
+          kind: SettingsStatusKind.ERROR, message: threadBlockStore.readError,
+          retryLabel: '重新读取', onRetry: (): void => { void this.reload(); }
+        })
+      }
+      if ((this.hiddenThreads ? threadBlockStore.hiddenSaveError : threadBlockStore.usersSaveError).length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: this.hiddenThreads ? threadBlockStore.hiddenSaveError : threadBlockStore.usersSaveError })
       }
     }
     .width('100%')
@@ -79,7 +110,7 @@ export struct BlockManagePane {
     SettingsGroupTitle({ title: '拉黑的用户' })
     SettingsCard({
       content: (): void => { this.UserRows() }
-    })
+    }).enabled(!this.actionBusy && !threadBlockStore.reading && !threadBlockStore.saving)
     SettingsNote({
       text: '仅显示在本应用内拉黑的用户，不含官方客户端的记录。解除拉黑会同步到贴吧账号。'
     })
@@ -88,7 +119,11 @@ export struct BlockManagePane {
   @Builder
   UserRows() {
     if (threadBlockStore.blockedUsers.length === 0) {
-      SettingsInfoRow({ label: '本应用暂无拉黑的用户', showDivider: false })
+      if (threadBlockStore.reading || (!threadBlockStore.loaded && threadBlockStore.readError.length === 0)) {
+        SettingsInfoRow({ label: '正在读取…', showDivider: false })
+      } else if (threadBlockStore.loaded) {
+        SettingsInfoRow({ label: '本应用暂无拉黑的用户', showDivider: false })
+      }
     } else {
       ForEach(threadBlockStore.blockedUsers, (user: BlockedUser, index: number) => {
         SettingsEntryRow({
@@ -106,7 +141,7 @@ export struct BlockManagePane {
     SettingsGroupTitle({ title: '隐藏的帖子' })
     SettingsCard({
       content: (): void => { this.HiddenRows() }
-    })
+    }).enabled(!this.actionBusy && !threadBlockStore.reading && !threadBlockStore.saving)
     SettingsNote({
       text: '仅在本机隐藏，点击可恢复。'
     })
@@ -115,7 +150,11 @@ export struct BlockManagePane {
   @Builder
   HiddenRows() {
     if (threadBlockStore.hidden.length === 0) {
-      SettingsInfoRow({ label: '本机暂无隐藏的帖子', showDivider: false })
+      if (threadBlockStore.reading || (!threadBlockStore.loaded && threadBlockStore.readError.length === 0)) {
+        SettingsInfoRow({ label: '正在读取…', showDivider: false })
+      } else if (threadBlockStore.loaded) {
+        SettingsInfoRow({ label: '本机暂无隐藏的帖子', showDivider: false })
+      }
     } else {
       ForEach(threadBlockStore.hidden, (item: HiddenThread, index: number) => {
         SettingsEntryRow({

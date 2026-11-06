@@ -1,4 +1,3 @@
-import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { common } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
 import { authSession } from '../auth/AuthSession';
@@ -13,7 +12,8 @@ export struct FollowButton {
   @Param targetId: number = 0;
   @Param portrait: string = '';
   @Param targetName: string = '';
-  @Param forumStyle: boolean = false;
+  /** 本人的粉丝行：关注后即互关。 */
+  @Param fansStyle: boolean = false;
   @Event onChanged: () => void = (): void => {};
   @Local vm: FollowActionVM = new FollowActionVM('user', 0, '', '');
   private auth = authSession;
@@ -57,36 +57,20 @@ export struct FollowButton {
   }
   private label(): string {
     if (this.vm.loading) { return '读取中…'; }
-    if (this.vm.pending) { return '提交中…'; }
+    if (this.vm.pending) { return this.vm.following ? '关注中…' : '取消中…'; }
     if (this.vm.verifying && !this.vm.known) { return '确认中…'; }
-    return this.vm.known ? (this.vm.following ? '已关注' : '关注') : '重试关注状态';
+    return this.vm.known ? (this.vm.following ? (this.fansStyle ? '已互关' : '已关注') :
+      (this.fansStyle ? '回关' : '关注')) : '重试关注状态';
   }
   private followedAppearance(): boolean {
-    return this.vm.known && this.vm.following;
-  }
-  private foreground(): ResourceColor {
-    if (!visualThemeStore.isPaper) { return Color.White; }
-    return this.followedAppearance() ? AppTheme.TEXT_SUB : AppTheme.ON_ACCENT;
-  }
-  private buttonBackground(): ResourceColor {
-    return visualThemeStore.isPaper && this.followedAppearance() ? AppTheme.SURFACE_MUTED : AppTheme.ACCENT;
-  }
-  private buttonOpacity(): number {
-    return !visualThemeStore.isPaper && this.busy() ? 0.6 : 1;
+    return this.vm.known && this.vm.following && !this.vm.pending;
   }
   build() {
     if (!this.vm.self && (this.targetId > 0 || this.portrait.length > 0)) {
-      if (this.forumStyle) {
-        ForumActionButton({ label: this.label(), onHero: false, compact: true, busy: this.busy(), disabled: this.busy(),
-          onTap: (): void => { void this.activate(); } })
-      } else {
-      Text(this.label())
-        .fontSize(13).fontColor(this.foreground()).textAlign(TextAlign.Center).constraintSize({ minHeight: 40 })
-        .padding({ left: 16, right: 16, top: 8, bottom: 8 }).borderRadius(16).backgroundColor(this.buttonBackground())
-        .opacity(this.buttonOpacity()).enabled(!this.busy())
-        .accessibilityText(this.label())
-        .onClick(() => { this.activate(); })
-      }
+      ForumActionButton({ label: this.label(), busy: this.busy(), completed: this.followedAppearance(),
+        retry: !this.vm.known && !this.busy(),
+        accessibilityLabel: `${this.targetName}，${this.label()}`,
+        onTap: (): void => { void this.activate(); } })
     }
   }
 }

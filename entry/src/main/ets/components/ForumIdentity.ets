@@ -119,9 +119,12 @@ export struct ForumIdentity {
             .fontSize(20).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
             .id('forum-identity-name-line').onClick(() => { this.onOpenInformation(); })
-          ForumActionButton({ label: this.vm.buttonLabel(), onHero: false,
-            busy: this.vm.signing || (this.vm.reading && this.vm.membership.signed === undefined),
-            disabled: this.forumId <= 0 || this.vm.follow.pending || this.vm.signing || this.vm.reading,
+          ForumActionButton({ label: this.vm.buttonLabel(),
+            actionSymbol: this.vm.buttonIsSign() ? $r('sys.symbol.calendar') : $r('sys.symbol.plus'),
+            busy: this.vm.buttonBusy(), completed: this.vm.buttonCompleted(),
+            retry: this.vm.buttonLabel().startsWith('重试'),
+            disabled: this.forumId <= 0 || this.vm.buttonCompleted(),
+            accessibilityLabel: `${this.forumName}，${this.vm.buttonLabel()}`,
             onTap: (): void => { void this.activate(); } })
             .flexShrink(0).id('forum-identity-action')
         }.width('100%').alignItems(VerticalAlign.Center).id('forum-identity-title-row')
@@ -129,6 +132,14 @@ export struct ForumIdentity {
         Text(`关注 ${formatCount(this.vm.publicMemberCount >= 0 ? this.vm.publicMemberCount : this.memberCount)}    帖子 ${this.vm.publicThreadCount >= 0 ? formatCount(this.vm.publicThreadCount) : (this.vm.introductionError.length > 0 ? '读取失败' : '--')}`)
           .fontSize(12).fontColor(AppTheme.TEXT_SUB).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .onClick(() => { this.onOpenInformation(); })
+        if (this.vm.buttonIsSign() && (this.vm.membership.continuousCount >= 0 || this.vm.membership.missedDays > 0)) {
+          Text(this.vm.membership.continuousCount >= 0 ?
+            `连签 ${this.vm.membership.continuousCount} 天${this.vm.membership.missedDays > 0 ? ` · 漏签 ${this.vm.membership.missedDays} 天` : ''}` :
+            `漏签 ${this.vm.membership.missedDays} 天`)
+            .fontSize(12).fontColor(AppTheme.TEXT_SUB).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .id('forum-sign-summary').onClick(() => { this.onOpenInformation(); })
+        }
         if (this.vm.follow.known && this.vm.follow.following && this.vm.membership.level >= 0) {
           ForumExperience({ currentScore: this.vm.membership.currentScore,
             nextScore: this.vm.membership.nextScore, level: this.vm.membership.level,

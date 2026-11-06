@@ -21,6 +21,10 @@ export class DirectoryUser {
   avatar: string = '';
   intro: string = '';
   role: string = '';
+  /** TA关注列表持有者的时间，服务端秒转毫秒；缺失/非法为0。 */
+  followTimeMs: number = 0;
+  /** 当前登录者是否关注TA；缺失不猜测。 */
+  followed: boolean | undefined = undefined;
 }
 
 export class ForumRuleSection {
@@ -59,6 +63,8 @@ interface RawDirectoryUser {
   portrait?: string;
   intro?: string;
   role_name?: string;
+  follow_time?: number | string;
+  has_concerned?: number | string;
 }
 interface RawTeam {
   role_name?: string;
@@ -113,7 +119,28 @@ function userFromRaw(raw: RawDirectoryUser, role: string = ''): DirectoryUser {
   user.avatar = portraitUrl(user.portrait);
   user.intro = raw.intro ?? '';
   user.role = raw.role_name || role;
+  const seconds: number = Number(raw.follow_time);
+  if ((typeof raw.follow_time === 'number' || typeof raw.follow_time === 'string' && /^\d+$/.test(raw.follow_time)) &&
+    Number.isSafeInteger(seconds) && seconds > 0 && Number.isSafeInteger(seconds * 1000)) {
+    user.followTimeMs = seconds * 1000;
+  }
+  if (raw.has_concerned === 0 || raw.has_concerned === '0') { user.followed = false; }
+  else if (raw.has_concerned === 1 || raw.has_concerned === '1') { user.followed = true; }
   return user;
+}
+
+/** 粉丝页的时间副标题；不把缺失时间伪装成刚刚关注。 */
+export function fanFollowTime(timeMs: number, nowMs: number = Date.now(), own: boolean = true): string {
+  if (!Number.isSafeInteger(timeMs) || timeMs <= 0) { return '关注时间未提供'; }
+  const date: Date = new Date(timeMs);
+  if (!Number.isFinite(date.getTime())) { return '关注时间未提供'; }
+  const elapsed: number = nowMs - timeMs;
+  let when: string = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  if (elapsed >= 0 && elapsed < 60000) { when = '刚刚'; }
+  else if (elapsed >= 60000 && elapsed < 3600000) { when = `${Math.floor(elapsed / 60000)}分钟前`; }
+  else if (elapsed >= 3600000 && elapsed < 86400000) { when = `${Math.floor(elapsed / 3600000)}小时前`; }
+  else if (elapsed >= 86400000 && elapsed < 30 * 86400000) { when = `${Math.floor(elapsed / 86400000)}天前`; }
+  return `${when} 关注了${own ? '你' : 'TA'}`;
 }
 
 /** 非法信封或缺少该页面的数据结构返回 undefined，不能把协议失败伪装成空列表。 */

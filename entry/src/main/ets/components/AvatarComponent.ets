@@ -8,7 +8,7 @@ export struct AvatarComponent {
   @Param url: string = '';
   @Param avatarSize: number = 40;
   @Param fallbackName: string = '';
-  @Param bgColor: ResourceColor = $r('app.color.app_avatar_bg');
+  @Param bgColor: ResourceColor | undefined = undefined;
   /**
    * 仅本人头像传非空（如 `self`）：把图片加载结果打进头像时间线。
    * 默认空串 —— 列表里成百上千个头像不产生任何日志。
@@ -60,7 +60,7 @@ export struct AvatarComponent {
       Circle()
         .width(this.avatarSize)
         .height(this.avatarSize)
-        .fill(this.bgColor)
+        .fill(this.bgColor ?? AppTheme.AVATAR_BG)
 
       /* 文字回退：URL 为空 或 图片加载失败时显示 */
       if (this.url.length === 0 || this.imageFailed) {

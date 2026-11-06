@@ -17,13 +17,13 @@ const KEY_PREF: string = 'pref';
 /**
  * 全局单例：App 内只有一个"深色模式"偏好。
  *
- * 与 `MaterialManager` 同一取舍：读/写失败一律静默（本次会话内仍生效，
- * 只是下次启动可能回到旧值）——偏好存储异常不该影响 App 启动。
+ * 读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。
  */
 @ObservedV2
 export class ThemeModeStore {
   /** 用户偏好（三态）。`@Trace` → 设置页弹层勾选态自动跟随 */
   @Trace pref: ThemeModePref = DEFAULT_THEME_MODE_PREF;
+  @Trace saveError: string = '';
 
   /**
    * 当前**生效**的深浅色（true = 深色）。
@@ -37,6 +37,12 @@ export class ThemeModeStore {
   private loaded: boolean = false;
   /** EntryAbility 注册的系统栏刷新回调（见文件头"系统栏跟随"） */
   private systemBarRefresher: (() => void) | undefined = undefined;
+  private paletteRefresher: (() => void) | undefined = undefined;
+
+  /** 原生控件换肤与系统栏分别注册，窗口销毁后释放。 */
+  setPaletteRefresher(refresher: (() => void) | undefined): void {
+    this.paletteRefresher = refresher;
+  }
 
   /**
    * 启动时**同步**读偏好并立即应用（首帧前）。
@@ -74,17 +80,25 @@ export class ThemeModeStore {
   setMode(pref: ThemeModePref, context: common.UIAbilityContext): void {
     const next: ThemeModePref = normalizeThemeModePref(pref as number);
     if (next === this.pref) {
+      if (this.saveError.length > 0) { this.retrySave(context); }
       return;
     }
     this.pref = next;
     this.apply(context);
     hilog.info(DOMAIN, TAG, 'theme mode -> %{public}s', this.describe());
+    this.retrySave(context);
+  }
+
+  /** 只重试当前选择的持久化，不重复应用颜色模式。 */
+  retrySave(context: common.UIAbilityContext): void {
     try {
       const options: preferences.Options = { name: STORE };
       const store: preferences.Preferences = preferences.getPreferencesSync(context, options);
-      store.putSync(KEY_PREF, next as number);
+      store.putSync(KEY_PREF, this.pref as number);
       store.flushSync();
+      this.saveError = '';
     } catch (e) {
+      this.saveError = '深色模式本次已生效，保存失败，重启后可能恢复旧值';
       hilog.warn(DOMAIN, TAG, 'theme mode save failed: %{public}s', String(e));
     }
   }
@@ -153,6 +167,10 @@ export class ThemeModeStore {
   }
 
   private refreshSystemBar(): void {
+    if (this.paletteRefresher !== undefined) {
+      try { this.paletteRefresher(); }
+      catch (_) { hilog.warn(DOMAIN, TAG, 'native palette refresh failed'); }
+    }
     if (this.systemBarRefresher !== undefined) {
       try {
         this.systemBarRefresher();

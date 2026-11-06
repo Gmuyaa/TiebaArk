@@ -6,14 +6,17 @@ import { CommentTarget, commentLink, commentText } from '../model/CommentAction'
 import { materialManager } from '../common/material/MaterialManager';
 import { popupMotion } from '../common/appearance/MotionPolicy';
 import { MaterialSlot } from '../common/material/MaterialConfig';
-import { DetailTheme } from '../theme/Theme';
+import { AppTheme, DetailTheme } from '../theme/Theme';
 import { AuthorBlockVM, authorBlockAction } from '../viewmodel/AuthorBlockVM';
 import { shareWebPage } from '../utils/SystemShare';
 
-/** 评论上方的五项工具条；内容、目标与作者始终来自同一条评论。 */
+/** 评论长按工具条；本人删除与其他作者屏蔽共用最后一项。 */
 @ComponentV2
 export struct CommentActionHost {
   @Require @Param target: CommentTarget;
+  @Param canDelete: boolean = false;
+  @Param deletePending: boolean = false;
+  @Event onDelete: () => void = (): void => {};
   @BuilderParam content: () => void = this.emptyContent;
   @Local popup: boolean = false;
   @Local copying: boolean = false;
@@ -23,6 +26,11 @@ export struct CommentActionHost {
   @Local menuWidth: number = 336;
   @Local blockVM: AuthorBlockVM = new AuthorBlockVM(0);
   private busy: boolean = false;
+  private menuOwner: string = '';
+  private menuTid: number = 0;
+  private menuPid: number = 0;
+  private menuParentPid: number = 0;
+  private menuAuthorId: number = 0;
   @Local auth: AuthSession = authSession;
 
   aboutToAppear(): void {
@@ -30,10 +38,31 @@ export struct CommentActionHost {
     this.bindAuthor();
   }
 
-  @Monitor('target', 'auth.snapshot')
+  @Monitor('target', 'auth.snapshot', 'auth.sessionRevision')
   bindAuthor(): void {
+    this.popup = false;
     const vm: AuthorBlockVM = authorBlockAction(this.target.author.id);
-    if (vm !== this.blockVM) { this.popup = false; this.blockVM = vm; }
+    if (vm !== this.blockVM) { this.blockVM = vm; }
+  }
+
+  private isOwnComment(): boolean {
+    return this.auth.isLoggedIn() && Number.isSafeInteger(this.target.author.id) &&
+      this.target.author.id > 0 && this.target.author.id === this.auth.snapshot.uid;
+  }
+
+  private openMenu(): void {
+    this.menuOwner = this.auth.sessionKey();
+    this.menuTid = this.target.tid;
+    this.menuPid = this.target.pid;
+    this.menuParentPid = this.target.parentPid;
+    this.menuAuthorId = this.target.author.id;
+    this.popup = true;
+  }
+
+  private menuIsCurrent(): boolean {
+    return this.menuOwner === this.auth.sessionKey() && this.menuTid === this.target.tid &&
+      this.menuPid === this.target.pid && this.menuParentPid === this.target.parentPid &&
+      this.menuAuthorId === this.target.author.id;
   }
 
   private context(): common.UIAbilityContext {
@@ -49,6 +78,8 @@ export struct CommentActionHost {
 
   private async action(index: number): Promise<void> {
     if (this.busy) { return; }
+    if (index === 5 && (!this.menuIsCurrent() || !this.isOwnComment() ||
+      !this.canDelete || this.deletePending)) { this.popup = false; return; }
     this.popup = false;
     this.busy = true;
     let reportCopied: boolean = false;
@@ -73,6 +104,8 @@ export struct CommentActionHost {
         reportCopied = true;
         await this.context().openLink('https://tieba.baidu.com/tousu/new');
         this.toast('评论链接已复制，请在官方举报页面填写');
+      } else if (index === 5) {
+        this.onDelete();
       } else {
         if (!this.auth.isLoggedIn()) { this.toast('需要登录后才能拉黑'); return; }
         if (this.target.author.id <= 0 || this.target.author.id === this.auth.snapshot.uid) {
@@ -81,8 +114,8 @@ export struct CommentActionHost {
         const vm: AuthorBlockVM = this.blockVM;
         const confirm = await this.getUIContext().getPromptAction().showDialog({
           title: '拉黑作者', message: '将该作者加入贴吧黑名单，限制关注、互动和私信，并隐藏其评论。',
-          buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-            { text: '屏蔽', color: $r('app.color.detail_accent') }]
+          buttons: [{ text: '取消', color: AppTheme.TEXT_SUB },
+            { text: '屏蔽', color: AppTheme.ACCENT_DARK }]
         });
         if (confirm.index === 1 && vm === this.blockVM) {
           const message: string = await vm.set(this.context(), true);
@@ -93,7 +126,7 @@ export struct CommentActionHost {
     } catch (err) {
       this.toast(index === 0 ? '暂时无法打开系统分享' : index === 3 ?
         (reportCopied ? '无法打开官方举报页面，评论链接已复制' : '复制评论链接失败，请重试') :
-        index === 4 ? '拉黑操作失败，请重试' : '复制失败，请重试');
+        index === 4 ? '拉黑操作失败，请重试' : index === 5 ? '暂时无法删除，请重试' : '复制失败，请重试');
     } finally { this.busy = false; }
   }
 
@@ -136,12 +169,15 @@ export struct CommentActionHost {
           .strokeLineCap(LineCapStyle.Round).strokeLineJoin(LineJoinStyle.Round)
           .width(24).height(24)
       } else {
-        SymbolGlyph(symbol).fontSize(24).fontColor([DetailTheme.ICON])
+        SymbolGlyph(symbol).fontSize(24).fontColor([index === 5 ? AppTheme.DANGER_TEXT : DetailTheme.ICON])
       }
-      Text(label).fontSize(12).fontColor(DetailTheme.TEXT_MAIN).maxLines(1)
+      Text(label).fontSize(12).fontColor(index === 5 ? AppTheme.DANGER_TEXT : DetailTheme.TEXT_MAIN).maxLines(1)
     }
     .layoutWeight(1).height(72).justifyContent(FlexAlign.Center)
     .accessibilityText(label)
+    .id(`comment-action-${index}-${this.target.pid}`)
+    .enabled(index !== 5 || !this.deletePending)
+    .opacity(index === 5 && this.deletePending ? 0.5 : 1)
     .onClick((): void => { this.action(index); })
   }
 
@@ -152,7 +188,13 @@ export struct CommentActionHost {
       this.Item($r('sys.symbol.doc_text_on_doc_text'), '复制全部', 1)
       this.Item($r('sys.symbol.character_textbox'), '自由复制', 2)
       this.Item($r('sys.symbol.flag'), '举报', 3)
-      this.Item($r('sys.symbol.nosign'), '屏蔽', 4)
+      if (this.isOwnComment()) {
+        if (this.canDelete) {
+          this.Item($r('sys.symbol.trash'), this.deletePending ? '删除中…' : '删除', 5)
+        }
+      } else {
+        this.Item($r('sys.symbol.nosign'), '屏蔽', 4)
+      }
     }.width('100%').padding({ left: 6, right: 6 })
   }
 
@@ -188,7 +230,7 @@ export struct CommentActionHost {
       } else {
         Column() { this.content(); }
           .width('100%')
-          .gesture(LongPressGesture({ duration: 500 }).onAction((): void => { this.popup = true; }))
+          .gesture(LongPressGesture({ duration: 500 }).onAction((): void => { this.openMenu(); }))
       }
     }.width('100%')
     .id(`commentAction_${this.target.pid}`)

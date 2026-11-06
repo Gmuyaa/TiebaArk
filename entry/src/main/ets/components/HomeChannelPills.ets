@@ -72,12 +72,11 @@ export struct HomeChannelPills {
                 .fontSize(16)
                 .maxFontScale(2)
                 .fontWeight(this.selectedChannel === label ? FontWeight.Medium : FontWeight.Normal)
-                .fontColor(this.selectedChannel === label ? AppTheme.ACCENT : AppTheme.TAB_UNDERLINE_TEXT)
+                .fontColor(this.selectedChannel === label ? AppTheme.ACCENT_DARK : AppTheme.TAB_UNDERLINE_TEXT)
                 .padding({ left: CHANNEL_PADDING, right: CHANNEL_PADDING })
                 .onAreaChange((_old: Area, area: Area) => {
                   this.updateChannelWidth(index, Number(area.width));
                 })
-                .animation({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseInOut })
             }
             .width(this.channelWidth(index))
             .height(HIT_H)
@@ -109,7 +108,7 @@ export struct HomeChannelPills {
     .alignItems(VerticalAlign.Center)
     .scale({ x: this.hidden ? 0.04 : 1, y: this.hidden ? 0.04 : 1,
       centerX: '50%', centerY: 0 })
-    .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
+    .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve(MotionEffect.SCALE) })
     .translate({ y: this.hidden ? -64 : 0 })
     .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
   }

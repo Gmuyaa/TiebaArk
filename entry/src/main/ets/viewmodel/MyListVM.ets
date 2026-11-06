@@ -15,6 +15,7 @@ import {
 } from '../utils/BrowseHistory';
 import { putForumAvatar } from '../model/ForumAvatarStore';
 import { formatPostTime } from '../model/HomeFeedPresentation';
+import { noteContentDeleted } from './ContentDeletionRevision';
 
 /** 列表类型（页面路由参数传字符串，这里做归一） */
 export type MyListKind = 'history' | 'fav' | 'reply' | 'thread';
@@ -89,10 +90,12 @@ export class MyListVM {
   @Trace managing: boolean = false;
   @Trace selected: number[] = [];
   @Trace removing: boolean = false;
-  @Trace manageNotice: string = '';
+  @Trace stoppingRemoval: boolean = false;
   @Trace threadPendingTid: number = 0;
 
   private favoritePage: number = 0;
+  private selectedSnapshot: number[] = [];
+  private selectedIndex: Set<number> = new Set<number>();
   private favoriteRequest: number = 0;
   private favoriteAccount: string = '';
   private disposed: boolean = false;
@@ -222,6 +225,8 @@ export class MyListVM {
       if (!result.ok) { return `${result.describeFailure()}；请下拉刷新核对后再操作`; }
       if (action === 'delete') {
         this.items = this.items.filter((row: MyListItem): boolean => row.tid !== item.tid);
+        await MyListVM.markDeleted(context, item.tid).catch((): void => {});
+        noteContentDeleted();
         return '帖子已删除';
       }
       item.hideFromProfile = hidden;
@@ -253,6 +258,7 @@ export class MyListVM {
     if (account.length === 0 || account !== this.favoriteAccount) {
       this.favoriteRequest++;
       this.items = [];
+      this.managing = false;
       this.selected = [];
       this.favoritePage = 0;
       this.hasMore = false;
@@ -271,7 +277,6 @@ export class MyListVM {
     this.loadingMore = more;
     this.errorText = '';
     this.pagingError = '';
-    this.manageNotice = '';
     try {
       const device = await DeviceIdentity.ensure(context);
       if (!this.favoriteCurrent(request)) { return; }
@@ -295,6 +300,7 @@ export class MyListVM {
       this.favoritePage = page;
       // 收藏信封没有可靠 has_more，非空且有新条目才继续探测。
       this.hasMore = added > 0;
+      if (next.length === 0) { this.managing = false; }
       this.resolveAvatars(context).catch(() => {});
     } catch (err) {
       if (this.favoriteCurrent(request)) {
@@ -306,6 +312,7 @@ export class MyListVM {
         this.loading = false; this.loadingMore = false; this.loadedOnce = true;
         if (this.favoriteAccount !== this.favoriteOwner()) {
           this.items = []; this.selected = []; this.hasMore = false;
+          this.managing = false;
           this.errorText = '账号已变化，请重新加载收藏';
         }
       }
@@ -313,64 +320,86 @@ export class MyListVM {
   }
 
   toggleManaging(): void {
-    if (this.removing) { return; }
+    if (this.disposed ||
+      (!this.managing && (this.items.length === 0 || this.favoriteAccount !== this.favoriteOwner()))) { return; }
+    if (this.removing) { this.stoppingRemoval = true; return; }
     this.managing = !this.managing;
     this.selected = [];
-    this.manageNotice = '';
   }
 
   toggleSelected(tid: number): void {
-    if (!this.managing || this.removing || !this.items.some((item: MyListItem) => item.tid === tid)) { return; }
-    this.selected = this.selected.includes(tid) ? this.selected.filter((id: number) => id !== tid)
+    if (!this.managing || this.removing || this.disposed ||
+      this.favoriteAccount !== this.favoriteOwner() || !this.items.some((item: MyListItem) => item.tid === tid)) { return; }
+    this.selected = this.isSelected(tid) ? this.selected.filter((id: number) => id !== tid)
       : this.selected.concat([tid]);
   }
 
+  isSelected(tid: number): boolean {
+    if (this.selectedSnapshot !== this.selected) {
+      this.selectedSnapshot = this.selected;
+      this.selectedIndex = new Set<number>(this.selected);
+    }
+    return this.selectedIndex.has(tid);
+  }
+
+  allLoadedSelected(): boolean {
+    return this.items.length > 0 && this.items.length === this.selected.length;
+  }
+
   selectLoaded(): void {
-    if (!this.managing || this.removing) { return; }
-    this.selected = this.items.length === this.selected.length ? [] : this.items.map((item: MyListItem) => item.tid);
+    if (!this.managing || this.removing || this.loading || this.loadingMore ||
+      this.disposed || this.favoriteAccount !== this.favoriteOwner()) { return; }
+    this.selected = this.allLoadedSelected() ? [] : this.items.map((item: MyListItem) => item.tid);
   }
 
   selectionOwner(): string { return this.favoriteAccount; }
 
   /** 仅明确成功的条目移出列表；失败/超时保留，不自动重发。 */
-  async removeSelected(context: common.UIAbilityContext, confirmed: number[], confirmedOwner: string): Promise<void> {
+  async removeSelected(context: common.UIAbilityContext, confirmed: number[], confirmedOwner: string): Promise<string> {
     if (this.removing || this.loading || this.loadingMore || this.disposed || !this.managing ||
       this.selected.length === 0 || this.favoriteAccount.length === 0 ||
       confirmedOwner !== this.favoriteAccount || this.favoriteAccount !== this.favoriteOwner() ||
       confirmed.length !== this.selected.length ||
-      !confirmed.every((tid: number) => this.selected.includes(tid))) { return; }
+      !confirmed.every((tid: number) => this.isSelected(tid))) { return ''; }
     this.removing = true;
     const request: number = ++this.favoriteRequest;
     const targets: number[] = confirmed.slice();
-    let removed: number = 0;
+    const removed: Set<number> = new Set<number>();
     let failed: number = 0;
-    this.manageNotice = '';
     try {
       const device = await DeviceIdentity.ensure(context);
       for (const tid of targets) {
-        if (!this.favoriteCurrent(request)) { return; }
+        if (!this.favoriteCurrent(request)) { return ''; }
+        if (this.stoppingRemoval) { break; }
         // 即使超时也可能已执行；这轮偏移分页必须从刷新重新建立。
         this.hasMore = false;
         try {
           const result = await this.api.removeStoreThread(device, authSession.session(), tid);
-          if (!this.favoriteCurrent(request)) { return; }
+          if (!this.favoriteCurrent(request)) { return ''; }
           if (result.ok) {
-            this.items = this.items.filter((item: MyListItem) => item.tid !== tid);
-            this.selected = this.selected.filter((id: number) => id !== tid);
-            removed++;
-            // 删除会改变偏移分页位置，保留当前列表，刷新后再续页。
+            removed.add(tid);
           } else { failed++; }
         } catch (err) { failed++; }
       }
-      this.manageNotice = `已取消 ${removed} 条收藏` + (failed > 0
-        ? `，${failed} 条结果未确认，已保留；请刷新核对后再操作` : '，下拉刷新可继续加载');
+      if (!this.favoriteCurrent(request)) { return ''; }
+      let message: string = `已取消${removed.size}条收藏`;
+      if (failed > 0) { message += `，${failed}条结果未确认`; }
+      const remaining: number = targets.length - removed.size - failed;
+      if (remaining > 0) { message += `，已停止，${remaining}条未开始`; }
+      return message;
     } catch (err) {
-      if (this.favoriteCurrent(request)) { this.manageNotice = '取消收藏未完成，请刷新核对后再操作'; }
+      return this.favoriteCurrent(request) ? '取消收藏未完成，请刷新核对' : '';
     } finally {
+      this.stoppingRemoval = false;
       this.removing = false;
       if (this.favoriteAccount !== this.favoriteOwner()) {
         this.items = []; this.selected = []; this.hasMore = false;
+        this.managing = false;
         this.errorText = '账号已变化，请重新加载收藏';
+      } else if (this.favoriteCurrent(request) && removed.size > 0) {
+        this.items = this.items.filter((item: MyListItem) => !removed.has(item.tid));
+        this.selected = this.selected.filter((tid: number) => !removed.has(tid));
+        if (this.selected.length === 0) { this.managing = false; }
       }
     }
   }
@@ -522,6 +551,7 @@ export class MyListVM {
     if (tid <= 0) {
       return;
     }
+    MyListVM.deletedCache.set(tid, true);
     await markBrowseDeleted(context, tid);
   }
 
@@ -559,7 +589,8 @@ export class MyListVM {
           // 单次失败不缓存结果：下次进页面还会再问，避免"一次没网就永久误判"
           continue;
         }
-        MyListVM.deletedCache.set(tid, deleted);
+        // 删除成功后的标记优先于此前发出的存活探测。
+        if (MyListVM.deletedCache.get(tid) !== true) { MyListVM.deletedCache.set(tid, deleted); }
         hilog.info(0x0000, 'MyListVM', 'alive tid=%{public}d deleted=%{public}s',
           tid, deleted ? 'y' : 'n');
       }
@@ -682,8 +713,6 @@ export class MyListVM {
       row.forumName = it.forumName;
       row.coverUrl = it.coverUrl;
       row.isDeleted = it.isDeleted;
-      hilog.info(0x0000, 'MyListVM', 'fav tid=%{public}d deleted=%{public}s titleLen=%{public}d',
-        it.tid, it.isDeleted ? 'y' : 'n', it.title.length);
       row.meta = it.authorName.length > 0 ? `${it.authorName} · ${it.replyNum} 回复`
         : `${it.replyNum} 回复`;
       out.push(row);

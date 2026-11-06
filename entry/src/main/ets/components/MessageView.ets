@@ -2,6 +2,7 @@ import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 /** 消息页的通知列表与登录引导。 */
 
 import { RootPageHeader } from './PageHeader';
+import { GlassCircleButton } from './GlassCircleButton';
 import { PageState } from './PageState';
 import { common } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
@@ -10,9 +11,9 @@ import { LoginEmptyView } from './LoginEmptyView';
 import { NavigationService } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
-import { NotifyVM } from '../viewmodel/NotifyVM';
+import { NotifyUnreadKind } from '../model/NotifyUnread';
+import { NotifyUnreadVM, notifyUnreadVM } from '../viewmodel/NotifyUnreadVM';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from './RefreshSpinner';
-import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 
 /** 通知页一行分类的静态描述 */
 interface NotifyRow {
@@ -24,7 +25,7 @@ interface NotifyRow {
   /** 图标颜色 */
   fg: ResourceColor;
   /** 通知列表或当前账号的粉丝列表。 */
-  action: string;
+  action: NotifyUnreadKind;
 }
 
 /** 顶部页签的静态描述 */
@@ -76,45 +77,80 @@ export struct MessageView {
   @Local msgTabIndex: number = 0;
   @Param active: boolean = true;
   @Local auth: AuthSession = authSession;
-  @Local foreground: ForegroundRefresh = foregroundRefresh;
-  @Local replies: NotifyVM = new NotifyVM('reply');
-  @Local likes: NotifyVM = new NotifyVM('agree');
-  @Local mentions: NotifyVM = new NotifyVM('at');
+  @Local unread: NotifyUnreadVM = notifyUnreadVM;
   @Local refreshing: boolean = false;
   @Local pullRefreshDragging: boolean = false;
-  private account: string = '';
+  @Local readDialogPending: boolean = false;
+  private refreshRevision: number = 0;
+  private viewRevision: number = 0;
 
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
-  @Monitor('active', 'foreground.revision', 'auth.snapshot')
+  @Monitor('active', 'msgTabIndex', 'auth.snapshot')
   onVisibleChanged(): void {
-    const account: string = authSession.isLoggedIn() ? authSession.sessionKey() : '';
-    if (account !== this.account) {
-      this.account = account;
-      this.replies.dispose(); this.likes.dispose(); this.mentions.dispose();
-      this.replies = new NotifyVM('reply'); this.likes = new NotifyVM('agree'); this.mentions = new NotifyVM('at');
-    }
-    if (this.active) { void this.reload(); }
+    if (this.active && this.msgTabIndex === 0 && authSession.isLoggedIn()) { void this.reload(); }
+    else { this.viewRevision++; this.finishRefreshing(); }
+  }
+
+  @Monitor('unread.marking')
+  onMarkingChanged(): void {
+    if (this.unread.marking) { this.finishRefreshing(); }
+  }
+
+  private finishRefreshing(): void {
+    this.refreshRevision++; this.refreshing = false;
   }
 
   private async reload(): Promise<void> {
+    const revision: number = ++this.refreshRevision;
     try {
-      await Promise.all([this.replies.refresh(this.context()), this.likes.refresh(this.context()),
-        this.mentions.refresh(this.context())]);
-    } finally { this.refreshing = false; }
+      await this.unread.refresh(this.context());
+    } finally { if (revision === this.refreshRevision) { this.refreshing = false; } }
   }
 
   private preview(row: NotifyRow): string {
-    if (row.action === 'fans') { return row.subtitle; }
-    const vm: NotifyVM = row.action === 'agree' ? this.likes : row.action === 'at' ? this.mentions : this.replies;
-    if (vm.error.length > 0) { return vm.hasItems() ? '刷新失败，点击查看已有通知' : '读取失败，点击重试'; }
-    if (vm.hasItems()) {
-      const item = vm.items[0];
-      return `${item.displayName()}：${item.excerpt || item.title || item.headline()}`;
+    const text: string = this.unread.previews.text(row.action);
+    if (text.length > 0) { return `上次查看：${text}`; }
+    return this.unread.counts.count(row.action) > 0 ? '有新消息，点击查看' : '点击查看最近消息';
+  }
+
+  private async confirmMarkAllRead(): Promise<void> {
+    if (this.readDialogPending || this.unread.marking) { return; }
+    this.readDialogPending = true;
+    const revision: number = this.viewRevision;
+    const account: string = authSession.isLoggedIn() ? authSession.sessionKey() : '';
+    const target: NotifyUnreadVM = this.unread;
+    try {
+      const confirm = await this.getUIContext().getPromptAction().showDialog({
+        title: '全部标记为已读',
+        message: '将点赞、回复、@我的和粉丝消息全部标记为已读？',
+        buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '全部已读', color: AppTheme.ACCENT }]
+      });
+      if (confirm.index !== 1 || revision !== this.viewRevision || !this.active || this.msgTabIndex !== 0 ||
+        account !== authSession.sessionKey()) { return; }
+      const message: string = await target.markAllRead(this.context(), account);
+      if (message.length > 0 && this.active && account === authSession.sessionKey()) {
+        this.getUIContext().getPromptAction().showToast({ message });
+      }
+    } catch (err) { /* 系统取消或关闭弹窗，不发起已读操作。 */ }
+    finally { this.readDialogPending = false; }
+  }
+
+  @Builder
+  ReadAction() {
+    if (this.msgTabIndex === 0) {
+      Row() {
+        if (this.unread.marking) {
+          LoadingProgress().width(24).height(24).color(AppTheme.ACCENT)
+        } else {
+          GlassCircleButton({ symbol: $r('sys.symbol.envelope_open'), iconWeight: FontWeight.Regular,
+            accessibilityLabel: '将消息全部标记为已读', onTap: (): void => { void this.confirmMarkAllRead(); } })
+        }
+      }.width(40).height(40).justifyContent(FlexAlign.Center)
+      .id('message-mark-all-read').enabled(!this.readDialogPending && !this.unread.marking)
     }
-    return vm.loading ? '正在读取…' : vm.loadedOnce ? '暂无通知' : '点击查看';
   }
 
   private msgTabs: MsgTab[] = [
@@ -123,20 +159,18 @@ export struct MessageView {
   ];
 
   aboutToAppear(): void {
-    this.account = authSession.isLoggedIn() ? authSession.sessionKey() : '';
-    this.replies = new NotifyVM('reply'); this.likes = new NotifyVM('agree'); this.mentions = new NotifyVM('at');
-    if (this.active) { void this.reload(); }
+    this.onVisibleChanged();
   }
 
   aboutToDisappear(): void {
-    this.replies.dispose(); this.likes.dispose(); this.mentions.dispose();
+    this.viewRevision++; this.finishRefreshing();
   }
 
   @Builder
   PullHeader() { PullRefreshHeader({ active: this.refreshing || this.pullRefreshDragging }) }
 
   build() {
-    if (!authSession.snapshot.isLoggedIn()) {
+    if (!this.auth.snapshot.isLoggedIn()) {
       // 登录后由账号状态监听刷新通知摘要。
       LoginEmptyView({
         icon: $r('app.media.icon_message'),
@@ -149,7 +183,7 @@ export struct MessageView {
     } else {
       Column() {
         // 页头沿用共享状态栏避让。
-        RootPageHeader({ title: '消息' })
+        RootPageHeader({ title: '消息', actions: (): void => { this.ReadAction(); } })
 
         // ── 顶部页签「通知 | 聊天」──
         Row() {
@@ -199,22 +233,24 @@ export struct MessageView {
   notifyList() {
     Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
       List({ space: 10 }) {
+        if (this.unread.error.length > 0) {
+          ListItem() {
+            PageState({ compact: true,
+              message: this.unread.loaded ? '提醒刷新失败，数字为上次结果' : '提醒读取失败',
+              actionLabel: '重试', onAction: (): void => { void this.reload(); } })
+          }
+        } else if (!this.unread.loaded && this.unread.loading) {
+          ListItem() { PageState({ compact: true, loading: true, message: '正在读取提醒…' }) }
+        }
         ForEach(notifyRows(), (row: NotifyRow) => {
           ListItem() {
             Row({ space: 14 }) {
               // 彩色圆底 + 白色单色图标（本项目图标都是 SVG，fillColor 可染）
               Stack({ alignContent: Alignment.Center }) {
-                Image(row.icon)
-                  .width(24)
-                  .height(24)
-                  .fillColor(row.fg)
+                Image(row.icon).width(24).height(24).fillColor(row.fg)
               }
-              .width(48)
-              .height(48)
-              .backgroundColor(row.bg)
-              .borderRadius(24)
-              .flexShrink(0)
-              .accessibilityLevel('no')
+              .width(48).height(48).backgroundColor(row.bg).borderRadius(24)
+              .flexShrink(0).accessibilityLevel('no')
 
               Column({ space: 3 }) {
                 Text(row.title)
@@ -226,6 +262,15 @@ export struct MessageView {
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
+
+              if (this.unread.counts.count(row.action) > 0) {
+                Badge({ count: this.unread.counts.count(row.action), maxCount: 99, position: { x: 0, y: 0 },
+                  style: { badgeSize: 20, fontSize: 12, fontWeight: FontWeight.Medium,
+                    badgeColor: AppTheme.NOTIFY_BADGE_BACKGROUND, color: AppTheme.NOTIFY_BADGE_TEXT } }) {
+                  Row().width(0).height(20)
+                }.width(this.unread.counts.count(row.action) > 99 ? 34 : this.unread.counts.count(row.action) > 9 ? 28 : 20)
+                .height(20).flexShrink(0).accessibilityLevel('no')
+              }
 
               // 右箭头：复用返回图标旋转 180°，避免新增资源
               if (row.action.length > 0) {
@@ -240,7 +285,8 @@ export struct MessageView {
             .backgroundColor(AppTheme.CARD)
             .clip(true)
             .accessibilityGroup(true)
-            .accessibilityText(row.title + '，' + this.preview(row))
+            .accessibilityText(row.title + '，' + this.preview(row) +
+              (this.unread.counts.count(row.action) > 0 ? `，${this.unread.counts.count(row.action)} 条未读` : ''))
             .enabled(row.action.length > 0)
             .onClick(() => {
               if (row.action === 'fans') {

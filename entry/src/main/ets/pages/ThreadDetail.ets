@@ -1,10 +1,12 @@
-import { EmojiPickerPanel, EMOJI_GRID_MIN_HEIGHT } from '../components/EmojiPickerPanel';
+import { EmojiPickerPanel } from '../components/EmojiPickerPanel';
+import { emojiPanelHeight as sharedEmojiPanelHeight, emojiPanelGridHeight,
+  emojiPanelDialogOptions } from '../components/EmojiPanelDialog';
 import { CloseIcon } from '../components/CloseIcon';
-import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { VisualThemeStore, visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { TaggedThreadText } from '../components/TaggedThreadText';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from '../components/PageState';
-import { themeModeStore } from '../common/appearance/ThemeModeStore';
+import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
 import { ForumLevelBadge } from '../components/ForumLevelBadge';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
@@ -44,12 +46,13 @@ import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { POST_BODY_SIZE, POST_NICKNAME_SIZE, POST_TITLE_SIZE,
   COMMENT_BODY_SIZE, COMMENT_NICKNAME_SIZE, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT } from '../common/appearance/PostTypography';
 import { MemePicItem } from '../model/MemeEmoji';
-import { AgreeState, ThreadDetailVM } from '../viewmodel/ThreadDetailVM';
+import { ThreadDetailVM } from '../viewmodel/ThreadDetailVM';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { MyListVM } from '../viewmodel/MyListVM';
 import { ReplyImagesVM } from '../viewmodel/ReplyImagesVM';
 import { UploadedPostImage } from '../model/ImageUpload';
 import { ReplyEditorContent } from '../model/ReplyEditor';
-import { readEmojiEditor } from '../utils/EmojiEditor';
+import { readEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEditor';
 import { ERRNO_THREAD_DELETED } from '../api/TiebaApi';
 import { AgreeObjType } from '../net/TiebaParams';
 import { ImageViewer } from '../components/ImageViewer';
@@ -58,7 +61,7 @@ import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassMoreButton } from '../components/GlassMoreButton';
 import { ThreadPopupButton } from '../components/ThreadPopupButton';
 import { GlassCircleButton } from '../components/GlassCircleButton';
-import { THREAD_ACTION_BUTTON_SIZE } from '../model/SmartReach';
+import { THREAD_ACTION_BUTTON_SIZE, floatingButtonHitRegion } from '../model/SmartReach';
 import { PostImageGallery } from '../components/PostImageGallery';
 import { ReplyItem } from '../components/ReplyItem';
 import { AvatarComponent } from '../components/AvatarComponent';
@@ -71,7 +74,7 @@ import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { materialManager } from '../common/material/MaterialManager';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionStore } from '../common/appearance/MotionStore';
-import { motionDuration, popupMotion } from '../common/appearance/MotionPolicy';
+import { motionDuration, motionTransition, motionContentCover, popupMotion } from '../common/appearance/MotionPolicy';
 import { MaterialTabs } from '../components/MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 // 底部操作栏样式：设置页「鸿蒙特性设置」可切，`@Trace` 下一帧生效。
@@ -121,9 +124,6 @@ const REPLY_TOOL_GAP: number = 20;
 /** 「发布」按钮尺寸（vp）。参考图量宽 ≈112、高 ≈18；高度按可点性抬到 32（18vp 点不中） */
 const REPLY_PUBLISH_W: number = 92;
 const REPLY_PUBLISH_H: number = 32;
-/** 尚未收到键盘避让区回报时的格子高度；正常打开会按最近一次键盘高度计算。 */
-const REPLY_EMOJI_PANEL_FALLBACK_GRID_H: number = 248;
-
 /** 输入框内嵌表情的 ImageSpan 尺寸（vp）：≈15 号字两倍行高，与文本基线自然对齐 */
 const REPLY_EMOJI_INLINE: number = 22;
 
@@ -131,17 +131,10 @@ const REPLY_EMOTICON_QUICK_CODES: number[] = REPLY_EMOTICON_CODES.slice(0, 7);
 /** 常用表情行图标的显示边长（vp）：参考图量得 ≈62px ÷ 3.5 ≈ 18 → 取整 28 保可点性 */
 const REPLY_QUICK_EMOJI_SIZE: number = 28;
 
-const EMOJI_PANEL_TOP_PADDING: number = 8;
-const EMOJI_PANEL_BOTTOM_PADDING: number = 12;
-const EMOJI_PANEL_TAB_H: number = 40;
 /** 键盘避让模式在输入卡片与键盘顶之间留下的实测距离。 */
 const REPLY_INPUT_PANEL_GAP: number = 16;
-/** 面板容器在既有底部补偿后，实际可见高度比内容本体多出的真机残差。 */
-const EMOJI_PANEL_VISIBLE_EXTRA_H: number = 6;
 /** 面板升降动画：跟手且避免键盘收起后长时间留白。 */
 const REPLY_PANEL_TRANSITION_MS: number = 220;
-
-const EMOJI_PANEL_BOTTOM_INSET_COMP: number = 50;
 
 function replyImageSize(image: UploadedPostImage): [number, number] {
   const scale: number = Math.min(160 / image.width, 112 / image.height);
@@ -222,6 +215,7 @@ export struct ThreadDetailPage {
   @Local lastKeyboardVp: number = 0;
   /** 键盘避让监听的窗口与回调引用（`aboutToDisappear` 注销用；未注册时为 null） */
   private avoidWin: window.Window | null = null;
+  private keyboardWatchSeq: number = 0;
   private keyboardAreaCb: ((data: window.AvoidAreaOptions) => void) | null = null;
 
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
@@ -249,6 +243,7 @@ export struct ThreadDetailPage {
   private replyDialogSeq: number = 0;
 
   private emojiDialogId: number = 0;
+  private emojiDialogOpening: boolean = false;
   /** 面板弹窗的代次守卫（同 `replyDialogSeq` 的道理） */
   private emojiDialogSeq: number = 0;
   /**
@@ -278,8 +273,19 @@ export struct ThreadDetailPage {
   @Local emojiTab: number = 0;
 
   richCtl: RichEditorController = new RichEditorController();
+  private replyEditorReady: boolean = false;
+  @Local visualSettings: VisualThemeStore = visualThemeStore;
+  @Local themeSettings: ThemeModeStore = themeModeStore;
+
+  @Monitor('visualSettings.theme', 'themeSettings.isDark')
+  refreshReplyEditorColors(): void {
+    if (!this.replyEditorReady || this.rebuildingReply) { return; }
+    this.richCtl.setTypingStyle({ fontColor: AppTheme.TEXT_MAIN });
+    updateEmojiEditorTextColor(this.richCtl, AppTheme.TEXT_MAIN);
+  }
   /** 顶部更多菜单是否可见 */
   @Local showMore: boolean = false;
+  private deleteConfirming: boolean = false;
   /** 列表滚动位置（vp），由 onDidScroll 回报；标题栏渐变由原生导航负责。 */
   @Local navScrollOffset: number = 0;
   /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移 */
@@ -289,8 +295,69 @@ export struct ThreadDetailPage {
     NavigationService.back();
   }
 
+  /** 确认时绑定当前账号和内容代次，等待期间离页或换账号由 VM 拒绝旧操作。 */
+  private async confirmDeleteThread(): Promise<void> {
+    if (this.deleteConfirming || this.vm.deletePending || !this.vm.canDeleteThread()) { return; }
+    const owner: string = this.vm.deletionOwner();
+    const tid: number = this.vm.tid;
+    this.showMore = false;
+    this.deleteConfirming = true;
+    try {
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: '删除帖子',
+        message: '确定删除这条帖子？帖子及其评论将无法恢复。',
+        buttons: [{ text: '取消', color: BrandTheme.TEXT_SUB },
+          { text: '删除', color: BrandTheme.DANGER_TEXT }]
+      });
+      if (result.index !== 1 || !this.commentsActive) { return; }
+      const message: string = await this.vm.deleteThread(this.hostContext(), owner);
+      if (!this.commentsActive) { return; }
+      if (message.length > 0) {
+        this.getUIContext().getPromptAction().showToast({ message });
+      } else if (this.vm.threadDeleted) {
+        await MyListVM.markDeleted(this.hostContext(), tid).catch((): void => {});
+        if (!this.commentsActive) { return; }
+        this.getUIContext().getPromptAction().showToast({ message: '帖子已删除' });
+        this.goBack();
+      }
+    } catch (_) {
+      // 关闭确认框不发请求，接口失败由 VM 提供真实结果。
+    } finally { this.deleteConfirming = false; }
+  }
+
+  private async confirmDeleteComment(post: PostItem, sub?: SubPostItem): Promise<void> {
+    if (this.deleteConfirming || this.vm.deletePending ||
+      !(sub === undefined ? this.vm.canDeletePost(post) : this.vm.canDeleteSubPost(post.pid, sub))) { return; }
+    const owner: string = this.vm.deletionOwner();
+    this.deleteConfirming = true;
+    try {
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: '删除评论',
+        message: sub === undefined && post.subPostCount > 0
+          ? '确定删除这条评论及其楼中楼回复？删除后无法恢复。' : '确定删除这条评论？删除后无法恢复。',
+        buttons: [{ text: '取消', color: BrandTheme.TEXT_SUB },
+          { text: '删除', color: BrandTheme.DANGER_TEXT }]
+      });
+      if (result.index !== 1 || !this.commentsActive) { return; }
+      const message: string = sub === undefined
+        ? await this.vm.deletePost(this.hostContext(), post, owner)
+        : await this.vm.deleteSubPost(this.hostContext(), post.pid, sub, owner);
+      if (!this.commentsActive) { return; }
+      if (message.length > 0) {
+        this.getUIContext().getPromptAction().showToast({ message });
+        return;
+      }
+      this.sourceReplyCount = -1;
+      if (sub === undefined && this.subDetailPid === post.pid) { this.closeSubSheet(); }
+      this.getUIContext().getPromptAction().showToast({ message: '评论已删除' });
+    } catch (_) {
+      // 取消确认不改变评论；请求异常由 VM 处理。
+    } finally { this.deleteConfirming = false; }
+  }
+
   private handleSystemBack(): boolean {
     if (this.popupMenuShow) { this.popupMenuShow = false; return true; }
+    if (this.showJump) { this.showJump = false; return true; }
     if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
       animateImageTransition(this.getUIContext(), (): void => {
         this.viewerUrl = '';
@@ -352,6 +419,7 @@ export struct ThreadDetailPage {
         MyListVM.markDeleted(context, tidForHistory);
         return;
       }
+      if (this.vm.errorText.length > 0 || !this.vm.loadedOnce) { return; }
       // 封面 = 首楼第一张图的展示地址（列表卡片右侧要用）；没有图就存空串
       let cover: string = '';
       for (const post of this.vm.posts) {
@@ -391,7 +459,9 @@ export struct ThreadDetailPage {
   }
 
   aboutToDisappear(): void {
+    ++this.keyboardWatchSeq;
     this.commentsActive = false;
+    this.vm.dispose();
     this.videoFullscreen = false;
 
     this.closeReplyBox();
@@ -434,8 +504,10 @@ export struct ThreadDetailPage {
    * 取不到时保持 0，弹层退化成纯视觉间距，不会把胶囊顶出屏幕。
    */
   private readSafeArea(): void {
+    const seq: number = ++this.keyboardWatchSeq;
     try {
       window.getLastWindow(this.hostContext()).then((win: window.Window) => {
+        if (seq !== this.keyboardWatchSeq) { return; }
         const area: window.AvoidArea =
           win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
         this.safeBottomVp = px2vp(area.bottomRect.height);
@@ -472,16 +544,12 @@ export struct ThreadDetailPage {
 
   /** 表情面板占据最近一次输入法占据的屏幕高度。 */
   private emojiPanelHeight(): number {
-    const chrome: number = EMOJI_PANEL_TOP_PADDING + EMOJI_PANEL_TAB_H
-      + EMOJI_PANEL_BOTTOM_PADDING + EMOJI_PANEL_VISIBLE_EXTRA_H;
-    return Math.max(EMOJI_GRID_MIN_HEIGHT + chrome, this.lastKeyboardVp > 0 ? this.lastKeyboardVp
-      : REPLY_EMOJI_PANEL_FALLBACK_GRID_H + chrome);
+    return sharedEmojiPanelHeight(this.lastKeyboardVp);
   }
 
   /** 固定 tab 与内边距后，剩余高度全给两类可滚动表情格子。 */
   private emojiGridHeight(): number {
-    return Math.max(EMOJI_GRID_MIN_HEIGHT, this.emojiPanelHeight() - EMOJI_PANEL_TOP_PADDING - EMOJI_PANEL_TAB_H
-      - EMOJI_PANEL_BOTTOM_PADDING - EMOJI_PANEL_VISIBLE_EXTRA_H);
+    return emojiPanelGridHeight(this.emojiPanelHeight());
   }
 
   private hostContext(): common.UIAbilityContext {
@@ -675,9 +743,8 @@ export struct ThreadDetailPage {
       dialogTransition: replacing ? (lifted ? TransitionEffect.IDENTITY
         : TransitionEffect.translate({ y: -this.emojiPanelHeight() })
           .animation({ duration: motionDuration(REPLY_PANEL_TRANSITION_MS) })) : popupMotion(),
-      maskTransition: replacing ? TransitionEffect.IDENTITY : undefined,
+      maskTransition: replacing ? TransitionEffect.IDENTITY : popupMotion(),
       autoCancel: true,
-      transition: popupMotion(),
 
       width: this.screenWvp > 0 ? this.screenWvp - REPLY_SHEET_SIDE_MARGIN * 2 : 336,
       cornerRadius: REPLY_SHEET_RADIUS,
@@ -809,77 +876,68 @@ export struct ThreadDetailPage {
 
   /** 表情选择使用独立弹窗；回复框关闭时同步关闭，避免遗留面板。 */
   private openEmojiPanelDialog(): void {
-    if (this.emojiDialogId !== 0) {
+    if (this.emojiDialogId !== 0 || this.emojiDialogOpening || !this.showReply || !this.showEmojiPanel) {
       return;
     }
     const seq: number = ++this.emojiDialogSeq;
-    this.getUIContext().getPromptAction().openCustomDialog({
-      builder: (): void => {
+    this.emojiDialogOpening = true;
+    this.getUIContext().getPromptAction().openCustomDialog(emojiPanelDialogOptions(
+      (): void => {
         this.EmojiSheet()
       },
-      // 全宽贴底：参考图的面板直接坐到屏幕底边，底部不缩边——手势条高度由
-      // 面板自己的底部 padding 让出（见 EmojiSheet）。⚠️ dy 不是 0：容器在内容
-      // 下方有 ≈50vp 系统玻璃空腔（见 EMOJI_PANEL_BOTTOM_INSET_COMP 注释），
-      // 整体下移把它压出屏底，面板才真正贴底、上抬公式才与设计几何一致
-      alignment: DialogAlignment.Bottom,
-      offset: { dx: 0, dy: EMOJI_PANEL_BOTTOM_INSET_COMP },
-      keyboardAvoidMode: KeyboardAvoidMode.NONE,
-      dialogTransition: TransitionEffect.translate({ y: this.emojiPanelHeight() })
-        .animation({ duration: motionDuration(REPLY_PANEL_TRANSITION_MS) }),
-      width: this.screenWvp > 0 ? this.screenWvp : 360,
-      // 顶角 16 / 底角 0：只有 ID 通道的 cornerRadius 支持逐角（BorderRadiuses）
-      cornerRadius: {
-        topLeft: REPLY_SHEET_RADIUS,
-        topRight: REPLY_SHEET_RADIUS,
-        bottomLeft: 0,
-        bottomRight: 0
-      },
-      // 非模态：不产生自己的蒙层（蒙层是输入弹窗的，面板要浮在它上面且不挡卡片）
-      isModal: false,
-      autoCancel: false,
-      // 与输入卡片同一槽位同一配方（同一张"玻璃家族"的两张面，见 MaterialConfig）
-      transition: popupMotion(),
-      systemMaterial: materialManager.officialOf(MaterialSlot.REPLY_SHEET),
-
-      onWillDismiss: (action: DismissDialogAction): void => {
+      this.screenWvp, this.emojiPanelHeight(),
+      (): void => {
         // Back 只收面板、不动输入卡片（对齐输入法面板的返回语义）；
         // 必须走 setEmojiPanel——除了关弹窗还要把输入卡片落回原位
         hilog.info(0x0, 'ReplyFocus', 'panel onWillDismiss');
-        action.dismiss();
         if (this.emojiDialogSeq === seq) {
           this.setEmojiPanel(false);
         }
       },
-      onDidDisappear: (): void => {
+      (): void => {
         if (this.emojiDialogSeq === seq) {
           this.emojiDialogId = 0;
+          this.emojiDialogOpening = false;
+          ++this.emojiDialogSeq;
           this.showEmojiPanel = false;
         }
       }
-    }).then((id: number) => {
-      if (this.emojiDialogSeq === seq) {
-        this.emojiDialogId = id;
+    )).then((id: number) => {
+      if (this.emojiDialogSeq !== seq || !this.showReply || !this.showEmojiPanel) {
+        if (this.emojiDialogSeq === seq) {
+          this.emojiDialogOpening = false;
+          ++this.emojiDialogSeq;
+        }
+        try {
+          this.getUIContext().getPromptAction().closeCustomDialog(id);
+        } catch (err) {
+          // 面板已由系统回收；迟到句柄不再写回当前代次。
+        }
+        return;
       }
+      this.emojiDialogOpening = false;
+      this.emojiDialogId = id;
     }).catch(() => {
       // 打开失败：走唯一入口回收——除状态外还要把已抬起的输入卡片落回
       if (this.emojiDialogSeq === seq) {
+        this.emojiDialogOpening = false;
         this.setEmojiPanel(false);
       }
     });
   }
 
-  /** 收表情面板弹窗（幂等：没开就是空操作）。不动 `showEmojiPanel` 语义态 */
+  /** 收表情面板弹窗并作废尚未返回的打开请求，不动 `showEmojiPanel` 语义态。 */
   private closeEmojiPanelDialog(): void {
-    if (this.emojiDialogId === 0) {
-      return;
-    }
+    const id: number = this.emojiDialogId;
+    ++this.emojiDialogSeq;
+    this.emojiDialogOpening = false;
+    this.emojiDialogId = 0;
+    if (id === 0) { return; }
     try {
-      this.getUIContext().getPromptAction().closeCustomDialog(this.emojiDialogId);
+      this.getUIContext().getPromptAction().closeCustomDialog(id);
     } catch (err) {
       // 弹窗可能已被系统回收，静默兜底
     }
-    this.emojiDialogId = 0;
-    this.emojiDialogSeq++;
   }
 
   setEmojiPanel(open: boolean, refocusAfterCollapse: boolean = false): void {
@@ -994,7 +1052,7 @@ export struct ThreadDetailPage {
         if (k < 0) {
           k = text.length;
         }
-        this.richCtl.addTextSpan(text.substring(i, k));
+        this.richCtl.addTextSpan(text.substring(i, k), { style: { fontColor: AppTheme.TEXT_MAIN } });
         i = k;
       }
     } finally { this.rebuildingReply = false; }
@@ -1204,7 +1262,7 @@ export struct ThreadDetailPage {
   @Builder
   VideoRailAction(icon: Resource, label: string, selected: boolean, tap: () => void) {
     Column({ space: 4 }) {
-      SymbolGlyph(icon).fontSize(30).fontColor([selected ? AppTheme.ACCENT : Color.White])
+      SymbolGlyph(icon).fontSize(30).fontColor([selected ? BrandTheme.MEDIA_ACCENT : Color.White])
       Text(label).fontSize(11).fontColor(Color.White).maxLines(1)
     }.width(48).height(62).justifyContent(FlexAlign.Center).onClick(tap)
   }
@@ -1220,7 +1278,8 @@ export struct ThreadDetailPage {
         } else {
           Column({ space: 14 }) {
             Text(this.vm.errorText || '视频暂不可播放').fontColor(Color.White)
-            Button('重试').onClick(() => { void this.handleRefresh(); })
+            Button('重试').fontColor(BrandTheme.ON_ACCENT).backgroundColor(AppTheme.ACCENT)
+              .onClick(() => { void this.handleRefresh(); })
           }
         }
         if (!this.videoComments) {
@@ -1344,6 +1403,7 @@ export struct ThreadDetailPage {
         })
         // 楼中楼内容需画到屏幕底部；bindSheet 的内容区仍会在手势区上沿截断。
         .bindContentCover(this.showSubSheet, this.SubReplySheet(), {
+          modalTransition: motionContentCover(),
           enableSafeArea: false,
           backgroundColor: AppTheme.BG,
           onWillDismiss: (action: DismissContentCoverAction): void => {
@@ -1462,6 +1522,13 @@ export struct ThreadDetailPage {
       anchor: this.anchorPost(this.subDetailPid),
       anchorIsThreadAuthor: this.anchorPost(this.subDetailPid).author.id === this.vm.detail.author.id,
       anchorAgreeState: this.vm.agreeState(this.subDetailPid),
+      canDeleteAnchor: this.vm.canDeletePost(this.anchorPost(this.subDetailPid)),
+      canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(this.subDetailPid, sub),
+      deletePending: this.vm.deletePending,
+      onDeleteAnchor: (): void => { void this.confirmDeleteComment(this.anchorPost(this.subDetailPid)); },
+      onDeleteSub: (sub: SubPostItem): void => {
+        void this.confirmDeleteComment(this.anchorPost(this.subDetailPid), sub);
+      },
       subPosts: this.vm.subState(this.subDetailPid).subPosts,
       totalReplies: this.vm.subState(this.subDetailPid).loadedOnce
         ? this.vm.subState(this.subDetailPid).page.totalCount
@@ -1743,6 +1810,17 @@ export struct ThreadDetailPage {
           this.showMore = false;
           this.shareThread();
         })
+      if (this.vm.canDeleteThread()) {
+        Text(this.vm.deletePending ? '正在删除…' : '删除帖子')
+          .fontSize(14)
+          .textAlign(TextAlign.Center)
+          .fontColor(BrandTheme.DANGER_TEXT)
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .enabled(!this.vm.deletePending)
+          .id('thread-delete-entry')
+          .onClick((): void => { void this.confirmDeleteThread(); })
+      }
     }
     .width(120)
     .padding({ top: 4, bottom: 4 })
@@ -1760,6 +1838,8 @@ export struct ThreadDetailPage {
           .fontColor(AppTheme.TEXT_MAIN)
 
         TextInput({ text: this.jumpText, placeholder: '输入楼层号，如 25' })
+          .caretColor(AppTheme.ACCENT)
+          .selectedBackgroundColor(BrandTheme.SELECTION_BACKGROUND)
           .type(InputType.Number)
           .fontSize(15)
           .fontColor(AppTheme.TEXT_MAIN)
@@ -1790,7 +1870,7 @@ export struct ThreadDetailPage {
 
           Text('跳转')
             .fontSize(14)
-            .fontColor(Color.White)
+            .fontColor(BrandTheme.ON_ACCENT)
             .textAlign(TextAlign.Center)
             .width(92)
             .height(38)
@@ -1809,6 +1889,8 @@ export struct ThreadDetailPage {
     .width('100%')
     .height('100%')
     .backgroundColor(AppTheme.OVERLAY)
+    .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE)
+      .animation({ duration: motionDuration(180, MotionEffect.FADE), curve: Curve.EaseOut }))
     .onClick(() => {
       this.showJump = false;
     })
@@ -1834,6 +1916,8 @@ export struct ThreadDetailPage {
       .width('100%')
 
       RichEditor({ controller: this.richCtl })
+        .caretColor(AppTheme.ACCENT)
+        .selectedBackgroundColor(BrandTheme.SELECTION_BACKGROUND)
         .enabled(!this.vm.replyPending)
         .placeholder('说点什么吧…', { font: { size: 15 }, fontColor: AppTheme.TEXT_MUTED })
         .padding({ left: 0, right: 0 })
@@ -1858,8 +1942,12 @@ export struct ThreadDetailPage {
         // 首次进入表情态和最终落回仍需重挂——
         // 镜像非空时把草稿（文本 + 表情 token）重建回 spans，见 rebuildReplySpansIfAny
         .onReady(() => {
+          this.replyEditorReady = true;
+          this.richCtl.setTypingStyle({ fontColor: AppTheme.TEXT_MAIN });
           this.rebuildReplySpansIfAny();
+          this.refreshReplyEditorColors();
         })
+        .onDisAppear((): void => { this.replyEditorReady = false; })
         // 表情面板让位：用户点输入框时保留当前卡片，键盘从下方升起。
         .onFocus(() => {
           this.setEmojiPanel(false, true);
@@ -1959,13 +2047,13 @@ export struct ThreadDetailPage {
 
         Text(this.vm.replyPending ? '发布中…' : '发布')
           .fontSize(14)
-          .fontColor(Color.White)
+          .fontColor(BrandTheme.ON_ACCENT)
           .textAlign(TextAlign.Center)
           .width(REPLY_PUBLISH_W)
           .height(REPLY_PUBLISH_H)
           .borderRadius(REPLY_PUBLISH_H / 2)
           // 在途时不改宽度只改底色的 alpha，避免"按钮变窄"把整行推着动
-          .backgroundColor(this.vm.replyPending ? '#800A59F7' : AppTheme.ACCENT)
+          .backgroundColor(this.vm.replyPending ? BrandTheme.BUSY_ACCENT : AppTheme.ACCENT)
           .onClick(() => {
             if (this.vm.replyPending) {
               return;
@@ -2078,7 +2166,7 @@ export struct ThreadDetailPage {
       promptAction.showToast({ message: '已达 500 字上限', duration: 1500 });
       return;
     }
-    this.richCtl.addTextSpan(text);
+    this.richCtl.addTextSpan(text, { style: { fontColor: AppTheme.TEXT_MAIN } });
     this.syncReplyMirror();
   }
 
@@ -2165,6 +2253,15 @@ export struct ThreadDetailPage {
                     item: this.vm.postByPid(item.pid) ?? item,
                     isThreadAuthor: item.author.id === this.vm.detail.author.id,
                     agreeState: this.vm.agreeState(item.pid),
+                    canDelete: this.vm.canDeletePost(this.vm.postByPid(item.pid) ?? item),
+                    canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(item.pid, sub),
+                    deletePending: this.vm.deletePending,
+                    onDelete: (): void => {
+                      void this.confirmDeleteComment(this.vm.postByPid(item.pid) ?? item);
+                    },
+                    onDeleteSub: (sub: SubPostItem): void => {
+                      void this.confirmDeleteComment(this.vm.postByPid(item.pid) ?? item, sub);
+                    },
                     subPosts: this.previewSubPosts(item),
                     subTotalCount: this.subPreviewCount(item),
                     subLoading: this.vm.subState(item.pid).loading,
@@ -2675,11 +2772,10 @@ export struct ThreadDetailPage {
         slot: MaterialSlot.BOTTOM_BAR,
         useCustomIcon: true,
         customIcon: (): void => { this.PopupActionContent(icon, label); }
-      }).hitTestBehavior(HitTestMode.None)
+      }).hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
     }
     .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
-    .responseRegion({ x: 4, y: 4, width: 44, height: 44 })
-    .hitTestBehavior(HitTestMode.Block)
+    .responseRegion(floatingButtonHitRegion(THREAD_ACTION_BUTTON_SIZE))
     .id(`thread-popup-${action}`)
     .accessibilityGroup(true)
     .accessibilityText(action === 'reply' ? description : `${description} ${label}`)

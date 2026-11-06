@@ -58,7 +58,7 @@ export struct LoginEmptyView {
           .margin({ top: 8 })
           .borderRadius(AppTheme.PILL_RADIUS)
           .backgroundColor(AppTheme.ACCENT)
-          .fontColor(Color.White)
+          .fontColor(AppTheme.ON_ACCENT)
           .onClick(() => {
             this.onLogin();
           })

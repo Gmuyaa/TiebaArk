@@ -1,5 +1,5 @@
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
-import { VisualTheme, PaperLayout, visualThemeLabel } from '../common/appearance/VisualTheme';
+import { VisualTheme, PaperLayout, visualThemeLabel, ALL_VISUAL_THEMES } from '../common/appearance/VisualTheme';
 import { homeDualRowHeight, OFFICIAL_DUAL_ROW_HEIGHT } from '../common/appearance/HomeTopNavStyle';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
@@ -20,7 +20,7 @@ import { AvatarCrop } from '../model/AvatarUpload';
  */
 
 import { common } from '@kit.AbilityKit';
-import { router } from '@kit.ArkUI';
+import { FrameCallback, router } from '@kit.ArkUI';
 import { promptAction } from '@kit.ArkUI';
 import { authSession } from '../auth/AuthSession';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
@@ -35,6 +35,8 @@ import { SearchTopMaterial } from '../components/SearchTopMaterial';
 import { materialManager } from '../common/material/MaterialManager';
 import { MotionSettingsPane } from '../components/MotionSettingsPane';
 import { sliderMaterial } from '../common/appearance/MotionPolicy';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 import { ALL_HDS_LEVELS, hdsLevelLabel } from '../common/material/MaterialStrength';
 import { MessageSettingsPane } from '../components/MessageSettingsPane';
 import { OfficialMessagesPane } from '../components/OfficialMessagesPane';
@@ -91,12 +93,20 @@ import {
   SettingsSwitchRow
 } from '../components/SettingsComponents';
 import { AvatarComponent } from '../components/AvatarComponent';
-import { SETTINGS_ACTION_LOGIN, SETTINGS_ACTION_LOGOUT, SettingsAboutItem, SettingsEntry, SettingsEntryKind, SettingsGroup, SettingsOptionItem, SettingsPane, SettingsPanePresentation, SettingsState, SETTINGS_APP_VERSION, SETTINGS_VERSION_CODE, aboutItems, aboutNotes, buildOptions, buildSettingsCategoryEntries, buildSettingsGroups, settingsEntryRenderKey, settingsGroupRenderKey, settingsPageTitle, settingsPanePresentation } from '../model/SettingsModel';
+import { SETTINGS_ACTION_LOGIN, SETTINGS_ACTION_LOGOUT, SettingsAboutItem, SettingsEntry, SettingsEntryKind, SettingsGroup, SettingsOptionItem, SettingsPane, SettingsPanePresentation, SettingsState, SETTINGS_APP_VERSION, SETTINGS_VERSION_CODE, aboutItems, aboutNotes, buildOptions, buildSettingsCategoryEntries, buildSettingsGroups, settingsEntryRenderKey, settingsGroupRenderKey, settingsPageTitle, settingsPanePresentation, settingsParentPane } from '../model/SettingsModel';
 
 const TOP_NAV_PREVIEW_H: number = 108;
 // 「官方沉浸」预览：整片玻璃面板（statusBarHeight 传 0）= 48 + 6 + 56 + 上下内距 8 = 118，
 // 再露出 28vp 内容让玻璃有东西可透。
 const TOP_NAV_PREVIEW_DUAL_H: number = 119 + 28;
+const PANE_ENTRY_DISTANCE: number = 18;
+const PANE_ENTRY_DURATION: number = 180;
+
+class SettingsPaneFrame extends FrameCallback {
+  private ready: () => void;
+  constructor(ready: () => void) { super(); this.ready = ready; }
+  onIdle(_timeLeft: number): void { this.ready(); }
+}
 
 @Entry
 @ComponentV2
@@ -119,6 +129,9 @@ struct SettingsPage {
 
   /** 当前分类或内容页；`NONE` = 设置入口列表。 */
   @Local pane: SettingsPane = SettingsPane.NONE;
+  @Local paneOffset: number = 0;
+  @Local paneOpacity: number = 1;
+  private paneMotionVersion: number = 0;
 
   @Local avatarVm: AvatarEditVM = new AvatarEditVM();
 
@@ -180,11 +193,15 @@ struct SettingsPage {
    */
   aboutToDisappear(): void {
     this.pageVisible = false;
+    this.finishPaneEntry();
     this.avatarVm.dispose();
     this.cacheStats.dispose();
   }
 
-  onPageHide(): void { this.pageVisible = false; }
+  onPageHide(): void {
+    this.pageVisible = false;
+    this.finishPaneEntry();
+  }
 
   /**
    * 系统返回：先退出关于页内层或其它设置的数据说明，再回分类列表。
@@ -215,34 +232,6 @@ struct SettingsPage {
     return false;
   }
 
-  private parentPaneOf(pane: SettingsPane): SettingsPane {
-    if (pane === SettingsPane.MOTION) { return SettingsPane.HARMONY_FEATURES; }
-    if (pane === SettingsPane.FORBIDDEN_FORUMS || pane === SettingsPane.BLOCK_MANAGE ||
-      pane === SettingsPane.HIDDEN_THREADS ||
-      pane === SettingsPane.APP_PERMISSIONS || pane === SettingsPane.DATA_USE) {
-      return SettingsPane.PRIVACY_SETTINGS;
-    }
-    if (pane === SettingsPane.SIGN_SETTINGS || pane === SettingsPane.TAILS ||
-      pane === SettingsPane.PRIVACY_MARKS) {
-      return SettingsPane.PERSONALIZATION;
-    }
-    if (pane === SettingsPane.IMAGE_WATERMARK) {
-      return SettingsPane.BROWSING;
-    }
-    if (pane === SettingsPane.MATERIAL || pane === SettingsPane.ACTION_BAR ||
-      pane === SettingsPane.TOP_NAV) {
-      // 这三项都是弹层（不换页），留在鸿蒙特性设置页上；这里只是把语义写全，
-      // 万一将来某条改成换页也不会回错地方。
-      return SettingsPane.HARMONY_FEATURES;
-    }
-    if (pane === SettingsPane.OFFICIAL_MESSAGES) {
-      return SettingsPane.MESSAGE;
-    }
-    if (pane === SettingsPane.VERSION) {
-      return SettingsPane.ABOUT;
-    }
-    return SettingsPane.NONE;
-  }
 
   /**
    * 入口列表模型。**唯一真值源**：三档文案分别读三个全局单例（都是 `@Trace`），
@@ -279,8 +268,9 @@ struct SettingsPage {
     return buildSettingsGroups(this.state());
   }
 
-  private categoryEntries(): SettingsEntry[] {
-    return buildSettingsCategoryEntries(this.pane, this.state());
+  private entriesFor(pane: SettingsPane, keys: string[]): SettingsEntry[] {
+    return buildSettingsCategoryEntries(pane, this.state())
+      .filter((entry: SettingsEntry): boolean => keys.includes(entry.key));
   }
 
   /**
@@ -323,6 +313,35 @@ struct SettingsPage {
    */
   private navSeq: number = 0;
 
+  /** 复用当前页面与 Scroller，只为新内容补方向提示，避免并存两份设置状态。 */
+  private beginPaneEntry(direction: number): void {
+    const version: number = ++this.paneMotionVersion;
+    const move: boolean = motionStore.isOn(MotionEffect.MOVE);
+    const fade: boolean = motionStore.isOn(MotionEffect.FADE);
+    const context: UIContext = this.getUIContext();
+    context.animateTo({ duration: 0, curve: Curve.Linear }, (): void => {
+      this.paneOffset = move ? PANE_ENTRY_DISTANCE * direction : 0;
+      this.paneOpacity = fade ? 0.92 : 1;
+    });
+    if (!move && !fade) { return; }
+    context.postFrameCallback(new SettingsPaneFrame((): void => {
+      if (!this.pageVisible || version !== this.paneMotionVersion) { return; }
+      const enabled: boolean = motionStore.isOn(MotionEffect.MOVE) || motionStore.isOn(MotionEffect.FADE);
+      context.animateTo({ duration: enabled ? PANE_ENTRY_DURATION : 0, curve: Curve.EaseOut }, (): void => {
+        this.paneOffset = 0;
+        this.paneOpacity = 1;
+      });
+    }));
+  }
+
+  private finishPaneEntry(): void {
+    ++this.paneMotionVersion;
+    this.getUIContext().animateTo({ duration: 0, curve: Curve.Linear }, (): void => {
+      this.paneOffset = 0;
+      this.paneOpacity = 1;
+    });
+  }
+
   /** 所有页面入口统一走这里：进入前保存当前页偏移，新页从顶部开始。 */
   private navigateTo(next: SettingsPane): void {
     if (next === SettingsPane.FORBIDDEN_FORUMS && this.pane !== next) {
@@ -342,6 +361,7 @@ struct SettingsPage {
         this.getUIContext().getHostContext() as common.UIAbilityContext);
     }
     this.resetScroll();
+    if (from !== next) { this.beginPaneEntry(1); }
   }
 
   private updateNavGlass(): void {
@@ -435,7 +455,7 @@ struct SettingsPage {
   private leaveToParent(): void {
     const from: SettingsPane = this.pane;
     this.rememberScroll(from);
-    const next: SettingsPane = this.parentPaneOf(from);
+    const next: SettingsPane = settingsParentPane(from);
     const seq: number = ++this.navSeq;
     this.pane = next;
     if ((next === SettingsPane.NONE || next === SettingsPane.ACCOUNT) &&
@@ -450,6 +470,7 @@ struct SettingsPage {
       this.pendingRestore = -1;
       this.resetScroll();
     }
+    if (from !== next) { this.beginPaneEntry(-1); }
   }
 
   /**
@@ -601,7 +622,7 @@ struct SettingsPage {
     }
     if (pane === SettingsPane.HDS_MATERIAL && index >= 0 && index < ALL_HDS_LEVELS.length) {
       const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      materialManager.setHdsLevel(ALL_HDS_LEVELS[index], context).catch(() => {});
+      void materialManager.setHdsLevel(ALL_HDS_LEVELS[index], context);
     }
     this.closePopup();
     if (openFontSheet) {
@@ -615,41 +636,41 @@ struct SettingsPage {
    * 写的是全局单例 `materialManager`，持久化与失效广播都在里面：
    * 落盘成功后，所有**读到它**的组件（V2）下一帧就是新观感 —— 包括本页顶栏
    * 那枚返回按钮，所以选完关掉弹层就能看到顶栏变了。
-   * 失败也在里面吞掉了（本次会话内仍然生效，只是下次启动可能回到旧值）。
+   * 保存失败由 Store 暴露，当前分类页提供明确提示和重试。
    */
   private pickMaterialMode(mode: MaterialMode): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    materialManager.setMode(mode, context).catch(() => {});
+    void materialManager.setMode(mode, context);
   }
 
   /** 切换帖子详情页底部操作栏样式（与 pickMaterialMode 同一条链路）。 */
   private pickActionBarStyle(style: ThreadActionBarStyle): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    threadActionBarStore.setStyle(style, context).catch(() => {});
+    void threadActionBarStore.setStyle(style, context);
   }
 
   /** 切换首页顶栏样式（同一条链路）。 */
   private pickTopNavStyle(style: HomeTopNavStyle): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    homeTopNavStore.setStyle(style, context).catch(() => {});
+    void homeTopNavStore.setStyle(style, context);
   }
 
   /** 三个「滑动时自动隐藏」开关：按部件写偏好。 */
   private setHidePart(part: HomeNavigationPart, checked: boolean): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    homeNavigationHideStore.set(part, checked, context).catch(() => {});
+    void homeNavigationHideStore.set(part, checked, context);
   }
 
   /** 低流量模式（本机偏好；与三个隐藏开关**不是**同一个存储）。 */
   private setLowFlow(checked: boolean): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    lowFlowStore.setEnabled(checked, context).catch(() => {});
+    void lowFlowStore.setEnabled(checked, context);
   }
 
   /** 图像超分入口开关（本机偏好；又一个独立存储，只管查看器里那枚按钮的显隐）。 */
   private setSuperResolution(checked: boolean): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    superResolutionStore.setEnabled(checked, context).catch(() => {});
+    void superResolutionStore.setEnabled(checked, context);
   }
 
   /** 旧行渲染器里的开关分发（按稳定 action 串，不比较中文文案）。 */
@@ -864,6 +885,13 @@ struct SettingsPage {
           this.refreshCacheStats();
         }
       })
+    } else if (this.cacheStats.phase === CachePhase.PARTIAL_DONE) {
+      SettingsStatusLine({
+        kind: SettingsStatusKind.ERROR,
+        message: '部分缓存未能清理，请重新统计后重试',
+        retryLabel: '重新统计',
+        onRetry: (): void => { this.refreshCacheStats(); }
+      })
     } else if (this.cacheStats.phase === CachePhase.CLEARING) {
       SettingsActionRow({ label: '正在清理…', busyLabel: '正在清理…', busy: true })
     } else if (cachePhaseCanClear(this.cacheStats.phase)) {
@@ -873,6 +901,14 @@ struct SettingsPage {
           this.confirmClearCache();
         }
       })
+    }
+  }
+
+  pageTransition() {
+    // 不声明匹配项时沿用原生 router 转场；关闭时覆盖入、出两端。
+    if (!motionStore.isOn(MotionEffect.MOVE)) {
+      PageTransitionEnter({ duration: 0, curve: Curve.Linear })
+      PageTransitionExit({ duration: 0, curve: Curve.Linear })
     }
   }
 
@@ -888,6 +924,8 @@ struct SettingsPage {
         ForbiddenForumsPane({ vm: this.forbiddenVm, scroller: this.scroller, topInset: this.titleBarH(),
           unblockSeq: this.forbiddenUnblockSeq, refreshSeq: this.paneRefreshSeq,
           onScrolled: (): void => { this.updateNavGlass(); } })
+          .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
+          .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       } else {
       Scroll(this.scroller) {
         Column() {
@@ -922,6 +960,8 @@ struct SettingsPage {
       .width('100%')
       .height('100%')
       .scrollBar(BarState.Off)
+      .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
+      .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       .align(Alignment.Top)
       // 记录视口高度供接近底部判定（Scroller 没有视口尺寸 API）
       .onAreaChange((_o: Area, n: Area) => {
@@ -1041,6 +1081,10 @@ struct SettingsPage {
             const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
             fontScaleStore.setCustomSize(value, context,
               mode !== SliderChangeMode.Begin && mode !== SliderChangeMode.Moving);
+            if (mode !== SliderChangeMode.Begin && mode !== SliderChangeMode.Moving &&
+              fontScaleStore.saveError.length > 0) {
+              this.getUIContext().getPromptAction().showToast({ message: fontScaleStore.saveError });
+            }
           })
           .margin({ left: 12, right: 12 })
         Text('A').fontSize(30).fontColor(AppTheme.TEXT_MAIN)
@@ -1062,12 +1106,10 @@ struct SettingsPage {
       case 'messages':
         return $r('sys.symbol.message');
 
-      case 'harmony_features':
-        return $r('sys.symbol.HarmonyOS_Next');
-      case 'personalization':
-        return $r('sys.symbol.personalized_sticker');
-      case 'other_settings':
+      case 'interaction':
         return $r('sys.symbol.gearshape');
+      case 'posting':
+        return $r('sys.symbol.personalized_sticker');
       case 'cache_clean':
         return $r('sys.symbol.trash');
       case 'permissions':
@@ -1126,6 +1168,7 @@ struct SettingsPage {
       .onClick(() => {
         this.navigateTo(SettingsPane.ACCOUNT);
       })
+      .id('settings-account')
     }
     .width('100%')
     .backgroundColor(AppTheme.CARD)
@@ -1174,6 +1217,7 @@ struct SettingsPage {
     .borderRadius(SettingsLayout.CARD_RADIUS)
     .clip(true)
     .margin({ top: SettingsLayout.ROW_GAP })
+    .id(`settings-home-${entry.key}`)
   }
 
   // ── 分类与内容页 ───────────────────────────────────────────────────────
@@ -1190,29 +1234,95 @@ struct SettingsPage {
       this.DataUsePane()
     } else if (this.pane === SettingsPane.SIGN_SETTINGS) {
       this.SignSettingsPane()
-    } else if (this.pane === SettingsPane.OTHER_SETTINGS) {
-
-      this.OtherSettingsPane()
     } else {
       this.CategoryPane()
+    }
+    this.PrefSaveErrors()
+  }
+
+  /** 只在发生保存错误时显示；重试保存当前选择，不重置偏好。 */
+  @Builder
+  PrefSaveErrors() {
+    if (this.pane === SettingsPane.APPEARANCE) {
+      if (themeModeStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: themeModeStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            themeModeStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+      if (fontScaleStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: fontScaleStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            fontScaleStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+    } else if (this.pane === SettingsPane.NAVIGATION_LAYOUT) {
+      if (homeTopNavStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: homeTopNavStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void homeTopNavStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+      if (threadActionBarStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: threadActionBarStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void threadActionBarStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+      if (homeNavigationHideStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: homeNavigationHideStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void homeNavigationHideStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+    } else if (this.pane === SettingsPane.BROWSING) {
+      if (lowFlowStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: lowFlowStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void lowFlowStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+      if (superResolutionStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: superResolutionStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void superResolutionStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+    } else if (this.pane === SettingsPane.MATERIAL_EFFECTS && materialManager.saveError.length > 0) {
+      SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+        message: materialManager.saveError, retryLabel: '重试保存',
+        onRetry: (): void => {
+          void materialManager.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+        } })
     }
   }
 
   @Builder
   CategoryPane() {
     if (this.pane === SettingsPane.BROWSING) {
-      // P3：第三个改用公共组件的页面（另一个偏好页）
       this.BrowsingPane()
-    } else if (this.pane === SettingsPane.HARMONY_FEATURES) {
-
-      this.HarmonyPane()
+    } else if (this.pane === SettingsPane.NAVIGATION_LAYOUT) {
+      this.NavigationLayoutPane()
+    } else if (this.pane === SettingsPane.MATERIAL_EFFECTS) {
+      this.MaterialEffectsPane()
+    } else if (this.pane === SettingsPane.INTERACTION) {
+      this.InteractionPane()
+    } else if (this.pane === SettingsPane.POSTING) {
+      this.PostingPane()
+    } else if (this.pane === SettingsPane.PRIVACY_SETTINGS) {
+      this.PrivacyPane()
     } else if (this.pane === SettingsPane.MOTION) {
       MotionSettingsPane()
     } else if (this.pane === SettingsPane.MESSAGE) {
       MessageSettingsPane({
-        onOpenOfficial: (): void => {
-          this.navigateTo(SettingsPane.OFFICIAL_MESSAGES);
-        }
+        onOpenOfficial: (): void => { this.navigateTo(SettingsPane.OFFICIAL_MESSAGES); }
       })
     } else if (this.pane === SettingsPane.OFFICIAL_MESSAGES) {
       OfficialMessagesPane()
@@ -1227,32 +1337,12 @@ struct SettingsPage {
     } else if (this.pane === SettingsPane.IMAGE_WATERMARK) {
       ImageWatermarkPane()
     } else if (this.pane === SettingsPane.APP_PERMISSIONS) {
-      AppPermissionsPane({
-        refreshSeq: this.paneRefreshSeq
-      })
+      AppPermissionsPane({ refreshSeq: this.paneRefreshSeq })
     } else if (this.pane === SettingsPane.APPEARANCE) {
-      // P2：首个改用公共组件的页面（偏好页）
       this.AppearancePane()
     } else if (this.pane === SettingsPane.CACHE) {
-      // P2：第二个改用公共组件的页面（状态页，阶段驱动）
       this.CachePane()
-    } else if (this.pane === SettingsPane.PERSONALIZATION ||
-      this.pane === SettingsPane.PRIVACY_SETTINGS) {
-      // 中间层：内容都是入口行（结构由模型给），用公共组件渲染
-      this.EntryRowsPane()
     }
-  }
-
-  @Builder
-  OtherSettingsPane() {
-    SettingsCard({
-      content: (): void => { this.OtherSettingsEmptyRow() }
-    })
-  }
-
-  @Builder
-  OtherSettingsEmptyRow() {
-    SettingsInfoRow({ label: '暂无设置项', showDivider: false })
   }
 
   @Builder
@@ -1292,9 +1382,15 @@ struct SettingsPage {
       content: (): void => { this.AppearanceRows() }
     })
     Row({ space: 10 }) {
-      Text('等级标签预览').fontSize(13).fontColor(AppTheme.TEXT_SUB)
+      Text('等级标签预览').fontSize(SettingsLayout.SUB_SIZE).fontColor(AppTheme.NOTE_TEXT)
       ForumLevelBadge({ level: 8, levelName: '核心会员' })
     }.width('100%').margin({ top: 12 })
+    SettingsCard({
+      marginTop: SettingsLayout.GROUP_GAP,
+      content: (): void => {
+        this.CategoryRows(SettingsPane.APPEARANCE, ['navigation_layout', 'material_effects'])
+      }
+    })
   }
 
   @Builder
@@ -1302,11 +1398,12 @@ struct SettingsPage {
     SettingsOptionRow({
       label: '视觉主题', value: visualThemeLabel(visualThemeStore.theme),
       popupOpen: this.popupKey === 'visual_theme',
-      items: buildOptions(['经典鸿蒙', '敦煌纸境'], visualThemeStore.theme, 'visual_theme'),
+      items: buildOptions(ALL_VISUAL_THEMES.map((theme: VisualTheme): string => visualThemeLabel(theme)),
+        ALL_VISUAL_THEMES.indexOf(visualThemeStore.theme), 'visual_theme'),
       onTap: (): void => { this.popupKey = this.popupKey === 'visual_theme' ? '' : 'visual_theme'; },
       onPick: (index: number): void => {
-        if (index !== 0 && index !== 1) { return; }
-        const saved: boolean = visualThemeStore.setTheme(index as VisualTheme,
+        if (!Number.isInteger(index) || index < 0 || index >= ALL_VISUAL_THEMES.length) { return; }
+        const saved: boolean = visualThemeStore.setTheme(ALL_VISUAL_THEMES[index],
           this.getUIContext().getHostContext() as common.UIAbilityContext);
         this.closePopup();
         if (!saved) { this.getUIContext().getPromptAction().showToast({ message: '主题未能保存，请重试' }); }
@@ -1641,142 +1738,109 @@ struct SettingsPage {
 
   @Builder
   BrowsingPane() {
+    SettingsGroupTitle({ title: '内容浏览' })
     SettingsCard({
-      content: (): void => { this.BrowsingLowFlowRow() }
+      content: (): void => {
+        this.CategoryRows(SettingsPane.BROWSING, ['forum_default_tab', 'low_flow'])
+      }
     })
+    SettingsGroupTitle({ title: '看图' })
     SettingsCard({
-      marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.BrowsingWatermarkRow() }
-    })
-    SettingsCard({
-      marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.BrowsingDefaultTabRow() }
+      content: (): void => {
+        this.CategoryRows(SettingsPane.BROWSING, ['image_menu', 'super_resolution'])
+      }
     })
   }
 
-  private browsingEntries(): SettingsEntry[] {
-    return buildSettingsCategoryEntries(SettingsPane.BROWSING, this.state());
-  }
-
   @Builder
-  BrowsingLowFlowRow() {
-    ForEach(this.browsingEntries().slice(0, 1), (entry: SettingsEntry) => {
-      SettingsSwitchRow({
-        label: entry.label,
-        sub: '列表与正文不自动加载图片',
-        checked: entry.checked === true,
-        showDivider: false,
-        onToggle: (next: boolean): void => {
-          this.applySwitchEntry(entry, next);
-        }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  BrowsingWatermarkRow() {
-    ForEach(this.browsingEntries().slice(1, 2), (entry: SettingsEntry) => {
-      SettingsEntryRow({
-        label: entry.label,
-        summary: entry.value,
-        showDivider: false,
-        onTap: (): void => {
-          this.onEntry(entry);
-        }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  BrowsingDefaultTabRow() {
-    ForEach(this.browsingEntries().slice(2, 3), (entry: SettingsEntry) => {
-      SettingsOptionRow({
-        label: entry.label,
-        value: entry.value,
-        showDivider: false,
-        popupOpen: this.popupKey === entry.key,
-        items: this.optionsFor(entry.pane),
-        onTap: (): void => { this.openPanePopup(entry.key, entry.pane); },
-        onPick: (index: number): void => { this.pickOption(entry.pane, index); },
-        onPopupClosed: (): void => { this.closePopup(); }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonyPane() {
+  MaterialEffectsPane() {
     SettingsCard({
-      content: (): void => { this.HarmonyMaterialRow() }
+      content: (): void => {
+        this.CategoryRows(SettingsPane.MATERIAL_EFFECTS, ['material_mode', 'hds_material_level'])
+      }
     })
     SettingsNote({ text: materialManager.useArkUI
-      ? '当前使用材质厚度档位；兼容效果仅在设备不支持时生效。'
-      : '当前使用兼容材质，请通过“兼容材质效果”调整。' })
-    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.MotionEntryRow(); } })
+      ? '兼容材质效果仅在不支持沉浸材质的设备上生效。'
+      : '当前设备使用兼容材质效果。' })
+  }
+
+  @Builder
+  NavigationLayoutPane() {
+    SettingsGroupTitle({ title: '导航样式' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['home_top_nav_style'])
+      }
+    })
+    this.HomeTopNavPreview()
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.HarmonyStyleRows() }
+      content: (): void => {
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['action_bar_style'])
+      }
     })
     if (visualThemeStore.isPaper) {
       SettingsNote({ text: '切换到经典鸿蒙可自定义顶栏和底栏样式。' })
     }
-    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.ImageMenuRow() } })
-    this.HomeTopNavPreview()
-    SettingsGroupTitle({ title: '滑动时自动隐藏' })
+    SettingsGroupTitle({ title: '分类显示' })
     SettingsCard({
-      content: (): void => { this.HarmonyHideRows() }
+      content: (): void => {
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['forum_tabs_floating'])
+      }
+    })
+    SettingsGroupTitle({ title: '首页滑动隐藏' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT,
+          ['hide_status_bar', 'hide_top_navigation', 'hide_bottom_navigation'])
+      }
     })
     SettingsNote({ text: '上滑隐藏，下滑恢复。' })
+  }
+
+  @Builder
+  InteractionPane() {
+    SettingsGroupTitle({ title: '单手操作' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.INTERACTION,
+          ['smart_reach', 'home_compose_smart_reach', 'forum_tabs_smart_reach', 'image_menu_smart_reach'])
+      }
+    })
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.HarmonySuperResolutionRow() }
+      content: (): void => { this.CategoryRows(SettingsPane.INTERACTION, ['motion']) }
     })
-    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.HarmonySmartReachRow() } })
-    SettingsCard({ marginTop: SettingsLayout.GROUP_GAP,
-      content: (): void => { this.HarmonyForumTabsFloatingRow() } })
   }
 
   @Builder
-  MotionEntryRow() {
-    SettingsEntryRow({ label: '动效', showDivider: false,
-      onTap: (): void => { this.navigateTo(SettingsPane.MOTION); } })
+  PostingPane() {
+    SettingsGroupTitle({ title: '发布与身份' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.POSTING, ['image_watermark', 'tails', 'privacy_marks'])
+      }
+    })
+    SettingsGroupTitle({ title: '签到' })
+    SettingsCard({
+      content: (): void => { this.CategoryRows(SettingsPane.POSTING, ['sign_settings']) }
+    })
   }
 
   @Builder
-  ImageMenuRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'image_menu'),
-      (entry: SettingsEntry) => { SettingsOptionRow({ label: entry.label, value: entry.value,
-        showDivider: false, popupOpen: this.popupKey === entry.key, items: this.optionsFor(entry.pane),
-        onTap: (): void => { this.openPanePopup(entry.key, entry.pane); },
-        onPick: (index: number): void => { this.pickOption(entry.pane, index); },
-        onPopupClosed: (): void => { this.closePopup(); } }) },
-      (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonySmartReachRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean =>
-      entry.key === 'smart_reach' || entry.key === 'home_compose_smart_reach' || entry.key === 'forum_tabs_smart_reach' || entry.key === 'image_menu_smart_reach'),
-      (entry: SettingsEntry) => {
-        SettingsSwitchRow({ label: entry.label,
-          checked: entry.checked === true, interactionEnabled: entry.enabled, showDivider: entry.key !== 'image_menu_smart_reach',
-          onToggle: (next: boolean): void => { this.applySwitchEntry(entry, next); } })
-      }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonyForumTabsFloatingRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'forum_tabs_floating'),
-      (entry: SettingsEntry) => {
-        SettingsSwitchRow({ label: entry.label, checked: entry.checked === true, showDivider: false,
-          onToggle: (next: boolean): void => { this.applySwitchEntry(entry, next); } })
-      }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  private harmonyEntries(): SettingsEntry[] {
-    return buildSettingsCategoryEntries(SettingsPane.HARMONY_FEATURES, this.state());
+  PrivacyPane() {
+    SettingsGroupTitle({ title: '内容屏蔽' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.PRIVACY_SETTINGS, ['forbidden_forums', 'block_manage', 'hidden_threads'])
+      }
+    })
+    SettingsGroupTitle({ title: '权限与数据' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.PRIVACY_SETTINGS, ['app_permissions', 'data_use'])
+      }
+    })
   }
 
   @Builder
@@ -1844,115 +1908,44 @@ struct SettingsPage {
     }
     .width('100%')
     .padding(12)
-    .margin({ top: SettingsLayout.GROUP_GAP })
+    .margin({ top: SettingsLayout.GROUP_TITLE_GAP })
     .backgroundColor(AppTheme.SURFACE_MUTED)
     .borderRadius(SettingsLayout.CARD_RADIUS)
   }
 
-  /** 沉浸光感强度：单行一张卡，选项形态与另外两套样式一致（都是弹层）。 */
+  /** 以稳定 key 选择页内分组，值和开关仍读取模型，避免迁移后依赖旧数组下标。 */
   @Builder
-  HarmonyMaterialRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean =>
-      entry.pane === SettingsPane.MATERIAL || entry.pane === SettingsPane.HDS_MATERIAL),
-      (entry: SettingsEntry, index: number) => {
-      SettingsOptionRow({
-        label: entry.label,
-        value: entry.value,
-        showDivider: index === 0,
-        popupOpen: this.popupKey === entry.key,
-        items: this.optionsFor(entry.pane),
-        onTap: (): void => {
-          this.openPanePopup(entry.key, entry.pane);
-        },
-        onPick: (optionIndex: number): void => {
-          this.pickOption(entry.pane, optionIndex);
-        },
-        onPopupClosed: (): void => {
-          this.closePopup();
-        }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonyStyleRows() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean =>
-      entry.pane === SettingsPane.ACTION_BAR || entry.pane === SettingsPane.TOP_NAV),
-      (entry: SettingsEntry, index: number) => {
-      if (visualThemeStore.isPaper) {
-        SettingsInfoRow({ label: entry.label,
-          value: entry.pane === SettingsPane.TOP_NAV ? '纸境品牌顶栏' : '纸境悬浮互动栏' })
+  CategoryRows(pane: SettingsPane, keys: string[]) {
+    ForEach(this.entriesFor(pane, keys), (entry: SettingsEntry, index: number) => {
+      if (entry.kind === SettingsEntryKind.SWITCH) {
+        SettingsSwitchRow({
+          label: entry.label, sub: entry.subtitle ?? '', checked: entry.checked === true,
+          interactionEnabled: entry.enabled, showDivider: index < this.entriesFor(pane, keys).length - 1,
+          onToggle: (next: boolean): void => { this.applySwitchEntry(entry, next); }
+        }).id(`settings-entry-${entry.key}`)
+      } else if (visualThemeStore.isPaper &&
+        (entry.pane === SettingsPane.TOP_NAV || entry.pane === SettingsPane.ACTION_BAR)) {
+        SettingsInfoRow({
+          label: entry.label,
+          value: entry.pane === SettingsPane.TOP_NAV ? '纸境品牌顶栏' : '纸境悬浮互动栏',
+          showDivider: index < this.entriesFor(pane, keys).length - 1
+        }).id(`settings-entry-${entry.key}`)
+      } else if (settingsPanePresentation(entry.pane) === SettingsPanePresentation.POPUP) {
+        SettingsOptionRow({
+          label: entry.label, value: entry.value,
+          showDivider: index < this.entriesFor(pane, keys).length - 1,
+          popupOpen: this.popupKey === entry.key, items: this.optionsFor(entry.pane),
+          onTap: (): void => { this.openPanePopup(entry.key, entry.pane); },
+          onPick: (optionIndex: number): void => { this.pickOption(entry.pane, optionIndex); },
+          onPopupClosed: (): void => { this.closePopup(); }
+        }).id(`settings-entry-${entry.key}`)
       } else {
-      SettingsOptionRow({
-        label: entry.label,
-        value: entry.value,
-        showDivider: index === 0,
-        popupOpen: this.popupKey === entry.key,
-        items: this.optionsFor(entry.pane),
-        onTap: (): void => {
-          this.openPanePopup(entry.key, entry.pane);
-        },
-        onPick: (optionIndex: number): void => {
-          this.pickOption(entry.pane, optionIndex);
-        },
-        onPopupClosed: (): void => {
-          this.closePopup();
-        }
-      })
+        SettingsEntryRow({
+          label: entry.label, summary: entry.value,
+          showDivider: index < this.entriesFor(pane, keys).length - 1,
+          onTap: (): void => { this.onEntry(entry); }
+        }).id(`settings-entry-${entry.key}`)
       }
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonyHideRows() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key.startsWith('hide_')),
-      (entry: SettingsEntry, index: number) => {
-      SettingsSwitchRow({
-        label: entry.label,
-        checked: entry.checked === true,
-        showDivider: index < 2,
-        onToggle: (next: boolean): void => {
-          this.applySwitchEntry(entry, next);
-        }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  @Builder
-  HarmonySuperResolutionRow() {
-    ForEach(this.harmonyEntries().filter((entry: SettingsEntry): boolean => entry.key === 'super_resolution'),
-      (entry: SettingsEntry) => {
-      SettingsSwitchRow({
-        label: entry.label,
-        sub: '关闭后全屏看图不再显示超分按钮',
-        checked: entry.checked === true,
-        showDivider: false,
-        onToggle: (next: boolean): void => {
-          this.applySwitchEntry(entry, next);
-        }
-      })
-    }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
-  }
-
-  /** 中间层页面（个性化 / 隐私设置）：入口行由模型给，页面只负责渲染与点击分发。 */
-  @Builder
-  EntryRowsPane() {
-    SettingsCard({
-      content: (): void => { this.EntryRows() }
-    })
-  }
-
-  @Builder
-  EntryRows() {
-    ForEach(this.categoryEntries(), (entry: SettingsEntry, index: number) => {
-      SettingsEntryRow({
-        label: entry.label,
-        summary: entry.value,
-        showDivider: index < this.categoryEntries().length - 1,
-        onTap: (): void => {
-          this.onEntry(entry);
-        }
-      })
     }, (entry: SettingsEntry) => settingsEntryRenderKey(entry))
   }
 
@@ -1971,11 +1964,14 @@ struct SettingsPage {
           `正在取消 ${this.forbiddenVm.processed}/${this.forbiddenVm.preparedCount}`) :
           (this.forbiddenVm.selectedIds.length > 0 ? `已选择 ${this.forbiddenVm.selectedIds.length} 项` : '未选择')) : settingsPageTitle(this.pane))
           .fontSize(SettingsLayout.TITLE_SIZE)
+          .id('settings-title')
           .fontWeight(FontWeight.Medium)
           .fontColor(AppTheme.TEXT_MAIN)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
+          .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
+          .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       }
       .width('100%')
       .height('100%')

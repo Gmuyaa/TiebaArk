@@ -44,3 +44,12 @@ export function takeImageTransition(origin: string): ImageTransitionSeed {
 export function animateImageTransition(context: UIContext, action: () => void): void {
   context.animateTo({ duration: motionStore.isOn(MotionEffect.SHARED_ELEMENT) ? 300 : 0, curve: Curve.Friction }, action);
 }
+
+/** 遮罩与共享几何分开计时，关闭共享元素时仍保留用户开启的淡化。 */
+export function imageFadeDuration(): number {
+  return motionStore.isOn(MotionEffect.FADE) ? 300 : 0;
+}
+
+export function imageFadeTransition(): TransitionEffect {
+  return TransitionEffect.OPACITY.animation({ duration: imageFadeDuration(), curve: Curve.EaseOut });
+}

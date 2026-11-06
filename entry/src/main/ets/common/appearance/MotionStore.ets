@@ -1,5 +1,6 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { accessibility } from '@kit.AccessibilityKit';
 import { DEFAULT_MOTION_MASK, MOTION_STORE, MotionEffect, MotionGroup,
   motionGroupOf, normalizeMotionMask, validMotion } from './MotionConfig';
 
@@ -11,6 +12,13 @@ export class MotionStore {
   @Trace hdsEnabled: boolean = true;
   @Trace selected: number = DEFAULT_MOTION_MASK;
   @Trace saveError: string = '';
+  @Trace systemReducedMotion: boolean = false;
+  @Trace systemMotionError: string = '';
+  private systemListening: boolean = false;
+  private readonly onSystemMotionChanged: (reduced: boolean) => void = (reduced: boolean): void => {
+    this.systemReducedMotion = reduced;
+    this.systemMotionError = '';
+  };
   private loaded: boolean = false;
   private writes: Promise<void> = Promise.resolve();
 
@@ -39,7 +47,28 @@ export class MotionStore {
   }
 
   isOn(effect: MotionEffect): boolean {
-    return this.groupEnabled(motionGroupOf(effect)) && this.selectedOf(effect);
+    return !this.systemReducedMotion && this.groupEnabled(motionGroupOf(effect)) && this.selectedOf(effect);
+  }
+
+  /** 系统限制只影响有效动效，不写入或覆盖用户偏好；回到前台时重新读取并补偿监听失败。 */
+  startSystemTracking(): void {
+    try {
+      this.systemReducedMotion = accessibility.isAnimationReduceEnabledSync();
+      this.systemMotionError = '';
+    } catch (_) { this.systemMotionError = '系统动效设置读取失败，本次未能更新系统状态'; }
+    if (this.systemListening) { return; }
+    try {
+      accessibility.onAnimationReduceStateChange(this.onSystemMotionChanged);
+      this.systemListening = true;
+    } catch (_) { this.systemMotionError = '系统动效设置监听失败，返回应用后会重试'; }
+  }
+
+  stopSystemTracking(): void {
+    if (!this.systemListening) { return; }
+    try {
+      accessibility.offAnimationReduceStateChange(this.onSystemMotionChanged);
+      this.systemListening = false;
+    } catch (_) { this.systemMotionError = '系统动效设置监听停止失败'; }
   }
 
   async setEnabled(value: boolean, context: common.UIAbilityContext): Promise<void> {

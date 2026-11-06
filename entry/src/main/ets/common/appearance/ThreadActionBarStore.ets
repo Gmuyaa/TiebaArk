@@ -19,16 +19,17 @@ const KEY_STYLE: string = 'style';
 /**
  * 全局单例：App 内只有一个"详情页操作栏样式"偏好。
  *
- * 与 `MaterialManager` 同一取舍：`loaded` 保证只读一次盘；
- * 读/写失败一律静默（本次会话内仍生效，只是下次启动可能回到旧值）——
- * 偏好存储异常不该影响 App 启动，也不该把用户无法处理的细节抛到界面上。
+ * `loaded` 保证只读一次盘；保存失败保持本次效果，并向设置页提供错误与重试。
  */
 @ObservedV2
 export class ThreadActionBarStore {
   /** 当前生效的操作栏样式。`@Trace` → 所有读到它的 V2 组件跟着重绘 */
   @Trace style: ThreadActionBarStyle = DEFAULT_ACTION_BAR_STYLE;
+  @Trace saveError: string = '';
 
   private loaded: boolean = false;
+  private writes: Promise<void> = Promise.resolve();
+  private saveRevision: number = 0;
 
   /**
    * 启动时读一次持久化偏好（正式存储 → 缺失则尝试从实验存储迁移）。
@@ -42,23 +43,31 @@ export class ThreadActionBarStore {
       return;
     }
     this.loaded = true;
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
-      if (await store.has(KEY_STYLE)) {
-        const raw: number = (await store.get(KEY_STYLE, DEFAULT_ACTION_BAR_STYLE as number)) as number;
-        this.style = normalizeActionBarStyle(raw);
-        if (raw !== (this.style as number)) {
-          await store.put(KEY_STYLE, this.style as number);
-          await store.flush();
+    const revision: number = this.saveRevision;
+    const operation: Promise<void> = this.writes.then(async (): Promise<void> => {
+      try {
+        const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
+        if (await store.has(KEY_STYLE)) {
+          const raw: number = (await store.get(KEY_STYLE, DEFAULT_ACTION_BAR_STYLE as number)) as number;
+          if (revision !== this.saveRevision) { return; }
+          this.style = normalizeActionBarStyle(raw);
+          if (raw !== (this.style as number)) {
+            await store.put(KEY_STYLE, this.style as number);
+            await store.flush();
+          }
+          hilog.info(DOMAIN, TAG, 'action bar style loaded: %{public}s', this.describe());
+          return;
         }
-        hilog.info(DOMAIN, TAG, 'action bar style loaded: %{public}s', this.describe());
-        return;
+        const style: ThreadActionBarStyle = await this.migrateFromLegacy(context, store);
+        if (revision !== this.saveRevision) { return; }
+        this.style = style;
+        hilog.info(DOMAIN, TAG, 'action bar style migrated: %{public}s', this.describe());
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, 'action bar style load failed, keep default: %{public}s', String(e));
       }
-      this.style = await this.migrateFromLegacy(context, store);
-      hilog.info(DOMAIN, TAG, 'action bar style migrated: %{public}s', this.describe());
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'action bar style load failed, keep default: %{public}s', String(e));
-    }
+    });
+    this.writes = operation;
+    await operation;
   }
 
   /**
@@ -96,15 +105,30 @@ export class ThreadActionBarStore {
   async setStyle(style: ThreadActionBarStyle, context: common.UIAbilityContext): Promise<void> {
     const next: ThreadActionBarStyle = normalizeActionBarStyle(style as number);
     if (next === this.style) {
+      if (this.saveError.length > 0) { await this.retrySave(context); }
       return;
     }
     this.style = next;
     hilog.info(DOMAIN, TAG, 'action bar style -> %{public}s', this.describe());
-    try {
+    await this.retrySave(context);
+  }
+
+  async retrySave(context: common.UIAbilityContext): Promise<void> {
+    const style: ThreadActionBarStyle = this.style;
+    const revision: number = ++this.saveRevision;
+    const operation: Promise<void> = this.writes.then(async (): Promise<void> => {
       const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
-      await store.put(KEY_STYLE, next as number);
+      await store.put(KEY_STYLE, style as number);
       await store.flush();
+    });
+    this.writes = operation.catch(() => {});
+    try {
+      await operation;
+      if (revision === this.saveRevision) { this.saveError = ''; }
     } catch (e) {
+      if (revision === this.saveRevision) {
+        this.saveError = '帖子底栏样式本次已生效，保存失败，重启后可能恢复旧值';
+      }
       hilog.warn(DOMAIN, TAG, 'action bar style save failed: %{public}s', String(e));
     }
   }

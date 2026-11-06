@@ -185,6 +185,8 @@ export class UserPageVM {
   }
 
   private async loadPostForumAvatars(device: TiebaDevice, request: number): Promise<void> {
+    // 切回帖子栏时先展示当前 VM 已知的头像，不等其他吧的补图请求。
+    this.postForumAvatars = new Map<number, string>(this.forumAvatars);
     const ids: number[] = [];
     for (const item of this.items) {
       if (item.forumId > 0 && !ids.includes(item.forumId) && !this.forumAvatars.has(item.forumId)) {
@@ -201,6 +203,8 @@ export class UserPageVM {
           if (request !== this.request) { return; }
           if (response.ok && response.data.forum.avatar.length > 0) {
             this.forumAvatars.set(id, response.data.forum.avatar);
+            // 每张成功就发布；尾部慢请求不能拖住已经拿到的首屏头像。
+            this.postForumAvatars = new Map<number, string>(this.forumAvatars);
           }
         } catch (err) {
           // 头像读取失败保留共享卡片的文字兜底。
@@ -208,6 +212,5 @@ export class UserPageVM {
       }
     };
     await Promise.all([worker(), worker()]);
-    if (request === this.request) { this.postForumAvatars = new Map<number, string>(this.forumAvatars); }
   }
 }

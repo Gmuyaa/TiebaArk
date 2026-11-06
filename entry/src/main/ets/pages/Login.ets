@@ -7,6 +7,8 @@ import { authSession } from '../auth/AuthSession';
 import { LoginResult } from '../auth/AuthModel';
 import { AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 
 @Entry
 @ComponentV2
@@ -60,6 +62,13 @@ struct LoginPage {
     }
   }
 
+  pageTransition() {
+    if (!motionStore.isOn(MotionEffect.MOVE)) {
+      PageTransitionEnter({ duration: 0, curve: Curve.Linear })
+      PageTransitionExit({ duration: 0, curve: Curve.Linear })
+    }
+  }
+
   build() {
     Column() {
       this.TitleBar()
@@ -78,6 +87,10 @@ struct LoginPage {
               TextInput({ text: this.bdussInput, placeholder: '粘贴 BDUSS 的值，或整条 Cookie' })
                 .type(this.reveal ? InputType.Normal : InputType.Password)
                 .fontSize(14)
+                .fontColor(AppTheme.TEXT_MAIN)
+                .placeholderColor(AppTheme.TEXT_MUTED)
+                .caretColor(AppTheme.ACCENT)
+                .selectedBackgroundColor(AppTheme.SELECTION_BACKGROUND)
                 .height(46)
                 .layoutWeight(1)
                 .backgroundColor(AppTheme.SURFACE_MUTED)
@@ -108,7 +121,7 @@ struct LoginPage {
             if (this.errorText.length > 0) {
               Text(this.errorText)
                 .fontSize(12)
-                .fontColor(AppTheme.ACCENT_DARK)
+                .fontColor(AppTheme.DANGER_TEXT)
                 .width('100%')
             }
           }
@@ -122,7 +135,7 @@ struct LoginPage {
             .height(46)
             .borderRadius(AppTheme.PILL_RADIUS)
             .backgroundColor(this.submitting ? AppTheme.TEXT_MUTED : AppTheme.ACCENT)
-            .fontColor(Color.White)
+            .fontColor(AppTheme.ON_ACCENT)
             .enabled(!this.submitting && this.bdussInput.length > 0)
             .onClick(() => {
               this.submit();

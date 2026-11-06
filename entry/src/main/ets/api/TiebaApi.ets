@@ -16,6 +16,7 @@ import { ForumHeadlineResult, parseForumHeadlineJson } from '../model/ForumHeadl
 import { BawuTeamResult, ForumMemberResult, parseBawuTeam, parseForumMembers } from '../model/ForumMember';
 import { ForumSearchPage } from '../model/ForumSearch';
 import { RawHotTopicResponse, parseHotTopics } from '../model/HotTopic';
+import { HotTopicCardInfo, parseHotTopicCard } from '../model/HotTopicCard';
 import { ImageUploadChunk, imageUploadChunkError, parseImageUpload } from '../model/ImageUpload';
 import { parseImageWatermark } from '../model/ImageWatermark';
 import { MemeEmojiData } from '../model/MemeEmoji';
@@ -25,6 +26,7 @@ import {
   parseUserPostProto
 } from '../model/MyContent';
 import { NotifyKind, NotifyResult, parseNotifyAgree, parseNotifyReply } from '../model/Notify';
+import { NotifyUnreadResult, parseNotifyUnread } from '../model/NotifyUnread';
 import { OfficialMessageSettings, parseOfficialMessages } from '../model/OfficialMessages';
 import { DirectoryData, DirectoryKind, parseDirectory } from '../model/PageDirectory';
 import { parsePersonalizedErrorno, parsePersonalizedFeed } from '../model/PersonalizedFeed';
@@ -50,7 +52,7 @@ import {
   AtMentionsParams, AuthorBlockParams, AvatarUploadParams, BawuTeamParams, CancelForbiddenForumParams,
   CreateForumParams, FollowParams, ForbiddenForumsParams, ForumMemberParams, FrsHeadlineParams,
   ImageUploadParams, ImageWatermarkParams, MemeEmojiParams, MessageSettingsParams, OfficialMessagesParams,
-  MyThreadParams, PersonalizedParams, PrivacyMarksParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
+  MyThreadParams, NotifyUnreadParams, PersonalizedParams, PrivacyMarksParams, RemoveFanParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
   TailsParams, TiebaCommonParams, TiebaDevice, TiebaHost, TiebaSession, TiebaVersion, UserPostParams,
   VideoFeedParams, VoiceAudioParams
 } from '../net/TiebaParams';
@@ -65,11 +67,11 @@ import { RawSearchPostResponse } from './RawSearchPost';
 import { RawSubPostPageResponse, RawThreadPage } from './RawThreadPage';
 import { ApiResult } from './ApiResult';
 import {
-  ThreadListResponse, ThreadDetailResponse, SubPostResponse, StoredThreadsResponse, UserPostsResponse,
+  ThreadListResponse, ThreadDetailResponse, HotTopicCardResponse, SubPostResponse, StoredThreadsResponse, UserPostsResponse,
   PersonalizedFeedResponse, SearchPostResponse, ForumSearchResponse, HotTopicsResponse, FollowForumsResponse,
   SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, MemeEmojiResponse, MemeCollectResponse,
   AddThreadResponse, ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse, ForumMemberResponse,
-  BawuTeamResponse, NotifyResponse, MessageSettingsResponse, PrivacyMarksResponse, AtCandidatesResponse,
+  BawuTeamResponse, NotifyResponse, NotifyUnreadResponse, MessageSettingsResponse, PrivacyMarksResponse, AtCandidatesResponse,
   VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse, OfficialMessagesResponse,
   VideoFeedResponse, ForbiddenForumsResponse, ForumBlockResponse, TailsResponse, TailWriteResponse,
   AvatarUploadResponse, CreateForumChallengeResponse, UserSearchResponse
@@ -77,11 +79,11 @@ import {
 
 // 保留既有导入路径；响应类型集中维护在独立模块。
 export {
-  ApiResult, ThreadListResponse, ThreadDetailResponse, SubPostResponse, StoredThreadsResponse,
+  ApiResult, ThreadListResponse, ThreadDetailResponse, HotTopicCardResponse, SubPostResponse, StoredThreadsResponse,
   UserPostsResponse, PersonalizedFeedResponse, SearchPostResponse, ForumSearchResponse, HotTopicsResponse,
   FollowForumsResponse, SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, MemeEmojiResponse,
   MemeCollectResponse, ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse,
-  ForumMemberResponse, BawuTeamResponse, NotifyResponse, MessageSettingsResponse, PrivacyMarksResponse,
+  ForumMemberResponse, BawuTeamResponse, NotifyResponse, NotifyUnreadResponse, MessageSettingsResponse, PrivacyMarksResponse,
   AtCandidatesResponse, VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse,
   OfficialMessagesResponse, VideoFeedResponse, ForbiddenForumsResponse, ForumBlockResponse, TailsResponse,
   TailWriteResponse, AvatarUploadResponse, CreateForumChallengeResponse, UserSearchResponse
@@ -197,8 +199,8 @@ export class TiebaApi {
     const signed: SignParam[] = await CryptoUtil.appendSign(CreateForumParams.challenge(device, session), SignSalt.APP);
     // 当前NetWorkCoreByBdHttp.postNetData使用xa.c大写签名。
     for (const p of signed) { if (p.key === 'sign') { p.value = p.value.toUpperCase(); } }
-    this.client.userAgent = userAgent;
-    const transport: HttpResult = await this.client.postForm(`https://${TiebaHost.APP}${CreateForumParams.CHALLENGE_PATH}`,
+    const client: HttpClient = TiebaApi.requestClient(userAgent);
+    const transport: HttpResult = await client.postForm(`https://${TiebaHost.APP}${CreateForumParams.CHALLENGE_PATH}`,
       TiebaCommonParams.encodeForm(signed));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     if (transport.code !== 200) { response.failLocal('创建吧验证码HTTP结果未确认'); return response; }
@@ -224,10 +226,10 @@ export class TiebaApi {
     for (const p of signed) { if (p.key === 'sign') { p.value = p.value.toUpperCase(); } }
     const body: Uint8Array = AvatarUploadParams.multipart(signed, bytes);
     if (body.length === 0) { response.failLocal('头像内容与请求边界冲突'); return response; }
-    this.client.userAgent = userAgent;
+    const client: HttpClient = TiebaApi.requestClient(userAgent);
     // 只记传输耗时与请求体大小：正文含头像字节，绝不进日志。
     const startedMs: number = avatarUptimeMs();
-    const transport: HttpResult = await this.client.postBinary(`https://${TiebaHost.APP}${AvatarUploadParams.PATH}`, body,
+    const transport: HttpResult = await client.postBinary(`https://${TiebaHost.APP}${AvatarUploadParams.PATH}`, body,
       { 'Content-Type': `multipart/form-data; boundary=${AvatarUploadParams.BOUNDARY}` });
     avatarTracePhase('upload-transport', traceId, startedMs,
       `ok=${transport.ok} code=${transport.code} body=${body.length} image=${bytes.length}`);
@@ -272,8 +274,8 @@ export class TiebaApi {
     for (const param of signed) { if (param.key === 'sign') { param.value = param.value.toUpperCase(); } }
     const body: Uint8Array = ImageUploadParams.multipart(signed, bytes);
     if (body.length === 0) { response.failLocal('图片分片与请求边界冲突'); return response; }
-    this.client.userAgent = userAgent;
-    const transport: HttpResult = await this.client.postBinary(`https://${TiebaHost.APP}${ImageUploadParams.PATH}`, body,
+    const client: HttpClient = TiebaApi.requestClient(userAgent);
+    const transport: HttpResult = await client.postBinary(`https://${TiebaHost.APP}${ImageUploadParams.PATH}`, body,
       { 'Content-Type': `multipart/form-data; boundary=${ImageUploadParams.BOUNDARY}` });
     if (!transport.ok) { response.transportError = transport.error; return response; }
     response.data = parseImageUpload(decodeUtf8(transport.bytes));
@@ -289,8 +291,8 @@ export class TiebaApi {
     if (!session.hasBduss()) { response.failLocal('登录后才能读取图片水印设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(ImageWatermarkParams.READ_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, ImageWatermarkParams.READ_PATH,
       ImageWatermarkParams.build(device, session), response);
     if (text === undefined) { return response; }
     response.data = parseImageWatermark(text);
@@ -304,8 +306,8 @@ export class TiebaApi {
     if (!session.hasBduss()) { response.failLocal('登录后才能读取消息设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(MessageSettingsParams.READ_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MessageSettingsParams.READ_PATH,
       MessageSettingsParams.build(device, session), response);
     if (text === undefined) { return response; }
     response.data = parseMessageSettings(text);
@@ -325,8 +327,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(MessageSettingsParams.WRITE_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MessageSettingsParams.WRITE_PATH,
       MessageSettingsParams.build(device, session, field, value), response);
     if (text === undefined) { return response; }
     try {
@@ -350,8 +352,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport: HttpResult = await this.client.postBinary(BawuTeamParams.url(),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.postBinary(BawuTeamParams.url(),
       BawuTeamParams.build(device, session, forumId), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const parsed: BawuTeamResult = parseBawuTeam(transport.bytes);
@@ -369,8 +371,8 @@ export class TiebaApi {
     const response: VoiceAudioResponse = new VoiceAudioResponse();
     const source: string = VoiceAudioParams.url(id);
     if (source.length === 0) { response.failLocal('语音来源无效'); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport: HttpResult = await this.client.get(source);
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.get(source);
     if (!transport.ok) { response.transportError = '语音下载失败，请重试'; return response; }
     const failure: string = voicePayloadError(transport.bytes);
     if (failure.length > 0) { response.failBusiness(-1, failure); return response; }
@@ -382,8 +384,8 @@ export class TiebaApi {
     if (!session.hasBduss()) { response.failLocal('登录后才能读取官方消息设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport: HttpResult = await this.client.postBinary(OfficialMessagesParams.url(),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.postBinary(OfficialMessagesParams.url(),
       OfficialMessagesParams.build(device, session), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const data: OfficialMessageSettings = parseOfficialMessages(transport.bytes);
@@ -397,8 +399,8 @@ export class TiebaApi {
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
     if (!VideoFeedParams.valid(environment, loadType)) { response.failLocal('视频请求参数未确认'); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const source: string | undefined = await this.postJsonText(VideoFeedParams.PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const source: string | undefined = await this.postJsonText(client, VideoFeedParams.PATH,
       VideoFeedParams.build(device, session, environment, loadType), response);
     if (source === undefined) { return response; }
     const data: VideoFeedResult = parseVideoFeed(source);
@@ -413,8 +415,8 @@ export class TiebaApi {
     if (!session.hasBduss() || !validAtKind(kind)) { response.failLocal('未登录或选人类型无效'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(AtCandidatesParams.path(kind),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, AtCandidatesParams.path(kind),
       AtCandidatesParams.build(device, session, kind, word), response);
     if (text === undefined) { return response; }
     const data: AtCandidates = parseAtCandidates(text);
@@ -429,8 +431,8 @@ export class TiebaApi {
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
     if (!Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('隐私标记账号参数无效'); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport = await this.client.postBinary(PrivacyMarksParams.url(), PrivacyMarksParams.build(device, session, uid),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport = await client.postBinary(PrivacyMarksParams.url(), PrivacyMarksParams.build(device, session, uid),
       SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const data: PrivacyMarks = parsePrivacyMarks(transport.bytes);
@@ -447,8 +449,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(PrivacyMarksParams.WRITE_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, PrivacyMarksParams.WRITE_PATH,
       PrivacyMarksParams.buildChange(device, session, field, value), response);
     if (text === undefined) { return response; }
     response.ok = privacyWriteConfirmed(text);
@@ -466,8 +468,8 @@ export class TiebaApi {
     if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isInteger(page) || page < 1 || page > 2147483647) {
       response.failLocal('屏蔽吧请求参数无效'); return response;
     }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport = await this.client.postBinary(ForbiddenForumsParams.url(),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport = await client.postBinary(ForbiddenForumsParams.url(),
       ForbiddenForumsParams.build(device, session, uid, page), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const data: ForbiddenForums = parseForbiddenForums(transport.bytes);
@@ -487,12 +489,12 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const body: string = SubmitDislikeParams.buildBody(tid, forumId,
       SubmitDislikeParams.DISLIKE_ID_BLOCK_FORUM, SubmitDislikeParams.FROM_FRS);
     const params: SignParam[] = SubmitDislikeParams.build(device, session, body,
       SubmitDislikeParams.FROM_FRS);
-    const text: string | undefined = await this.postJsonText(SubmitDislikeParams.PATH, params, response);
+    const text: string | undefined = await this.postJsonText(client, SubmitDislikeParams.PATH, params, response);
     if (text === undefined) { return response; }
 
     const readBack: ForbiddenForumsResponse = await this.fetchForbiddenForums(device, session, uid, 1);
@@ -526,8 +528,8 @@ export class TiebaApi {
     } catch (err) {
       result.failLocal('解除屏蔽吧的参数无效'); return result;
     }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(CancelForbiddenForumParams.PATH, params, result);
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, CancelForbiddenForumParams.PATH, params, result);
     if (text === undefined) { return result; }
     result.ok = true;
     return result;
@@ -539,8 +541,8 @@ export class TiebaApi {
     if (!session.hasBduss()) { response.failLocal('登录后才能读取小尾巴'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport = await this.client.postBinary(TailsParams.url(), TailsParams.build(device, session),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport = await client.postBinary(TailsParams.url(), TailsParams.build(device, session),
       SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const data: TailList = parseTails(transport.bytes);
@@ -586,8 +588,8 @@ export class TiebaApi {
     if (!session.hasBduss() || session.tbs.length === 0) {
       response.failLocal('登录状态未准备好，无法修改小尾巴'); return response;
     }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport = await this.client.postBinary(TailsParams.changeUrl(change.action),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport = await client.postBinary(TailsParams.changeUrl(change.action),
       TailsParams.buildChange(device, session, change), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const result = parseTailWrite(transport.bytes);
@@ -597,16 +599,31 @@ export class TiebaApi {
     return response;
   }
 
+  async fetchNotifyUnread(device: TiebaDevice, session: TiebaSession): Promise<NotifyUnreadResponse> {
+    const response: NotifyUnreadResponse = new NotifyUnreadResponse();
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0 || !session.hasBduss()) {
+      response.failLocal(check || '登录后才能读取新消息提醒'); return response;
+    }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, NotifyUnreadParams.PATH,
+      NotifyUnreadParams.build(device, session), response);
+    if (text === undefined) { return response; }
+    const parsed: NotifyUnreadResult = parseNotifyUnread(text);
+    if (parsed.code !== 0) { response.failLocal(parsed.message); return response; }
+    response.data = parsed.counts; response.ok = true; return response;
+  }
+
   async fetchNotifyFeed(device: TiebaDevice, session: TiebaSession, kind: NotifyKind,
     page: number, agreeCursor: number, uid: number = 0): Promise<NotifyResponse> {
     const response: NotifyResponse = new NotifyResponse();
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     if (kind === 'at') {
       const params: SignParam[] = AtMentionsParams.build(device, session, uid, page);
       if (!session.hasBduss() || params.length === 0) { response.failLocal('登录或通知页码无效'); return response; }
-      const text: string | undefined = await this.postJsonText(AtMentionsParams.PATH, params, response);
+      const text: string | undefined = await this.postJsonText(client, AtMentionsParams.PATH, params, response);
       if (text === undefined) { return response; }
       const parsed: NotifyResult = parseAtMentions(text);
       if (parsed.code !== 0) { response.failBusiness(parsed.code, parsed.message); return response; }
@@ -617,7 +634,7 @@ export class TiebaApi {
       ? ReplyMeParams.build(device, session, page)
       : AgreeMeParams.build(device, session, agreeCursor, 20);
     const url: string = kind === 'reply' ? ReplyMeParams.url() : AgreeMeParams.url();
-    const transport: HttpResult = await this.client.postBinary(url, body, SelfProfileParams.headers(session));
+    const transport: HttpResult = await client.postBinary(url, body, SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const parsed: NotifyResult = kind === 'reply'
       ? parseNotifyReply(transport.bytes) : parseNotifyAgree(transport.bytes);
@@ -640,8 +657,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport: HttpResult = await this.client.postBinary(ForumMemberParams.url(),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.postBinary(ForumMemberParams.url(),
       ForumMemberParams.build(device, session, forumId), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const parsed: ForumMemberResult = parseForumMembers(transport.bytes);
@@ -662,8 +679,8 @@ export class TiebaApi {
     if (!Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('作者身份无效'); return response; }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const transport: HttpResult = await this.client.postBinary(AuthorBlockParams.url(blocked !== undefined),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.postBinary(AuthorBlockParams.url(blocked !== undefined),
       AuthorBlockParams.build(device, session, uid, blocked), SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     response.result = parseAuthorBlock(transport.bytes, blocked === undefined);
@@ -687,8 +704,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { result.failLocal(check); return result; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(FollowParams.path(kind, following),
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, FollowParams.path(kind, following),
       FollowParams.build(device, session, kind, id, portrait), result);
     if (text === undefined) { return result; }
     const parsed = parseFollowWrite(text);
@@ -697,9 +714,25 @@ export class TiebaApi {
     return result;
   }
 
+  /** 用户确认后的单个粉丝移除，只有明确业务成功才报告完成。 */
+  async removeFan(device: TiebaDevice, session: TiebaSession, uid: number): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    const check: string = TiebaApi.checkDevice(device);
+    const params: SignParam[] = RemoveFanParams.build(device, session, uid);
+    if (check.length > 0 || params.length === 0) { response.failLocal(check || '移除粉丝参数或登录状态无效'); return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, RemoveFanParams.PATH, params, response);
+    if (text === undefined) { return response; }
+    const parsed = parseFollowWrite(text);
+    if (parsed.code === -1) { response.failLocal('移除粉丝响应未确认'); return response; }
+    if (parsed.code !== 0) { response.failBusiness(parsed.code, parsed.message || '移除粉丝失败'); return response; }
+    response.ok = true; return response;
+  }
+
   /** 公开页面只读接口，复用签名、业务错误判断与当前会话；不要求用户登录。 */
   async fetchDirectory(device: TiebaDevice, session: TiebaSession, kind: DirectoryKind,
     id: number, page: number = 1): Promise<DirectoryResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const response: DirectoryResponse = new DirectoryResponse();
     if (!Number.isSafeInteger(id) || id <= 0 || !Number.isInteger(page) || page < 1) {
       response.failLocal('页面参数无效');
@@ -716,7 +749,7 @@ export class TiebaApi {
     params.push(new SignParam(kind === 'fans' || kind === 'following' ? 'uid' : 'forum_id', String(id)));
     params.push(new SignParam('pn', String(page)));
     params.push(new SignParam('rn', '20'));
-    const text: string | undefined = await this.postJsonText(path, params, response);
+    const text: string | undefined = await this.postJsonText(client, path, params, response);
     if (text === undefined) { return response; }
     const data: DirectoryData | undefined = parseDirectory(text, kind);
     if (data === undefined) { response.failLocal('页面数据格式无效'); return response; }
@@ -727,6 +760,7 @@ export class TiebaApi {
 
   async fetchPublicProfile(device: TiebaDevice, session: TiebaSession, uid: number,
     portrait: string, page: number = 1): Promise<PublicProfileResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const response: PublicProfileResponse = new PublicProfileResponse();
     if ((!Number.isSafeInteger(uid) || uid <= 0) && portrait.length === 0) {
       response.failLocal('未取得用户身份'); return response;
@@ -735,7 +769,7 @@ export class TiebaApi {
     if (check.length > 0) { response.failLocal(check); return response; }
     const body: Uint8Array = SelfProfileParams.wrapMultipart(
       SelfProfileParams.buildForUser(uid, portrait, device, page));
-    const transport: HttpResult = await this.client.postBinary(
+    const transport: HttpResult = await client.postBinary(
       SelfProfileParams.url(TiebaHost.APP).replace('http:', 'https:'), body, SelfProfileParams.headers(session));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const code: number = parseProtoErrorno(transport.bytes);
@@ -746,12 +780,17 @@ export class TiebaApi {
     response.data = data;
     return response;
   }
-  private client: HttpClient = new HttpClient();
+  /** 请求配置只属于当前调用，异步签名或网页回包不能改写其他请求的 UA。 */
+  private static requestClient(userAgent: string): HttpClient {
+    const client: HttpClient = new HttpClient();
+    client.userAgent = userAgent;
+    return client;
+  }
 
   /** 网页首页侧栏的真实热议榜。HAR 核对过这三个 GET 参数及 PC 签名。 */
   async fetchHotTopics(): Promise<HotTopicsResponse> {
     const response: HotTopicsResponse = new HotTopicsResponse();
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     const params: SignParam[] = [
       new SignParam('subapp_type', 'pc'),
       new SignParam('_client_type', '20')
@@ -759,7 +798,7 @@ export class TiebaApi {
     const sign: string = await WebPcSign.sign(params);
     const url: string = `https://tieba.baidu.com/c/f/pc/homeSidebarRight?` +
       `subapp_type=pc&_client_type=20&sign=${encodeURIComponent(sign)}`;
-    const transport: HttpResult = await this.client.getWithCookie(url, '', {
+    const transport: HttpResult = await client.getWithCookie(url, '', {
       'Referer': 'https://tieba.baidu.com/',
       'X-Requested-With': 'XMLHttpRequest'
     });
@@ -796,13 +835,13 @@ export class TiebaApi {
       response.failLocal('分类参数无效'); return response;
     }
     device.clientVersion = TiebaVersion.SUB_POST;
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('class_name', category), new SignParam('second_class_name', subcategory),
       new SignParam('pn', String(page)), new SignParam('rn', '20'));
     const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
     // 与官方原生网络代理一致使用GET；此端点不启用请求选项跟踪，不输出URL或响应凭据。
-    const transport: HttpResult = await this.client.get(
+    const transport: HttpResult = await client.get(
       `https://${TiebaHost.APP}/c/f/forum/getForumSquare?${TiebaCommonParams.encodeForm(signed)}`);
     if (!transport.ok) { response.transportError = '广场网络请求失败'; return response; }
     const text: string = decodeUtf8(transport.bytes);
@@ -823,7 +862,7 @@ export class TiebaApi {
     response.ok = true; return response;
   }
 
-  private async postJsonText(path: string, params: SignParam[], out: ApiResult,
+  private async postJsonText(client: HttpClient, path: string, params: SignParam[], out: ApiResult,
     host: string = TiebaHost.APP,
     extraHeaders?: Record<string, string>): Promise<string | undefined> {
     const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
@@ -833,7 +872,7 @@ export class TiebaApi {
     }
     const url: string = `https://${host}${path}`;
     const transport: HttpResult =
-      await this.client.postForm(url, TiebaCommonParams.encodeForm(signed), extraHeaders);
+      await client.postForm(url, TiebaCommonParams.encodeForm(signed), extraHeaders);
 
     if (!transport.ok) {
       out.transportError = transport.error;
@@ -891,10 +930,9 @@ export class TiebaApi {
     if (!session.hasBduss()) {
       return 0;
     }
-    const previousUa: string = this.client.userAgent;
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     try {
-      const res: HttpResult = await this.client.getWithCookie(
+      const res: HttpResult = await client.getWithCookie(
         USERINFO_URL, `BDUSS=${session.bduss}; STOKEN=${session.stoken}`);
       if (!res.ok) {
         hilog.warn(0x0000, 'TiebaApi', 'account uid: userinfo not ok (code=%{public}d)', res.code);
@@ -913,8 +951,6 @@ export class TiebaApi {
       const e: Error = err as Error;
       hilog.warn(0x0000, 'TiebaApi', 'account uid fetch failed: %{public}s', e.message);
       return 0;
-    } finally {
-      this.client.userAgent = previousUa;
     }
   }
 
@@ -923,10 +959,9 @@ export class TiebaApi {
     if (session.bduss.length === 0) {
       return new UserProfileInfo();
     }
-    const previousUa: string = this.client.userAgent;
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     try {
-      const res: HttpResult = await this.client.getWithCookie(
+      const res: HttpResult = await client.getWithCookie(
         USERINFO_URL, `BDUSS=${session.bduss}; STOKEN=${session.stoken}`);
       if (!res.ok) {
         hilog.warn(0x0000, 'TiebaApi', 'json_userinfo not ok: code=%{public}d', res.code);
@@ -948,14 +983,13 @@ export class TiebaApi {
       const e: Error = err as Error;
       hilog.warn(0x0000, 'TiebaApi', 'json_userinfo failed: %{public}s', e.message);
       return new UserProfileInfo();
-    } finally {
-      this.client.userAgent = previousUa;
     }
   }
 
   /** 读取当前账号的社交资料，包括关注、粉丝、等级与关注贴吧。使用 multipart protobuf 请求。 */
   async fetchSelfProfile(session: TiebaSession, device: TiebaDevice,
     portrait: string = ''): Promise<UserProfileInfo | undefined> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     if (session.bduss.length === 0) {
       return undefined;
     }
@@ -972,7 +1006,7 @@ export class TiebaApi {
 
     const body: Uint8Array =
       SelfProfileParams.wrapMultipart(SelfProfileParams.buildRequest(portrait, device));
-    const transport: HttpResult = await this.client.postBinary(
+    const transport: HttpResult = await client.postBinary(
       SelfProfileParams.url(TiebaHost.APP), body, SelfProfileParams.headers(session));
     if (!transport.ok) {
       hilog.warn(0x0000, 'TiebaApi', 'self profile transport failed: %{public}s',
@@ -1000,9 +1034,10 @@ export class TiebaApi {
    * 与头像（`user_portrait`），只有那次请求失败时才走到这里。
    */
   private async tryPassportApi(session: TiebaSession, profile: UserProfileInfo): Promise<void> {
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     const PASSPORT_URL: string = 'https://passport.baidu.com/v3/api/user/info';
     try {
-      const res: HttpResult = await this.client.getWithCookie(
+      const res: HttpResult = await client.getWithCookie(
         PASSPORT_URL, `BDUSS=${session.bduss}; STOKEN=${session.stoken}`);
       if (!res.ok) {
         hilog.info(0x0000, 'TiebaApi', 'passport api: not ok (code=%{public}d)', res.code);
@@ -1058,7 +1093,7 @@ export class TiebaApi {
     }
 
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kw', forumName));
@@ -1072,7 +1107,7 @@ export class TiebaApi {
     if (tabId === 301) { params.push(new SignParam('is_good', '1')); }
     if (sortType >= 0) { params.push(new SignParam('sort_type', String(sortType))); }
 
-    const text: string | undefined = await this.postJsonText('/c/f/frs/page', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/f/frs/page', params, response);
     if (text === undefined) {
       return response;
     }
@@ -1098,6 +1133,7 @@ export class TiebaApi {
   /** 通用分类共享接口；互助以 partition_type=0/1 区分全部与未回答。 */
   async fetchForumGeneralTab(device: TiebaDevice, session: TiebaSession, forum: ForumBrief,
     tab: ForumTab, page: number, sortType: number = 0, partitionType: number = 0): Promise<ThreadListResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const response: ThreadListResponse = new ThreadListResponse();
     if ((!tab.isGeneral && !tab.isVideo) || tab.id <= 0 || forum.id <= 0 || forum.name.length === 0 || page < 1 ||
       (sortType !== 0 && sortType !== 1) || (partitionType !== 0 && partitionType !== 1) || (!tab.isHelp && partitionType !== 0)) {
@@ -1112,7 +1148,7 @@ export class TiebaApi {
       new SignParam('partition_type', String(partitionType)),
       new SignParam('pn', String(page)), new SignParam('rn', '20'), new SignParam('sort_type', String(sortType)));
     if (tab.isVideo) { params.push(new SignParam('is_video_doublerow', '1')); }
-    const text: string | undefined = await this.postJsonText('/c/f/frs/generalTabList', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/f/frs/generalTabList', params, response);
     if (text === undefined) { return response; }
     const raw: RawGeneralTabList = JSON.parse(text) as RawGeneralTabList;
     if (!Array.isArray(raw.general_list) || (String(raw.has_more) !== '0' && String(raw.has_more) !== '1')) {
@@ -1134,10 +1170,10 @@ export class TiebaApi {
     }
 
     // 网页端接口：浏览器 UA + form 签名（SignSalt.PC）。与登录态无关，未登录也发。
-    this.client.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+    const client: HttpClient = TiebaApi.requestClient('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36');
     const body: string = await FrsHeadlineParams.buildBody(name);
-    const transport: HttpResult = await this.client.postForm(FrsHeadlineParams.url(), body);
+    const transport: HttpResult = await client.postForm(FrsHeadlineParams.url(), body);
     if (!transport.ok || transport.bytes.length === 0) {
       hilog.warn(0x0000, 'TiebaApi',
         'forum headline transport failed forum=%{public}s error=%{public}s',
@@ -1170,7 +1206,7 @@ export class TiebaApi {
     }
 
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('word', clean));
@@ -1182,7 +1218,7 @@ export class TiebaApi {
       params.push(new SignParam('kw', scope));
     }
 
-    const text: string | undefined = await this.postJsonText('/c/s/searchpost', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/s/searchpost', params, response);
     if (text === undefined) {
       return response;
     }
@@ -1202,7 +1238,7 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
 
     const params: SignParam[] = [
       new SignParam('_client_type', '20'),
@@ -1222,7 +1258,7 @@ export class TiebaApi {
     const url: string = `https://tieba.baidu.com/mo/q/search/forum?${pairs.join('&')}`;
 
     const transport: HttpResult =
-      await this.client.getWithCookie(url, '', { 'Referer': PC_SEARCH_REFERER });
+      await client.getWithCookie(url, '', { 'Referer': PC_SEARCH_REFERER });
     if (!transport.ok) {
       response.transportError = transport.error;
       return response;
@@ -1253,11 +1289,18 @@ export class TiebaApi {
   }
 
   async fetchSearchPostAuthorAvatar(device: TiebaDevice, session: TiebaSession,
-    tid: number, pid: number): Promise<string> {
+    tid: number, pid: number,
+    onForumAvatar?: (forumName: string, avatarUrl: string) => void): Promise<string> {
     if (!Number.isSafeInteger(tid) || tid <= 0 || !Number.isSafeInteger(pid) || pid <= 0) { return ''; }
     const response: ThreadDetailResponse =
       await this.fetchThreadDetail(device, session, tid, 1, 1, ReplySortType.ASC, pid);
-    return response.ok ? searchPostAuthorAvatar(response.data, tid, pid) : '';
+    if (!response.ok) { return ''; }
+    // 同一次精确楼层读取已带吧资料，调用方核对吧名与查询代次后可一起补图。
+    if (onForumAvatar !== undefined && response.data.forumName.length > 0
+      && response.data.forumAvatar.length > 0) {
+      onForumAvatar(response.data.forumName, response.data.forumAvatar);
+    }
+    return searchPostAuthorAvatar(response.data, tid, pid);
   }
 
   /** 与搜吧同族的公开搜人接口；当前真实响应 has_more=0，不猜测更多页。 */
@@ -1268,7 +1311,7 @@ export class TiebaApi {
       || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
       response.failLocal('搜索参数无效'); return response;
     }
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     const params: SignParam[] = [
       new SignParam('_client_type', '20'), new SignParam('pn', String(page)),
       new SignParam('rn', String(pageSize)), new SignParam('st', '0'),
@@ -1278,7 +1321,7 @@ export class TiebaApi {
     const pairs: string[] = params.map((param: SignParam) =>
       `${encodeURIComponent(param.key)}=${encodeURIComponent(param.value)}`);
     pairs.push(`sign=${encodeURIComponent(sign)}`);
-    const transport: HttpResult = await this.client.getWithCookie(
+    const transport: HttpResult = await client.getWithCookie(
       `https://tieba.baidu.com/mo/q/search/user?${pairs.join('&')}`, '', { 'Referer': PC_SEARCH_REFERER });
     if (!transport.ok) { response.transportError = transport.error; return response; }
     const parsed: UserSearchParseResult = parseUserSearch(decodeUtf8(transport.bytes));
@@ -1305,7 +1348,7 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = BROWSER_UA;
+    const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
     const params: SignParam[] = [
       new SignParam('tbs', session.tbs),
       new SignParam('sort_type', '3'),
@@ -1314,7 +1357,7 @@ export class TiebaApi {
       new SignParam('res_num', String(pageSize))
     ];
     const body: string = TiebaCommonParams.encodeForm(params);
-    const transport: HttpResult = await this.client.postForm(
+    const transport: HttpResult = await client.postForm(
       `https://${TiebaHost.WEB}/c/f/forum/forumGuide`, body,
       {
         'Cookie': `BDUSS=${session.bduss}; STOKEN=${session.stoken}`,
@@ -1355,13 +1398,13 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('user_id', String(uid)));
     params.push(new SignParam('pn', String(page)));
     params.push(new SignParam('rn', String(pageSize)));
     const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
-    const transport: HttpResult = await this.client.postForm(
+    const transport: HttpResult = await client.postForm(
       `https://${TiebaHost.APP}/c/f/post/threadstore`,
       TiebaCommonParams.encodeForm(signed));
 
@@ -1418,8 +1461,8 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(MyThreadParams.VISIBILITY_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MyThreadParams.VISIBILITY_PATH,
       MyThreadParams.visibility(device, session, uid, fid, tid, pid, hidden), response);
     if (text === undefined) { return response; }
     response.ok = privacyWriteConfirmed(text);
@@ -1437,9 +1480,30 @@ export class TiebaApi {
     }
     const check: string = TiebaApi.checkDevice(device);
     if (check.length > 0) { response.failLocal(check); return response; }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
-    const text: string | undefined = await this.postJsonText(MyThreadParams.DELETE_PATH,
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MyThreadParams.DELETE_PATH,
       MyThreadParams.deleteThread(device, session, fid, tid), response);
+    if (text === undefined) { return response; }
+    response.ok = privacyWriteConfirmed(text);
+    if (!response.ok) { response.failLocal('删除结果未确认，请刷新核对'); }
+    return response;
+  }
+
+  /** 删除本人普通回复或楼中楼；只认明确业务成功，不自动重发写请求。 */
+  async deleteMyPost(device: TiebaDevice, session: TiebaSession, fid: number, tid: number,
+    pid: number, isSubPost: boolean): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    if (![fid, tid, pid].every((id: number): boolean => Number.isSafeInteger(id) && id > 0)) {
+      response.failLocal('评论身份不完整，无法删除'); return response;
+    }
+    if (!session.hasBduss() || session.tbs.length === 0) {
+      response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0) { response.failLocal(check); return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MyThreadParams.DELETE_POST_PATH,
+      MyThreadParams.deletePost(device, session, fid, tid, pid, isSubPost), response);
     if (text === undefined) { return response; }
     response.ok = privacyWriteConfirmed(text);
     if (!response.ok) { response.failLocal('删除结果未确认，请刷新核对'); }
@@ -1449,6 +1513,7 @@ export class TiebaApi {
   /** 他人主页的公开帖子；登录会话可选，服务端隐私/权限拒绝仍按业务失败处理。 */
   async fetchPublicUserPosts(device: TiebaDevice, session: TiebaSession, uid: number,
     isThread: number, page: number, pageSize: number): Promise<UserPostsResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const response: UserPostsResponse = new UserPostsResponse();
     if (!Number.isSafeInteger(uid) || uid <= 0 || page < 1 || pageSize < 1) {
       response.failLocal('用户帖子参数无效'); return response;
@@ -1461,7 +1526,7 @@ export class TiebaApi {
 
     const body: Uint8Array = UserPostParams.wrapMultipart(
       UserPostParams.buildRequest(uid, isThread, page, pageSize, device, session));
-    const transport: HttpResult = await this.client.postBinary(
+    const transport: HttpResult = await client.postBinary(
       UserPostParams.url(TiebaHost.APP), body, UserPostParams.headers(session));
     if (!transport.ok) {
       response.transportError = transport.error;
@@ -1483,6 +1548,7 @@ export class TiebaApi {
 
   async fetchPersonalizedFeed(device: TiebaDevice, session: TiebaSession,
     loadType: number, pn: number, pageThreadCount: number): Promise<PersonalizedFeedResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const response: PersonalizedFeedResponse = new PersonalizedFeedResponse();
     if (!session.hasBduss()) {
       response.failLocal('未登录，无法获取推荐流');
@@ -1496,7 +1562,7 @@ export class TiebaApi {
 
     const body: Uint8Array = PersonalizedParams.wrapMultipart(
       PersonalizedParams.buildRequest(loadType, pn, pageThreadCount, device, session));
-    const transport: HttpResult = await this.client.postBinary(
+    const transport: HttpResult = await client.postBinary(
       PersonalizedParams.url(TiebaHost.APP), body, PersonalizedParams.headers(session));
     if (!transport.ok) {
       response.transportError = transport.error;
@@ -1522,10 +1588,10 @@ export class TiebaApi {
     const deviceError: string = TiebaApi.checkDevice(device);
     if (deviceError.length > 0) { response.failLocal(deviceError); return response; }
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('user_id', String(uid)));
-    const text: string | undefined = await this.postJsonText('/c/f/forum/getforumlist', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/f/forum/getforumlist', params, response);
     if (text === undefined) { return response; }
     response.data = parseOfficialSignCapability(text);
     hilog.info(0x0000, 'OfficialSign', 'capability schema %{public}s min=%{public}d count=%{public}d all=%{public}s',
@@ -1546,11 +1612,11 @@ export class TiebaApi {
     const deviceError: string = TiebaApi.checkDevice(device);
     if (deviceError.length > 0) { response.failLocal(deviceError); return response; }
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     // 当前 APK 普通路径的 authsid 为 null，NetWorkCoreByBdHttp 省略空参数。
     params.push(new SignParam('user_id', String(uid)), new SignParam('forum_ids', forumIds.join(',')));
-    const text: string | undefined = await this.postJsonText('/c/c/forum/msign', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/c/forum/msign', params, response);
     if (text === undefined) { return response; }
     response.data = parseOfficialSign(text);
     hilog.info(0x0000, 'OfficialSign', 'response schema %{public}s', response.data.schema);
@@ -1583,12 +1649,12 @@ export class TiebaApi {
     }
 
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kw', clean));
 
-    const text: string | undefined = await this.postJsonText('/c/c/forum/sign', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/c/forum/sign', params, response);
     if (text === undefined) {
       // 160002 = "已经签过了"：不是失败，按成功返回让界面把状态改成已签到
       if (response.errorCode === 160002) {
@@ -1639,7 +1705,7 @@ export class TiebaApi {
     }
 
     device.clientVersion = TiebaVersion.LATEST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kz', String(tid)));
@@ -1654,7 +1720,7 @@ export class TiebaApi {
     params.push(new SignParam('r', String(serverSort)));
     params.push(new SignParam('lz', onlyAuthor ? '1' : '0'));
 
-    const text: string | undefined = await this.postJsonText('/c/f/pb/page', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/f/pb/page', params, response);
     if (text === undefined) {
       return response;
     }
@@ -1665,13 +1731,50 @@ export class TiebaApi {
     return response;
   }
 
+  /** 背景补卡片取首页两楼；rn=1实测会对有效帖子返回29，仍须严格检查业务码和主题身份。 */
+  async fetchHotTopicCard(device: TiebaDevice, session: TiebaSession, tid: number): Promise<HotTopicCardResponse> {
+    const response: HotTopicCardResponse = new HotTopicCardResponse();
+    if (!Number.isSafeInteger(tid) || tid <= 0) {
+      response.failLocal('帖子 id 无效');
+      return response;
+    }
+    const deviceError: string = TiebaApi.checkDevice(device);
+    if (deviceError.length > 0) { response.failLocal(deviceError); return response; }
+    device.clientVersion = TiebaVersion.LATEST;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('kz', String(tid)));
+    params.push(new SignParam('pn', '1'));
+    params.push(new SignParam('rn', '2'));
+    params.push(new SignParam('r', String(ReplySortType.ASC)));
+    params.push(new SignParam('lz', '0'));
+    const text: string | undefined = await this.postJsonText(client, '/c/f/pb/page', params, response);
+    if (text === undefined) { return response; }
+    let data: HotTopicCardInfo | undefined = undefined;
+    try {
+      data = parseHotTopicCard(JSON.parse(text) as RawThreadPage, tid);
+    } catch (_) {
+      response.failLocal('帖子卡片资料无法解析');
+      return response;
+    }
+    if (data === undefined) {
+      response.failLocal('帖子卡片资料与请求不匹配');
+      return response;
+    }
+    response.data = data;
+    response.ok = true;
+    return response;
+  }
+
   async isThreadDeleted(device: TiebaDevice, session: TiebaSession, tid: number): Promise<boolean> {
     if (tid <= 0) {
       return false;
     }
     const res: ThreadDetailResponse =
       await this.fetchThreadDetail(device, session, tid, 1, 1);
-    return !res.ok && res.errorCode === ERRNO_THREAD_DELETED;
+    if (res.ok) { return false; }
+    if (res.errorCode === ERRNO_THREAD_DELETED) { return true; }
+    throw new Error('帖子状态暂时无法确认');
   }
 
   /**
@@ -1697,7 +1800,7 @@ export class TiebaApi {
     }
 
     device.clientVersion = TiebaVersion.SUB_POST;
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.SUB_POST}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.SUB_POST}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kz', String(tid)));
@@ -1705,7 +1808,7 @@ export class TiebaApi {
     params.push(new SignParam('pn', String(page)));
     params.push(new SignParam('rn', String(pageSize)));
 
-    const text: string | undefined = await this.postJsonText('/c/f/pb/floor', params, response);
+    const text: string | undefined = await this.postJsonText(client, '/c/f/pb/floor', params, response);
     if (text === undefined) {
       return response;
     }
@@ -1728,8 +1831,8 @@ export class TiebaApi {
     const signed: SignParam[] = await CryptoUtil.appendSign([
       new SignParam('_client_version', TiebaVersion.LATEST), new SignParam('bdusstoken', bduss)
     ], SignSalt.APP);
-    this.client.userAgent = `bdtb for Android ${TiebaVersion.LATEST}`;
-    const transport: HttpResult = await this.client.postForm(
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
+    const transport: HttpResult = await client.postForm(
       `https://${TiebaHost.APP}/c/s/login`, TiebaCommonParams.encodeForm(signed));
     if (!transport.ok) { response.transportError = transport.error; return response; }
     try {
@@ -1754,6 +1857,7 @@ export class TiebaApi {
   async agreePost(device: TiebaDevice, session: TiebaSession, tid: number, pid: number,
     agree: boolean, objType: AgreeObjType = AgreeObjType.POST,
     forumId: number = 0): Promise<AgreeResponse> {
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${AgreeParams.CLIENT_VERSION}`);
     const response: AgreeResponse = new AgreeResponse();
 
     if (tid <= 0) {
@@ -1801,7 +1905,7 @@ export class TiebaApi {
       + ` cookie=${AgreeParams.COOKIE} client_user_token=${uid > 0 ? 'present' : 'empty'}`;
 
     // 成功必须拿到 JSON 且 error_code 为 0；空体/非 JSON 一律判失败
-    const text: string | undefined = await this.postJsonText(
+    const text: string | undefined = await this.postJsonText(client,
       AgreeParams.PATH, params, response, AgreeParams.HOST, headers);
 
     if (text === undefined) {
@@ -1871,9 +1975,9 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = StoreParams.buildAdd(device, session, tid, pid);
-    const text: string | undefined = await this.postJsonText(StoreParams.ADD_PATH, params, response);
+    const text: string | undefined = await this.postJsonText(client, StoreParams.ADD_PATH, params, response);
     /*
      * 成功判定：postJsonText 只负责标记失败（transport/JSON/业务错误），
      * 拿到响应文本且没被标记失败就是成功——**必须显式置 ok=true**，
@@ -1912,10 +2016,10 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
     const uid: number = await this.accountUid(session);
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = StoreParams.buildRemove(device, session, tid, uid);
-    const text: string | undefined = await this.postJsonText(StoreParams.RM_PATH, params, response);
+    const text: string | undefined = await this.postJsonText(client, StoreParams.RM_PATH, params, response);
     // 同 addstore：拿到响应文本即成功（postJsonText 已把失败标好），必须显式置 ok
     if (text !== undefined) {
       response.ok = true;
@@ -1944,9 +2048,9 @@ export class TiebaApi {
       response.failLocal(deviceError);
       return response;
     }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = MemeEmojiParams.buildAll(device, session);
-    const text: string | undefined = await this.postJsonText(
+    const text: string | undefined = await this.postJsonText(client,
       MemeEmojiParams.ALL_PATH, params, response);
     if (text !== undefined) {
       response.ok = true;
@@ -1993,9 +2097,9 @@ export class TiebaApi {
       response.failLocal('pics 为空串：全量推送要么给 JSON 数组、要么给 all_delete');
       return response;
     }
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = MemeEmojiParams.buildCollect(device, session, pics, picUpdateTimeMs);
-    const text: string | undefined = await this.postJsonText(
+    const text: string | undefined = await this.postJsonText(client,
       MemeEmojiParams.COLLECT_PATH, params, response);
 
     if (text !== undefined) {
@@ -2050,10 +2154,10 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const body: Uint8Array = AddPostParams.wrapMultipart(
       AddPostParams.buildRequest(text, String(fid), forumName, String(tid), device, session, target, undefined, withTail));
-    const transport: HttpResult = await this.client.postBinary(
+    const transport: HttpResult = await client.postBinary(
       AddPostParams.url(TiebaHost.APP), body, AddPostParams.headers(session));
     if (!transport.ok) {
       response.transportError = transport.error;
@@ -2123,12 +2227,12 @@ export class TiebaApi {
       return response;
     }
 
-    this.client.userAgent = `bdtb for Android ${device.clientVersion}`;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = AddThreadParams.build(device, session, trimmedTitle, trimmedContent,
       fid, forum, nickname.trim(), topicId, isHide, contentStatement);
     // 与关注、点赞同一条通道：form + APP 盐签名，BDUSS/STOKEN/tbs 由公共参数进 body。
     // 免签 web 表单的写法在 110001 上撞过两次（见 AddThreadParams 注释），不再回退。
-    const text: string | undefined = await this.postJsonText(AddThreadParams.PATH, params, response);
+    const text: string | undefined = await this.postJsonText(client, AddThreadParams.PATH, params, response);
     if (text === undefined) {
       hilog.warn(0x0000, 'TiebaApi', 'thread add not accepted fid=%{public}d code=%{public}d local=%{public}s',
         fid, response.errorCode, response.localMessage);

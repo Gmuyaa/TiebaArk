@@ -1,6 +1,6 @@
 /** 评论下方的楼层、楼主回复提示与点赞操作行；详情模式保留左侧文字回复入口。 */
 
-import { AgreeState } from '../viewmodel/ThreadDetailVM';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { DetailTheme } from '../theme/Theme';
 
 @ComponentV2

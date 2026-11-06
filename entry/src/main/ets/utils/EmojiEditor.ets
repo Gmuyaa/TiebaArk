@@ -2,6 +2,18 @@ import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { emojiCodeFromReplyToken, emojiImageUrl } from '../model/ThreadDetail';
 import { ReplyEditorContent, ReplyEditorSpan, serializeReplyEditor } from '../model/ReplyEditor';
 
+/** 换肤只更新文字颜色，不重建 spans，不改变草稿、图片、选区或光标。 */
+export function updateEmojiEditorTextColor(controller: RichEditorController, textColor: ResourceColor): void {
+  const spans: Array<RichEditorImageSpanResult | RichEditorTextSpanResult> = controller.getSpans();
+  for (const span of spans) {
+    const text: RichEditorTextSpanResult = span as RichEditorTextSpanResult;
+    if (typeof text.value === 'string' && text.value.length > 0) {
+      controller.updateSpanStyle({ start: span.spanPosition.spanRange[0], end: span.spanPosition.spanRange[1],
+        textStyle: { fontColor: textColor } });
+    }
+  }
+}
+
 /** 评论和发帖统一从实际 spans 提取正文，图片显示与协议 token 分开。 */
 export function readEmojiEditor(controller: RichEditorController,
   memeTokens: Map<string, string>, imageTokens: Map<string, string>): ReplyEditorContent {

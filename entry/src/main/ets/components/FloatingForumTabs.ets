@@ -3,6 +3,7 @@ import { motionDuration } from '../common/appearance/MotionPolicy';
 import { motionStore } from '../common/appearance/MotionStore';
 import { MaterialTabs } from './MaterialTabs';
 import { common } from '@kit.AbilityKit';
+import { FrameCallback } from '@kit.ArkUI';
 import { ForumTab } from '../model/ThreadList';
 import { AppTheme } from '../theme/Theme';
 import { MaterialSlot } from '../common/material/MaterialConfig';
@@ -11,6 +12,12 @@ import { clampFloating, dockFloatingX, floatingBounds, holdingSide, HoldingSessi
 import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
 
 interface ForumTabsPoint { x: number; y: number; }
+
+class ForumSelectionFrame extends FrameCallback {
+  private ready: () => void;
+  constructor(ready: () => void) { super(); this.ready = ready; }
+  onIdle(_timeLeft: number): void { this.ready(); }
+}
 
 /** 分类浮层：视觉玻璃不参与触摸，横滑分类与长按移动各自仲裁。 */
 @ComponentV2
@@ -213,18 +220,45 @@ export struct FloatingForumTabs {
     const revision: number = ++this.selectionRevision;
     this.selectionId = this.selectedId;
     if (!motionStore.isOn(MotionEffect.SPRING) || !motionStore.isOn(MotionEffect.SCALE)) {
-      this.getUIContext().animateTo({ duration: motionDuration(220), curve: Curve.EaseOut }, (): void => {
-        this.selectionX = targetX;
-        this.selectionW = targetW;
-        this.selectionScaleY = 1;
-        this.selectionRestBlend = 1;
-      });
-      this.selectionFlowing = false;
+      // 普通位移使用真实圆角面；测量回报与旧动画收尾不能提前重置当前位置。
+      this.selectionFlowing = true;
+      this.selectionScaleY = 1;
+      this.selectionRestBlend = 1;
+      // selectedId 的 @Monitor 正在更新 V2 节点；先完成当前帧，避免终态被同批刷新直接发布。
+      const context: UIContext = this.getUIContext();
+      context.postFrameCallback(new ForumSelectionFrame((): void => {
+        if (!this.alive || revision !== this.selectionRevision) { return; }
+        if (!this.active || !this.expanded || !motionStore.isOn(MotionEffect.MOVE)) {
+          this.resetSelection(); return;
+        }
+        context.animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut,
+          onFinish: (): void => {
+            if (this.alive && revision === this.selectionRevision) { this.resetSelection(); }
+          }
+        }, (): void => {
+          // 等待期间字体测量可能更新几何，启动时读取最新目标。
+          this.selectionX = this.tabStart(this.selectedId);
+          this.selectionW = this.selectedWidth();
+        });
+      }));
       return;
     }
     this.selectionFlowing = true;
     // 先提交可见面交接，避免同一批关键帧把0→1合并后跳过流动层。
     this.getUIContext().animateTo({ duration: 0 }, (): void => { this.selectionRestBlend = 0; });
+    this.getUIContext().postFrameCallback(new ForumSelectionFrame((): void => {
+      if (!this.alive || revision !== this.selectionRevision) { return; }
+      if (!this.active || !this.expanded || !motionStore.isOn(MotionEffect.MOVE) ||
+        !motionStore.isOn(MotionEffect.SCALE) || !motionStore.isOn(MotionEffect.SPRING)) {
+        this.resetSelection(); return;
+      }
+      this.animateSelectionFlow(revision);
+    }));
+  }
+
+  private animateSelectionFlow(revision: number): void {
+    const targetX: number = this.tabStart(this.selectedId);
+    const targetW: number = this.selectedWidth();
     // 头部先探向目标，尾部暂留原位；拉长时稍微变扁，形成粘连的玻璃流体。
     const left: number = Math.min(this.selectionX, targetX);
     const right: number = Math.max(this.selectionX + this.selectionW, targetX + targetW);
@@ -458,12 +492,14 @@ export struct FloatingForumTabs {
                 .width(this.selectedWidth()).height(AppTheme.BAR_CONTENT_H - 8)
                 .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.None)
 
-                .position({ x: this.tabStart(this.selectedId), y: 4 })
+                // 材质布局位置固定；普通切换与流动面一样只改变渲染变换。
+                .position({ x: 0, y: 4 })
+                .translate({ x: this.selectionX, y: 0 })
                 .opacity(this.selectionVisible() ? this.selectionRestBlend : 0)
             Row({ space: 4 }) {
               ForEach(this.tabs, (tab: ForumTab, index: number) => {
                 Text(tab.name).fontSize(14).maxFontScale(1.25)
-                  .fontColor(tab.id === this.selectedId ? $r('app.color.app_accent_dark') : AppTheme.TEXT_MAIN)
+                  .fontColor(tab.id === this.selectedId ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN)
                   .fontWeight(tab.id === this.selectedId ? FontWeight.Bold : FontWeight.Normal)
                   .padding({ left: 12, right: 12 }).height(AppTheme.BAR_CONTENT_H - 8).borderRadius(24)
                   .opacity(this.fullyVisible(tab) ? 1 : 0)
@@ -485,20 +521,24 @@ export struct FloatingForumTabs {
             SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(16).maxFontScale(1)
               .fontWeight(FontWeight.Medium).fontColor([AppTheme.TEXT_MAIN])
           }.width(28).height(AppTheme.BAR_CONTENT_H).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-            .position({ x: 4, y: 0 }).opacity(this.hasLeft() ? 1 : 0)
+            .opacity(this.hasLeft() ? 1 : 0)
+            .animation({ duration: motionDuration(180, MotionEffect.FADE), curve: Curve.EaseOut })
             .translate({ x: this.hasLeft() ? 0 : -8 }).animation({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut })
+            .position({ x: 4, y: 0 })
             .accessibilityText('向左浏览分类')
           Row() {
             SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).maxFontScale(1)
               .fontWeight(FontWeight.Medium).fontColor([AppTheme.TEXT_MAIN])
           }.width(28).height(AppTheme.BAR_CONTENT_H).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-            .position({ x: this.controlWidth() - 32, y: 0 }).opacity(this.hasRight() ? 1 : 0)
+            .opacity(this.hasRight() ? 1 : 0)
+            .animation({ duration: motionDuration(180, MotionEffect.FADE), curve: Curve.EaseOut })
             .translate({ x: this.hasRight() ? 0 : 8 }).animation({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut })
+            .position({ x: this.controlWidth() - 32, y: 0 })
             .accessibilityText('向右浏览分类')
         }.width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).hitTestBehavior(HitTestMode.None)
       } else {
         Row({ space: 6 }) {
-          Text(this.label()).fontSize(14).maxFontScale(1).fontWeight(FontWeight.Medium).fontColor($r('app.color.app_accent_dark'))
+          Text(this.label()).fontSize(14).maxFontScale(1).fontWeight(FontWeight.Medium).fontColor(AppTheme.ACCENT_DARK)
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         }.width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).justifyContent(FlexAlign.Center)
           .accessibilityText(`当前分类${this.label()}，点击展开，长按拖动`)

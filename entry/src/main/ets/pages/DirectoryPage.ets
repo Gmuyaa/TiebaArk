@@ -3,7 +3,7 @@ import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { FollowButton } from '../components/FollowButton';
 import { followChanges } from '../viewmodel/FollowActionVM';
-import { authSession } from '../auth/AuthSession';
+import { authSession, AuthSession } from '../auth/AuthSession';
 /** 吧资料/吧规/吧务团队/关注/粉丝：同一共享导航栈中的独立内容页面。 */
 import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
@@ -11,7 +11,7 @@ import { PageHeader } from '../components/PageHeader';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { PostContentInline } from '../components/PostContentInline';
-import { DirectoryKind, DirectoryRoleGroup, DirectoryUser, ForumRuleSection, groupUsersByRole } from '../model/PageDirectory';
+import { DirectoryKind, DirectoryRoleGroup, DirectoryUser, ForumRuleSection, fanFollowTime, groupUsersByRole } from '../model/PageDirectory';
 import { ContentKind, ContentPiece } from '../model/ThreadDetail';
 import { formatCount } from '../model/UserProfile';
 import { DirectoryPageParams, NavigationService } from '../navigation/AppNavigation';
@@ -27,6 +27,11 @@ export struct DirectoryPage {
   @Local vm: DirectoryVM = new DirectoryVM();
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
+  @Local auth: AuthSession = authSession;
+  @Local removeDialogUid: number = 0;
+
+  @Monitor('auth.snapshot')
+  onAccountChanged(): void { void this.reload(); }
 
   private changes = followChanges;
   private relationshipRefreshPending: boolean = false;
@@ -37,9 +42,9 @@ export struct DirectoryPage {
       this.applyRelationshipRefresh();
     }
   }
-  @Monitor('vm.loading', 'vm.loadingMore')
+  @Monitor('vm.loading', 'vm.loadingMore', 'vm.removingUid')
   applyRelationshipRefresh(): void {
-    if (!this.relationshipRefreshPending || this.vm.loading || this.vm.loadingMore) { return; }
+    if (!this.relationshipRefreshPending || this.vm.loading || this.vm.loadingMore || this.vm.removingUid > 0) { return; }
     this.relationshipRefreshPending = false;
     this.reload();
   }
@@ -47,7 +52,15 @@ export struct DirectoryPage {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
   private kind(): DirectoryKind { return this.routeParams?.kind ?? 'forum'; }
+  private ownFans(): boolean {
+    return this.kind() === 'fans' && authSession.isLoggedIn() && this.routeParams?.id === authSession.snapshot.uid;
+  }
+  private listPreface(): string {
+    const text: string = this.vm.data.preface;
+    return this.kind() === 'fans' && text === '仅展示登录粉丝和正常账号' ? '' : text;
+  }
   private title(): string {
+    if (this.ownFans()) { return '全部粉丝'; }
     if (this.routeParams?.title) { return this.routeParams.title; }
     if (this.kind() === 'rules') { return '吧规'; }
     if (this.kind() === 'team') { return '吧务团队'; }
@@ -81,6 +94,26 @@ export struct DirectoryPage {
     NavigationService.openUser({ uid: user.uid, portrait: user.portrait, name: user.name });
   }
 
+  private async confirmRemoveFan(user: DirectoryUser): Promise<void> {
+    if (!this.ownFans() || !Number.isSafeInteger(user.uid) || user.uid <= 0 ||
+      this.removeDialogUid > 0 || this.vm.removingUid > 0) { return; }
+    const account: string = authSession.sessionKey();
+    const target: DirectoryVM = this.vm;
+    this.removeDialogUid = user.uid;
+    try {
+      const confirm = await this.getUIContext().getPromptAction().showDialog({
+        title: '移除粉丝', message: '移除粉丝后，对方将不再关注你，也不会给TA发送消息',
+        buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '确定', color: AppTheme.ACCENT }]
+      });
+      if (confirm.index !== 1 || account !== authSession.sessionKey() || !this.ownFans()) { return; }
+      const message: string = await target.removeFan(this.context(), user, account);
+      if (message.length > 0 && account === authSession.sessionKey()) {
+        this.getUIContext().getPromptAction().showToast({ message });
+      }
+    } catch (err) { /* 取消或关闭确认框不执行移除。 */ }
+    finally { this.removeDialogUid = 0; }
+  }
+
   @Builder
   PullHeader() { PullRefreshHeader({ active: this.refreshing || this.pullRefreshDragging }) }
 
@@ -89,7 +122,7 @@ export struct DirectoryPage {
       Column() {
         PageHeader({ title: this.title(), onBack: (): void => { NavigationService.back(); } })
         Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
-          List({ space: 12 }) {
+          List({ space: this.kind() === 'fans' ? 0 : 12 }) {
             if (this.vm.error.length > 0) {
               ListItem() {
                 PageState({ compact: true, title: '加载失败', message: this.vm.error, actionLabel: '重试',
@@ -140,11 +173,15 @@ export struct DirectoryPage {
                   ListItem() { PageState({ message: '暂无可展示的内容' }) }
                 }
               } else if (this.kind() !== 'forum') {
-                if (this.vm.data.preface.length > 0) {
-                  ListItem() { Text(this.vm.data.preface).fontColor(AppTheme.TEXT_SUB).fontSize(13).padding(16) }
+                if (this.listPreface().length > 0) {
+                  ListItem() { Text(this.listPreface()).fontColor(AppTheme.TEXT_SUB).fontSize(13).padding(16) }
                 }
                 ForEach(this.vm.data.users, (user: DirectoryUser) => {
-                  ListItem() { this.UserRow(user) }
+                  ListItem() {
+                    if (this.kind() === 'fans') { this.FanRow(user) }
+                    else { this.UserRow(user) }
+                  }.swipeAction({ end: this.ownFans() && user.uid > 0 ? (): void => { this.RemoveFanAction(user); } : undefined,
+                    edgeEffect: SwipeEdgeEffect.None })
                 }, (user: DirectoryUser) => `${user.uid}-${user.portrait}-${user.role}`)
                 if (this.vm.data.users.length === 0 && this.vm.error.length === 0) {
                   ListItem() { PageState({ message: '暂无可展示的内容' }) }
@@ -152,7 +189,7 @@ export struct DirectoryPage {
                 if (this.kind() === 'fans' || this.kind() === 'following') {
                   ListItem() {
                     ListFooter({ loading: this.vm.loadingMore, error: this.vm.pagingError,
-                      hasMore: this.vm.data.hasMore, endText: '已显示全部可见用户',
+                      hasMore: this.vm.data.hasMore, endText: this.vm.pagingNeedsRefresh ? '列表已变化，下拉刷新后继续查看' : '已显示全部可见用户',
                       onRetry: (): void => { void this.reload(true); } })
                   }
                 }
@@ -212,6 +249,36 @@ export struct DirectoryPage {
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding(20)
     .borderRadius(AppTheme.CARD_RADIUS).backgroundColor(AppTheme.CARD)
+  }
+
+  @Builder
+  FanRow(user: DirectoryUser) {
+    Row({ space: 12 }) {
+      Row({ space: 12 }) {
+        AvatarComponent({ url: user.avatar, avatarSize: 44, fallbackName: user.name })
+        Column({ space: 5 }) {
+          Text(user.name).fontSize(16).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(fanFollowTime(user.followTimeMs, Date.now(), this.ownFans()))
+            .fontSize(13).fontColor(AppTheme.TEXT_SUB).maxLines(2)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      }.layoutWeight(1).onClick(() => { this.openUser(user); })
+      FollowButton({ targetId: user.uid, portrait: user.portrait, targetName: user.name, fansStyle: this.ownFans() })
+    }.width('100%').padding({ left: 4, right: 4, top: 10, bottom: 10 })
+    .backgroundColor(AppTheme.BG).enabled(this.vm.removingUid !== user.uid)
+    .accessibilityDescription(this.ownFans() ? '左划可移除粉丝' : '')
+  }
+
+  @Builder
+  RemoveFanAction(user: DirectoryUser) {
+    Row() {
+      Text(this.vm.removingUid === user.uid ? '移除中' : '移除')
+        .fontSize(16).fontWeight(FontWeight.Medium).fontColor(AppTheme.NOTIFY_BADGE_TEXT)
+    }.width(80).height('100%').justifyContent(FlexAlign.Center)
+    .backgroundColor(AppTheme.NOTIFY_BADGE_BACKGROUND)
+    .enabled(this.vm.removingUid === 0 && this.removeDialogUid === 0)
+    .accessibilityGroup(true).accessibilityText('移除粉丝')
+    .onClick(() => { void this.confirmRemoveFan(user); })
   }
 
   @Builder

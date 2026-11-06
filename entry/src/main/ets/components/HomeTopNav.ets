@@ -14,7 +14,6 @@ import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import {
   DEFAULT_HOME_TOP_NAV_STYLE, HomeTopNavStyle, homeTopNavRowHeight, homeTopNavScrollTarget
 } from '../common/appearance/HomeTopNavStyle';
-import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { HomeChannelPills } from './HomeChannelPills';
 
 const CHANNEL_LABELS: string[] = ['关注', '推荐', '热榜'];
@@ -30,7 +29,6 @@ const CHANNEL_GAP: number = 6;
 /** 频道文字左右内距 */
 const CHANNEL_PADDING: number = 12;
 /** 选中底切换动画时长 */
-const ANIM_MS: number = 220;
 /** 独立搜索按钮尺寸 */
 const SEARCH_BOX: number = 48;
 /** 搜索图标字号 */
@@ -294,7 +292,7 @@ export struct HomeTopNav {
             .maxLines(1)
             .flexShrink(0)
             .fontWeight(this.selectedChannel === label ? FontWeight.Medium : FontWeight.Normal)
-            .fontColor(this.selectedChannel === label ? AppTheme.ACCENT : this.unselectedChannelColor())
+            .fontColor(this.selectedChannel === label ? AppTheme.ACCENT_DARK : this.unselectedChannelColor())
             .padding({ left: this.itemPadding(), right: this.itemPadding() })
             .onAreaChange((_old: Area, area: Area) => {
               this.updateChannelWidth(index, Number(area.width));
@@ -303,7 +301,6 @@ export struct HomeTopNav {
                 this.scheduleCorrection();
               }
             })
-            .animation({ duration: motionDuration(this.isIslands() ? ISLAND_ANIM_MS : ANIM_MS, MotionEffect.MOVE), curve: Curve.EaseInOut })
         }
         .width(this.channelWidth(index))
         .height(this.itemHeight())
@@ -314,7 +311,7 @@ export struct HomeTopNav {
     .height(this.itemHeight())
   }
 
-  private unselectedChannelColor(): Resource {
+  private unselectedChannelColor(): ResourceColor {
     return this.isIslands() ? AppTheme.TAB_PILL_TEXT
       : (this.style === HomeTopNavStyle.LIGHT_LABELS ? AppTheme.TEXT_MAIN : AppTheme.TAB_UNDERLINE_TEXT);
   }
@@ -598,11 +595,11 @@ export struct HomeTopNav {
       .alignItems(VerticalAlign.Center)
       .scale({ x: this.hidden ? 0.04 : 1, y: this.hidden ? 0.04 : 1,
         centerX: '50%', centerY: 0 })
-      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
+      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve(MotionEffect.SCALE) })
       .translate({ y: this.hidden ? -this.rowHeight() - 10 : 0 })
       .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
       .opacity(this.hidden ? 0 : 1)
-      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve() })
+      .animation({ duration: motionDuration(this.hidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve(MotionEffect.FADE) })
       // 隐藏后不留可点击的透明区域：整行退出命中测试，手势落到下层内容
       .hitTestBehavior(this.hidden ? HitTestMode.None : HitTestMode.Default)
     }
@@ -619,9 +616,8 @@ export struct HomeTopNavBackdrop {
       .width('100%').height(this.heightVp)
       .constraintSize({ minHeight: this.heightVp, maxHeight: this.heightVp })
       .flexShrink(0)
-      .linearGradient({ angle: 180, colors: themeModeStore.isDark
-        ? [['#D9101112', 0], ['#D9101112', this.solidUntil], ['#00101112', 1]]
-        : [['#D9F5F5F7', 0], ['#D9F5F5F7', this.solidUntil], ['#00F5F5F7', 1]] })
+      .linearGradient({ angle: 180, colors: [[AppTheme.HOME_TOP_BACKDROP, 0],
+        [AppTheme.HOME_TOP_BACKDROP, this.solidUntil], [AppTheme.HOME_TOP_BACKDROP_CLEAR, 1]] })
       .hitTestBehavior(HitTestMode.None)
   }
 }

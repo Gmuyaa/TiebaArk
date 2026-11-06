@@ -5,16 +5,14 @@ import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
 import { AppTheme } from '../theme/Theme';
 import { CloseIcon } from './CloseIcon';
-import { MotionEffect, MotionGroup } from '../common/appearance/MotionConfig';
+import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionStore } from '../common/appearance/MotionStore';
-import { motionSpringCurve } from '../common/appearance/MotionPolicy';
+import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 
 /** 圆直径默认值（vp）。全站统一 40，顶栏高度 52~60 都能容纳 */
 const DIAMETER: number = 40;
 /** 图标字号默认值（vp）。参考图里图形相对圆偏大，24 比 20 更接近 */
 const ICON_SIZE: number = 24;
-
-const ICON_COLOR: ResourceColor = AppTheme.TEXT_MAIN;
 
 /**
  * 必须是 **V2**（`@ComponentV2`）：`MaterialManager.mode` 是 `@Trace` 的，
@@ -72,18 +70,18 @@ export struct GlassCircleButton {
         Text(this.label)
           .fontSize(this.iconSize).maxFontScale(1)
           .fontWeight(FontWeight.Bold)
-          .fontColor(ICON_COLOR)
+          .fontColor(AppTheme.TEXT_MAIN)
           .textAlign(TextAlign.Center)
           .offset({ x: this.iconOffsetX, y: this.labelOffsetY })
           .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel : this.label)
       } else if (this.symbol.id === $r('sys.symbol.xmark').id) {
-        CloseIcon({ iconSize: this.iconSize, iconWeight: this.iconWeight, color: ICON_COLOR })
+        CloseIcon({ iconSize: this.iconSize, iconWeight: this.iconWeight, color: AppTheme.TEXT_MAIN })
           .width(this.iconSize).height(this.iconSize).offset({ x: this.iconOffsetX })
       } else {
         SymbolGlyph(this.symbol)
           .fontSize(this.iconSize).maxFontScale(1)
           .fontWeight(this.iconWeight)
-          .fontColor([ICON_COLOR])
+          .fontColor([AppTheme.TEXT_MAIN])
           .offset({ x: this.iconOffsetX })
       }
     }
@@ -95,11 +93,14 @@ export struct GlassCircleButton {
     .accessibilityText(this.accessibilityLabel.length > 0 ? this.accessibilityLabel :
       (!this.useCustomIcon && this.label.length === 0 && this.symbol.id === $r('sys.symbol.xmark').id ? '关闭' : this.label))
     .opacity(this.pressed && motionStore.isOn(MotionEffect.FADE) ? 0.8 : 1)
+    .animation({ duration: motionDuration(160, MotionEffect.FADE), curve: motionSpringCurve(MotionEffect.FADE) })
     .translate({ y: this.pressed && motionStore.isOn(MotionEffect.MOVE) ? 1 : 0 })
+    .animation({ duration: motionDuration(160, MotionEffect.MOVE), curve: motionSpringCurve(MotionEffect.MOVE) })
     .scale({ x: this.pressed && motionStore.isOn(MotionEffect.SCALE) ? 0.95 : 1,
       y: this.pressed && motionStore.isOn(MotionEffect.SCALE) ? 0.95 : 1 })
+    .animation({ duration: motionDuration(160, MotionEffect.SCALE), curve: motionSpringCurve(MotionEffect.SCALE) })
     .rotate({ angle: this.pressed && motionStore.isOn(MotionEffect.ROTATE) ? 4 : 0 })
-    .animation({ duration: motionStore.groupEnabled(MotionGroup.ARKUI) ? 160 : 0, curve: motionSpringCurve() })
+    .animation({ duration: motionDuration(160, MotionEffect.ROTATE), curve: motionSpringCurve(MotionEffect.ROTATE) })
     .hitTestBehavior(HitTestMode.None).zIndex(1)
     // 触屏点击由宿主手势接收；前景保留无障碍激活动作。
     .onClick((): void => { this.onTap(); })

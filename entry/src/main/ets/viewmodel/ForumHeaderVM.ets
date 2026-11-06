@@ -219,18 +219,30 @@ export class ForumHeaderVM {
     }
   }
 
+  /** 只有已确认关注才切换为签到；关注提交中的乐观值仍属于关注操作。 */
+  buttonIsSign(): boolean {
+    return this.follow.known && this.follow.following && !this.follow.pending;
+  }
+
+  buttonBusy(): boolean {
+    return this.follow.loading || this.follow.pending || (this.follow.verifying && !this.follow.known) ||
+      this.reading || this.signing;
+  }
+
+  /** 完成外观只使用今日已确认的签到状态，跨日旧缓存不能显示为已签到。 */
+  buttonCompleted(): boolean {
+    return this.buttonIsSign() && this.readDay === forumSignDay() && this.membership.signed === true;
+  }
+
   buttonLabel(): string {
-    if (this.follow.pending) { return '关注'; }
+    if (this.follow.pending) { return '关注中…'; }
     if ((this.follow.loading && !this.follow.known) || (this.reading && this.membership.signed === undefined)) { return '读取中…'; }
     if (this.follow.verifying && !this.follow.known) { return '核对中…'; }
     if (!this.follow.known) { return '重试关注状态'; }
     if (!this.follow.following) { return '关注'; }
     if (this.signing) { return '签到中…'; }
     if (this.readDay !== forumSignDay() || this.membership.signed === undefined) { return '重试签到状态'; }
-    if (this.membership.signed) {
-      return this.membership.continuousCount >= 0 ? `连签 ${this.membership.continuousCount} 天` : '已签到';
-    }
-    return this.membership.missedDays > 0 ? `漏签${this.membership.missedDays}天` : '签到';
+    return this.membership.signed ? '已签到' : '签到';
   }
 
   async activate(context: common.UIAbilityContext): Promise<string> {

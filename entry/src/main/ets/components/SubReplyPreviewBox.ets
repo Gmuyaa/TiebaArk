@@ -27,6 +27,9 @@ export struct SubReplyPreviewBox {
   @Param tid: number = 0;
   @Param parentPid: number = 0;
   @Param threadTitle: string = '';
+  @Param canDeleteSub: (sub: SubPostItem) => boolean = (_sub: SubPostItem): boolean => false;
+  @Param deletePending: boolean = false;
+  @Event onDeleteSub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   /** 已加载的楼中楼；仅在本组件统一截取预览条数。 */
   @Require @Param subPosts: SubPostItem[];
   /** 该楼层的回复总数，用于"查看 X 条回复 ›" */
@@ -86,6 +89,8 @@ export struct SubReplyPreviewBox {
         Column({ space: PREVIEW_ROW_GAP }) {
           ForEach(this.previewItems(), (sub: SubPostItem) => {
             CommentActionHost({ target: subCommentTarget(sub, this.tid, this.parentPid, this.threadTitle),
+              canDelete: this.canDeleteSub(sub), deletePending: this.deletePending,
+              onDelete: (): void => { this.onDeleteSub(sub); },
               content: (): void => { this.PreviewContent(sub); } })
           }, (sub: SubPostItem) => `${sub.pid}`)
         }

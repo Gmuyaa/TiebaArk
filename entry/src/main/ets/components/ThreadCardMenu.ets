@@ -5,6 +5,7 @@ import { common } from '@kit.AbilityKit';
 import { normalizeForumName } from '../model/ThreadBlock';
 import { ThreadBrief } from '../model/ThreadList';
 import { threadBlockActions } from '../viewmodel/ThreadBlockActions';
+import { DetailTheme } from '../theme/Theme';
 
 /**
  * 菜单里那颗按钮的展示名：卡片上显示的是「XX吧」，这里保持一致
@@ -48,8 +49,8 @@ async function confirmBlockForum(ui: UIContext, context: common.UIAbilityContext
     title: forumMenuLabel(thread.sourceForum),
     message: '该吧的帖子不再出现在本机列表里。屏蔽优先写服务端（官方客户端同步生效）；'
       + '服务端未确认时会退回本机屏蔽并明确提示。',
-    buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-      { text: '屏蔽', color: $r('app.color.detail_accent') }]
+    buttons: [{ text: '取消', color: DetailTheme.TEXT_SUB },
+      { text: '屏蔽', color: DetailTheme.ACCENT }]
   });
   if (confirm.index !== 1) { return; }
   const message: string = await threadBlockActions.blockForum(context, thread);
@@ -62,8 +63,8 @@ async function confirmBlockAuthor(ui: UIContext, context: common.UIAbilityContex
   const confirm = await ui.getPromptAction().showDialog({
     title: `屏蔽该用户`,
     message: `将${who}加入贴吧黑名单（拉黑）：限制关注、互动和私信，并隐藏其内容。`,
-    buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-      { text: '屏蔽', color: $r('app.color.detail_accent') }]
+    buttons: [{ text: '取消', color: DetailTheme.TEXT_SUB },
+      { text: '屏蔽', color: DetailTheme.ACCENT }]
   });
   if (confirm.index !== 1) { return; }
   const message: string = await threadBlockActions.blockAuthor(context, thread);
@@ -75,8 +76,8 @@ async function confirmHideThread(ui: UIContext, context: common.UIAbilityContext
   const confirm = await ui.getPromptAction().showDialog({
     title: '隐藏该贴',
     message: '仅在本机隐藏这一条帖子（不写服务端）。可在「设置 → 隐私设置 → 隐藏」里恢复。',
-    buttons: [{ text: '取消', color: $r('app.color.detail_text_secondary') },
-      { text: '隐藏', color: $r('app.color.detail_accent') }]
+    buttons: [{ text: '取消', color: DetailTheme.TEXT_SUB },
+      { text: '隐藏', color: DetailTheme.ACCENT }]
   });
   if (confirm.index !== 1) { return; }
   const message: string = await threadBlockActions.hideThread(context, thread);

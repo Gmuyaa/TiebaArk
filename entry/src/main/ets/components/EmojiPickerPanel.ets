@@ -3,6 +3,7 @@ import { SavedEmojiManager } from './SavedEmojiManager';
 import { SavedEmojiManagerVM } from '../viewmodel/SavedEmojiManagerVM';
 import { ImageTransitionSource } from './ImageTransition';
 import { SavedEmojiPreview } from './SavedEmojiPreview';
+import { motionContentCover } from '../common/appearance/MotionPolicy';
 import { EmojiPickerVM } from '../viewmodel/EmojiPickerVM';
 import { MemePicItem } from '../model/MemeEmoji';
 import { REPLY_EMOTICON_CODES, emojiImageUrl, emojiTokenFromUrl } from '../model/ThreadDetail';
@@ -15,10 +16,6 @@ const SAVED_EMOJI_COLUMNS: string = '1fr 1fr 1fr 1fr 1fr';
 const SAVED_EMOJI_VISIBLE_ROWS: number = 4;
 const SAVED_EMOJI_SIZE: number = 52.5;
 const REPLY_EMOJI_ROW_GAP: number = 14;
-// 两个分类共用面板高度，切换时输入卡位置稳定，放大的收藏图也能完整排下四行。
-export const EMOJI_GRID_MIN_HEIGHT: number = Math.max(
-  REPLY_EMOJI_SIZE * REPLY_EMOJI_VISIBLE_ROWS + REPLY_EMOJI_ROW_GAP * (REPLY_EMOJI_VISIBLE_ROWS - 1),
-  SAVED_EMOJI_SIZE * SAVED_EMOJI_VISIBLE_ROWS + REPLY_EMOJI_ROW_GAP * (SAVED_EMOJI_VISIBLE_ROWS - 1));
 const REPLY_EMOJI_TAB_SIZE: number = 36;
 const EMOJI_PANEL_TOP_PADDING: number = 8;
 const EMOJI_PANEL_BOTTOM_PADDING: number = 12;
@@ -44,6 +41,15 @@ export struct EmojiPickerPanel {
   private imageTransition: ImageTransitionSource = new ImageTransitionSource();
 
   aboutToDisappear(): void { this.preview.dispose(); this.manager.dispose(); }
+
+  private gridRowGap(size: number, rows: number): number {
+    // 短键盘先收紧行间距，尽量保留默认行数；空间仍不足时由 Grid 滚动。
+    return Math.max(0, Math.min(REPLY_EMOJI_ROW_GAP, (this.gridHeight - size * rows) / (rows - 1)));
+  }
+
+  private gridRowHeight(size: number, rows: number): number {
+    return Math.max(size, (this.gridHeight - this.gridRowGap(size, rows) * (rows - 1)) / rows);
+  }
 
   private openManager(): void {
     this.preview.dispose(); this.manager = new SavedEmojiManagerVM(); this.onManagerChange(true); this.managerOpen = true;
@@ -117,7 +123,7 @@ export struct EmojiPickerPanel {
                 .objectFit(ImageFit.Contain)
                 .interpolation(ImageInterpolation.High)
             }
-            .height((this.gridHeight - REPLY_EMOJI_ROW_GAP * (REPLY_EMOJI_VISIBLE_ROWS - 1)) / REPLY_EMOJI_VISIBLE_ROWS)
+            .height(this.gridRowHeight(REPLY_EMOJI_SIZE, REPLY_EMOJI_VISIBLE_ROWS))
             .id(`emoji-builtin-${code}`).accessibilityText(emojiTokenFromUrl(emojiImageUrl(`image_emoticon${code}`)))
             .onClick(() => {
               this.onBuiltin(code);
@@ -125,7 +131,7 @@ export struct EmojiPickerPanel {
           }, (code: number) => `emoticon_${code}`)
         }
         .columnsTemplate(REPLY_EMOJI_COLUMNS)
-        .rowsGap(REPLY_EMOJI_ROW_GAP)
+        .rowsGap(this.gridRowGap(REPLY_EMOJI_SIZE, REPLY_EMOJI_VISIBLE_ROWS))
         .height(this.gridHeight)
         .width('100%')
       } else {
@@ -140,6 +146,7 @@ export struct EmojiPickerPanel {
       bottom: EMOJI_PANEL_BOTTOM_PADDING + this.safeBottom
     })
     .bindContentCover($$this.managerOpen, this.Manager(), {
+      modalTransition: motionContentCover(),
       backgroundColor: AppTheme.CARD, enableSafeArea: false,
       onWillDismiss: (action: DismissContentCoverAction): void => { if (!this.manager.busy) { action.dismiss(); } },
       onDisappear: (): void => {
@@ -186,7 +193,7 @@ export struct EmojiPickerPanel {
           }.width(SAVED_EMOJI_SIZE).height(SAVED_EMOJI_SIZE).borderRadius(10)
             .border({ width: 1, color: AppTheme.EMOJI_PANEL_SUB_TEXT, style: BorderStyle.Dashed })
         }
-        .height((this.gridHeight - REPLY_EMOJI_ROW_GAP * (SAVED_EMOJI_VISIBLE_ROWS - 1)) / SAVED_EMOJI_VISIBLE_ROWS)
+        .height(this.gridRowHeight(SAVED_EMOJI_SIZE, SAVED_EMOJI_VISIBLE_ROWS))
         .id('emoji-saved-manage').accessibilityText('添加或整理收藏表情')
         .onClick((): void => { this.openManager(); })
         ForEach(this.picker.memePics, (item: MemePicItem, index: number) => {
@@ -199,7 +206,7 @@ export struct EmojiPickerPanel {
             .geometryTransition(this.imageTransition.id(this.picker.memeDisplayUrl(item), index), { follow: true })
             .renderFit(RenderFit.RESIZE_FILL).clip(true)
           }
-          .height((this.gridHeight - REPLY_EMOJI_ROW_GAP * (SAVED_EMOJI_VISIBLE_ROWS - 1)) / SAVED_EMOJI_VISIBLE_ROWS)
+          .height(this.gridRowHeight(SAVED_EMOJI_SIZE, SAVED_EMOJI_VISIBLE_ROWS))
           .id(`emoji-saved-${index}`).accessibilityText('收藏表情，长按放大查看')
           .onClick(() => {
             if (this.preview.canInsert()) { this.onMeme(item); }
@@ -218,7 +225,7 @@ export struct EmojiPickerPanel {
         }, (item: MemePicItem) => `meme_${item.picId}_${item.picUrl}`)
       }
       .columnsTemplate(SAVED_EMOJI_COLUMNS)
-      .rowsGap(REPLY_EMOJI_ROW_GAP)
+      .rowsGap(this.gridRowGap(SAVED_EMOJI_SIZE, SAVED_EMOJI_VISIBLE_ROWS))
       .height(this.gridHeight)
       .width('100%')
     }

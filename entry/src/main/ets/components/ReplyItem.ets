@@ -2,7 +2,7 @@
 
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { PostItem, SubPostItem } from '../model/ThreadDetail';
-import { AgreeState } from '../viewmodel/ThreadDetailVM';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
@@ -32,6 +32,11 @@ const SUB_BOX_GAP: number = 10;
 export struct ReplyItem {
   @Param tid: number = 0;
   @Param threadTitle: string = '';
+  @Param canDelete: boolean = false;
+  @Param deletePending: boolean = false;
+  @Param canDeleteSub: (sub: SubPostItem) => boolean = (_sub: SubPostItem): boolean => false;
+  @Event onDelete: () => void = (): void => {};
+  @Event onDeleteSub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   /** 一级回复 */
   @Require @Param item: PostItem;
   /** 作者是否是楼主 */
@@ -73,6 +78,7 @@ export struct ReplyItem {
 
   build() {
     CommentActionHost({ target: postCommentTarget(this.item, this.tid, this.threadTitle),
+      canDelete: this.canDelete, deletePending: this.deletePending, onDelete: this.onDelete,
       content: (): void => { this.ReplyContent(); } })
   }
 
@@ -143,6 +149,9 @@ export struct ReplyItem {
             parentPid: this.item.pid,
             threadTitle: this.threadTitle,
             subPosts: this.subPosts,
+            canDeleteSub: this.canDeleteSub,
+            deletePending: this.deletePending,
+            onDeleteSub: this.onDeleteSub,
             totalCount: this.subTotalCount,
             loading: this.subLoading,
             errorText: this.subErrorText,

@@ -94,6 +94,9 @@ export struct ForbiddenForumsPane {
       await this.vm.executePrepared(context, async (items: ForbiddenForum[]): Promise<void> => {
         await threadBlockStore.forgetBlockedForums(context, items.map((item: ForbiddenForum): string => item.name));
       });
+      if (this.vm.ownsCurrentAccount() && threadBlockStore.forumsSaveError.length > 0) {
+        this.vm.actionMessage += `；${threadBlockStore.forumsSaveError}`;
+      }
       if (this.vm.ownsCurrentAccount()) { this.toast(this.vm.actionMessage); }
     } catch (err) {
       if (this.vm.ownsCurrentAccount()) { this.toast('操作已取消'); }
@@ -132,6 +135,13 @@ export struct ForbiddenForumsPane {
               onRetry: (): void => { this.reload(); }
             })
           }
+          if (threadBlockStore.readError.length > 0) {
+            SettingsStatusLine({ kind: SettingsStatusKind.ERROR, message: threadBlockStore.readError,
+              retryLabel: '重新读取', onRetry: (): void => { void threadBlockStore.reload(this.context()); } })
+          }
+          if (threadBlockStore.forumsSaveError.length > 0) {
+            SettingsStatusLine({ kind: SettingsStatusKind.ERROR, message: threadBlockStore.forumsSaveError })
+          }
           this.BottomState()
           if (this.vm.actionMessage.length > 0) {
             SettingsStatusLine({ kind: SettingsStatusKind.LOADING, message: this.vm.actionMessage })
@@ -163,6 +173,8 @@ export struct ForbiddenForumsPane {
       }).layoutWeight(1)
       if (this.vm.selecting) {
         Checkbox().select(this.vm.isSelected(item.id)).width(20).height(20)
+          .selectedColor(AppTheme.ACCENT).unselectedColor(AppTheme.TEXT_MUTED)
+          .mark({ strokeColor: AppTheme.ON_ACCENT })
           .margin({ right: 16 }).enabled(!this.vm.actionBusy)
           .accessibilityText(`选择${item.name}`)
           .onChange((selected: boolean) => {

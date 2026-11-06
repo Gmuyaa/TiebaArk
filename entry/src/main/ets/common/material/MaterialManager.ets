@@ -6,6 +6,9 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { uiMaterial } from '@kit.ArkUI';
 import { MotionEffect } from '../appearance/MotionConfig';
 import { motionStore } from '../appearance/MotionStore';
+import { visualThemeStore } from '../appearance/VisualThemeStore';
+import { themeModeStore } from '../appearance/ThemeModeStore';
+import { AppTheme } from '../../theme/Theme';
 import {
   DEFAULT_MODE, HdsMaterialEffect, MaterialMode, MaterialSlot,
   MATERIAL_KEY_MODE, MATERIAL_KEY_HDS_LEVEL, MATERIAL_STORE,
@@ -16,7 +19,7 @@ import { DEFAULT_HDS_LEVEL, HdsMaterialLevelPref, normalizeHdsLevel } from './Ma
 const DOMAIN: number = 0x0000;
 const TAG: string = 'TiebaMaterial';
 
-/** 官方材质对象按「槽位 × 档位 × 阴影开关」缓存：`ImmersiveMaterial` 不必每次 build 都 new */
+/** 只保留当前配色、深浅模式、厚度和动效组合；12 个槽位 × 2 种阴影，最多 24 个材质对象。 */
 type MaterialCache = Map<string, uiMaterial.ImmersiveMaterial>;
 
 @ObservedV2
@@ -24,12 +27,16 @@ export class MaterialManager {
   /** 用户偏好档位。默认 `SYSTEM`（需求：当前阶段先使用统一默认值） */
   @Trace mode: MaterialMode = DEFAULT_MODE;
   @Trace hdsLevel: HdsMaterialLevelPref = DEFAULT_HDS_LEVEL;
+  @Trace saveError: string = '';
   /** 由已就绪页面的 UI 作用域检测；ArkUI 不可用时悬浮面才回退 HDS。 */
   @Trace useArkUI: boolean = true;
 
   private cache: MaterialCache = new Map<string, uiMaterial.ImmersiveMaterial>();
   private loaded: boolean = false;
-  private feedbackKey: string = '';
+  private appearanceKey: string = '';
+  private writes: Promise<void> = Promise.resolve();
+  private revisions: Map<string, number> = new Map<string, number>();
+  private failedKeys: Set<string> = new Set<string>();
 
   /**
    * 启动时读一次持久化偏好。
@@ -44,12 +51,16 @@ export class MaterialManager {
     if (this.loaded) {
       return;
     }
+    const modeRevision: number = this.revisions.get(MATERIAL_KEY_MODE) ?? 0;
+    const hdsRevision: number = this.revisions.get(MATERIAL_KEY_HDS_LEVEL) ?? 0;
     try {
       const store: preferences.Preferences = await preferences.getPreferences(context, MATERIAL_STORE);
       const raw: number = (await store.get(MATERIAL_KEY_MODE, DEFAULT_MODE as number)) as number;
-      this.mode = normalizeMode(raw);
       const rawHds: number = (await store.get(MATERIAL_KEY_HDS_LEVEL, DEFAULT_HDS_LEVEL as number)) as number;
-      this.hdsLevel = normalizeHdsLevel(rawHds);
+      if (modeRevision === (this.revisions.get(MATERIAL_KEY_MODE) ?? 0)) { this.mode = normalizeMode(raw); }
+      if (hdsRevision === (this.revisions.get(MATERIAL_KEY_HDS_LEVEL) ?? 0)) {
+        this.hdsLevel = normalizeHdsLevel(rawHds);
+      }
       this.loaded = true;
       hilog.info(DOMAIN, TAG, 'material mode loaded: %{public}s',
         this.describe());
@@ -84,32 +95,56 @@ export class MaterialManager {
   async setMode(mode: MaterialMode, context: common.UIAbilityContext): Promise<void> {
     const next: MaterialMode = normalizeMode(mode as number);
     if (next === this.mode) {
+      if (this.failedKeys.has(MATERIAL_KEY_MODE)) { await this.saveValue(MATERIAL_KEY_MODE, next, context); }
       return;
     }
     this.mode = next;
     this.cache.clear();
     hilog.info(DOMAIN, TAG, 'material mode -> %{public}s', `${next}(${modeLabel(next)})`);
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(context, MATERIAL_STORE);
-      await store.put(MATERIAL_KEY_MODE, next as number);
-      await store.flush();
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'material mode save failed: %{public}s', String(e));
-    }
+    await this.saveValue(MATERIAL_KEY_MODE, next, context);
   }
 
   /** 独立设置HDS等级，仅写入hdsLevel键，不改五档厚度及其缓存。 */
   async setHdsLevel(level: HdsMaterialLevelPref, context: common.UIAbilityContext): Promise<void> {
     const next: HdsMaterialLevelPref = normalizeHdsLevel(level as number);
-    if (next === this.hdsLevel) { return; }
-    this.hdsLevel = next;
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(context, MATERIAL_STORE);
-      await store.put(MATERIAL_KEY_HDS_LEVEL, next as number);
-      await store.flush();
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'HDS level save failed: %{public}s', String(e));
+    if (next === this.hdsLevel) {
+      if (this.failedKeys.has(MATERIAL_KEY_HDS_LEVEL)) {
+        await this.saveValue(MATERIAL_KEY_HDS_LEVEL, next, context);
+      }
+      return;
     }
+    this.hdsLevel = next;
+    await this.saveValue(MATERIAL_KEY_HDS_LEVEL, next, context);
+  }
+
+  /** 两种材质偏好独立记错；全部失败项重试成功后才清除提示。 */
+  private async saveValue(key: string, value: number, context: common.UIAbilityContext): Promise<void> {
+    const revision: number = (this.revisions.get(key) ?? 0) + 1;
+    this.revisions.set(key, revision);
+    const operation: Promise<void> = this.writes.then(async (): Promise<void> => {
+      const store: preferences.Preferences = await preferences.getPreferences(context, MATERIAL_STORE);
+      await store.put(key, value);
+      await store.flush();
+    });
+    this.writes = operation.catch(() => {});
+    try {
+      await operation;
+      if (revision === this.revisions.get(key)) { this.failedKeys.delete(key); }
+    } catch (e) {
+      if (revision === this.revisions.get(key)) { this.failedKeys.add(key); }
+      hilog.warn(DOMAIN, TAG, 'material preference save failed: %{public}s', String(e));
+    }
+    this.saveError = this.failedKeys.size > 0
+      ? '材质设置本次已生效，保存失败，重启后可能恢复旧值' : '';
+  }
+
+  async retrySave(context: common.UIAbilityContext): Promise<void> {
+    const retryMode: boolean = this.failedKeys.has(MATERIAL_KEY_MODE);
+    const retryHds: boolean = this.failedKeys.has(MATERIAL_KEY_HDS_LEVEL);
+    const operations: Promise<void>[] = [];
+    if (retryMode) { operations.push(this.saveValue(MATERIAL_KEY_MODE, this.mode, context)); }
+    if (retryHds) { operations.push(this.saveValue(MATERIAL_KEY_HDS_LEVEL, this.hdsLevel, context)); }
+    await Promise.all(operations);
   }
 
   /** 某槽位当前实际生效的厚度（SYSTEM按槽位默认解析） */
@@ -124,10 +159,10 @@ export class MaterialManager {
     }
     const interactive: boolean = motionStore.isOn(MotionEffect.DEFORMATION);
     const light: boolean = motionStore.isOn(MotionEffect.TOUCH_LIGHT);
-    const feedbackKey: string = `${interactive}:${light}`;
-    if (feedbackKey !== this.feedbackKey) {
+    const appearanceKey: string = `${visualThemeStore.theme}:${themeModeStore.isDark}:${this.mode}:${interactive}:${light}`;
+    if (appearanceKey !== this.appearanceKey) {
       this.cache.clear();
-      this.feedbackKey = feedbackKey;
+      this.appearanceKey = appearanceKey;
     }
     const mode: MaterialMode = this.modeOf(slot);
     const key: string = `${slot}:${mode}:${applyShadow}`;
@@ -137,8 +172,8 @@ export class MaterialManager {
     }
     const created: uiMaterial.ImmersiveMaterial = new uiMaterial.ImmersiveMaterial({
       style: immersiveStyleOf(mode), applyShadow: applyShadow,
-      interactive: interactive, lightEffect: light ? {} : null,
-      materialColor: slot === MaterialSlot.FORUM_TAB_SELECTION ? '#30569CFF' : undefined
+      interactive: interactive, lightEffect: light ? { color: AppTheme.TOUCH_LIGHT } : null,
+      materialColor: slot === MaterialSlot.FORUM_TAB_SELECTION ? AppTheme.MATERIAL_TINT : undefined
     });
     this.cache.set(key, created);
     return created;

@@ -97,7 +97,8 @@ export class AuthStore {
       return AuthStore.removeOne(alias);
     }
     try {
-      await AuthStore.removeOne(alias);
+      const removed: StoreResult = await AuthStore.removeOne(alias);
+      if (!removed.ok) { return removed; }
       await asset.add(AuthStore.addMap(alias, secret));
       return StoreResult.success();
     } catch (err) {
@@ -142,23 +143,29 @@ export class AuthStore {
    * 保存整份凭据。三个字段分别存：
    * 空字段会被删除，因此"登录时没有 stoken"不会留下上一次的旧值。
    */
-  static save(bundle: CredentialBundle): Promise<StoreResult> {
+  static save(bundle: CredentialBundle, current: () => boolean = (): boolean => true): Promise<StoreResult> {
     const snapshot: CredentialBundle = new CredentialBundle();
     snapshot.bduss = bundle.bduss; snapshot.stoken = bundle.stoken; snapshot.tbs = bundle.tbs;
-    return AuthStore.enqueue((): Promise<StoreResult> => AuthStore.saveNow(snapshot));
+    return AuthStore.enqueue((): Promise<StoreResult> => AuthStore.saveNow(snapshot, current));
   }
-  private static async saveNow(bundle: CredentialBundle): Promise<StoreResult> {
+  private static async saveNow(bundle: CredentialBundle, current: () => boolean): Promise<StoreResult> {
     await AuthStore.forumUidWrite;
-    await AuthStore.removeOne(AuthStore.FORUM_UID);
-    const bduss: StoreResult = await AuthStore.putOne(AuthAlias.BDUSS, bundle.bduss);
+    if (!current()) { return StoreResult.failure('登录操作已取消'); }
+    // BDUSS 是可恢复登录的提交标记；失败或进程中断时不得恢复半份新凭据。
+    const bduss: StoreResult = await AuthStore.removeOne(AuthAlias.BDUSS);
     if (!bduss.ok) {
       return bduss;
     }
+    const uid: StoreResult = await AuthStore.removeOne(AuthStore.FORUM_UID);
+    if (!uid.ok) { return uid; }
     const stoken: StoreResult = await AuthStore.putOne(AuthAlias.STOKEN, bundle.stoken);
     if (!stoken.ok) {
       return stoken;
     }
-    return AuthStore.putOne(AuthAlias.TBS, bundle.tbs);
+    const tbs: StoreResult = await AuthStore.putOne(AuthAlias.TBS, bundle.tbs);
+    if (!tbs.ok) { return tbs; }
+    if (!current()) { return StoreResult.failure('登录操作已取消'); }
+    return AuthStore.putOne(AuthAlias.BDUSS, bundle.bduss);
   }
 
   /** 读取整份凭据。任何一条读不到都按空串处理，由上层判断是否算"已登录" */
@@ -166,6 +173,7 @@ export class AuthStore {
     const bundle: CredentialBundle = new CredentialBundle();
     await AuthStore.enqueue(async (): Promise<StoreResult> => {
       bundle.bduss = await AuthStore.getOne(AuthAlias.BDUSS);
+      if (bundle.bduss.length === 0) { return StoreResult.success(); }
       bundle.stoken = await AuthStore.getOne(AuthAlias.STOKEN);
       bundle.tbs = await AuthStore.getOne(AuthAlias.TBS);
       return StoreResult.success();

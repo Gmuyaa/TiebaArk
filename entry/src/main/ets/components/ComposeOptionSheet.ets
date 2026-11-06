@@ -48,7 +48,8 @@ export struct ComposeOptionSheet {
   Status(message: string, retry: () => void) {
     Column({ space: 10 }) {
       Text(message).fontSize(14).fontColor(AppTheme.TEXT_SUB).textAlign(TextAlign.Center)
-      Button('重试').height(32).fontSize(13).onClick(retry)
+      Button('重试').height(32).fontSize(13).fontColor(AppTheme.ACCENT_DARK)
+        .backgroundColor(AppTheme.ACCENT_LIGHT).onClick(retry)
     }.width('100%').padding(20)
   }
 
@@ -103,7 +104,7 @@ export struct ComposeOptionSheet {
         Column({ space: 12 }) {
           if (this.vm.query.trim().length > 0) {
             this.ForumRows('search')
-            if (this.vm.searchLoading) { LoadingProgress().width(28).height(28) }
+            if (this.vm.searchLoading) { LoadingProgress().width(28).height(28).color(AppTheme.ACCENT) }
             if (this.vm.searchError.length > 0) {
               this.Status(this.vm.searchError, (): void => { void this.vm.search(this.vm.searchRows.length > 0); })
             } else if (!this.vm.searchLoading && !this.vm.searched) {
@@ -112,7 +113,8 @@ export struct ComposeOptionSheet {
               Text('没有找到相关吧').fontSize(14).fontColor(AppTheme.TEXT_SUB).padding(24)
             }
             if (this.vm.searchMore && !this.vm.searchLoading) {
-              Button('加载更多').onClick((): void => { void this.vm.search(true); })
+              Button('加载更多').fontColor(AppTheme.ACCENT_DARK).backgroundColor(AppTheme.ACCENT_LIGHT)
+                .onClick((): void => { void this.vm.search(true); })
             }
           } else {
             Column() {
@@ -126,7 +128,7 @@ export struct ComposeOptionSheet {
                 }, (title: string): string => title)
               }.width('100%').padding({ left: 12 })
               this.ForumRows('personal')
-              if (this.vm.forumsLoading) { LoadingProgress().width(28).height(28) }
+              if (this.vm.forumsLoading) { LoadingProgress().width(28).height(28).color(AppTheme.ACCENT) }
               if (!this.vm.forumsLoading && this.vm.forumError.length === 0 &&
                 (this.vm.forumTab === 0 ? this.vm.recent.length : this.vm.followed.length) === 0) {
                 Text(this.vm.forumTab === 0 ? '还没有最近浏览的吧' : '暂无关注的吧')
@@ -174,7 +176,7 @@ export struct ComposeOptionSheet {
         }.width('100%').padding(14)
         ForEach(this.vm.allTopics ? this.vm.topics : this.vm.topics.slice(0, 10),
           (item: HotTopicItem) => { this.TopicRow(item) }, (item: HotTopicItem): string => String(item.id))
-        if (this.vm.topicsLoading) { LoadingProgress().width(28).height(28) }
+        if (this.vm.topicsLoading) { LoadingProgress().width(28).height(28).color(AppTheme.ACCENT) }
         if (this.vm.topicError.length > 0) {
           this.Status(this.vm.topicError, (): void => { void this.vm.loadTopics(); })
         } else if (!this.vm.topicsLoading && this.vm.topics.length === 0) {
@@ -195,7 +197,7 @@ export struct ComposeOptionSheet {
       Stack() {
         Circle().width(20).height(20).fill(selected ? AppTheme.ACCENT : Color.Transparent)
           .stroke(selected ? AppTheme.ACCENT : AppTheme.DIVIDER).strokeWidth(1)
-        if (selected) { SymbolGlyph($r('sys.symbol.checkmark')).fontSize(13).fontColor([Color.White]) }
+        if (selected) { SymbolGlyph($r('sys.symbol.checkmark')).fontSize(13).fontColor([AppTheme.ON_ACCENT]) }
       }.width(24).height(24)
     }.width('100%').constraintSize({ minHeight: description.length > 0 ? 70 : 56 })
       .padding({ left: 20, right: 20, top: 10, bottom: 10 })

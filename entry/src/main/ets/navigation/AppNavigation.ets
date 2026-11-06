@@ -8,6 +8,7 @@ export class AppRoute {
   static readonly COMPOSE_PAGE: string = 'ComposePage';
   static readonly THREAD_DETAIL: string = 'ThreadDetail';
   static readonly FORUM_PAGE: string = 'ForumPage';
+  static readonly FORUM_SQUARE_PAGE: string = 'ForumSquarePage';
   static readonly SEARCH_RESULT_PAGE: string = 'SearchResultPage';
   static readonly SEARCH_PAGE: string = 'SearchPage';
   static readonly MY_LIST_PAGE: string = 'MyListPage';
@@ -52,7 +53,7 @@ export interface MyListParams {
   kind?: string;
 }
 
-/** 热榜话题网页仅使用服务端返回的 ID 和标题构造地址。 */
+/** 原生话题详情使用榜单提供的 ID 和标题读取公开话题数据。 */
 export interface HotTopicParams {
   topicId: number;
   topicName: string;
@@ -147,6 +148,15 @@ export class NavigationService {
     }
     // 搜索过程保持顶部原位；destination 的 NONE 不会关闭导航栈自身的过渡。
     stack.pushPathByName(AppRoute.SEARCH_RESULT_PAGE, params, false);
+  }
+
+  static openForumSquare(): void {
+    const stack: NavPathStack | null = NavigationService.stack;
+    if (stack === null) {
+      hilog.error(0x0, TAG, 'openForumSquare failed: stack not set');
+      return;
+    }
+    stack.pushPathByName(AppRoute.FORUM_SQUARE_PAGE, null);
   }
 
   static openSearchPage(): void {

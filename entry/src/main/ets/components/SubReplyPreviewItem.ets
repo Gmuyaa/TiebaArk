@@ -21,6 +21,7 @@ import {
 import { FontSizeScaleStore, fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
+import { VisualThemeStore, visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 预览里最多渲染多少张图；楼中楼预览只提示有图，不展开 */
@@ -36,6 +37,7 @@ export struct SubReplyPreviewItem {
   @Local badge: ThreadAuthorBadgeImage | undefined = undefined;
   @Local fontSettings: FontSizeScaleStore = fontScaleStore;
   @Local themeSettings: ThemeModeStore = themeModeStore;
+  @Local visualSettings: VisualThemeStore = visualThemeStore;
   private badgeSeq: number = 0;
   /** 一条楼中楼 */
   @Require @Param sub: SubPostItem;
@@ -56,7 +58,7 @@ export struct SubReplyPreviewItem {
   }
 
   @Monitor('fontSettings.pref', 'fontSettings.customSize', 'fontSettings.systemScale', 'themeSettings.isDark',
-    'sub')
+    'visualSettings.theme', 'sub')
   refreshBadge(): void {
     if (!this.sub.isThreadAuthor && !this.sub.replyToIsThreadAuthor) {
       return;
@@ -64,7 +66,7 @@ export struct SubReplyPreviewItem {
     const seq: number = ++this.badgeSeq;
     const scale: number = fontSizeScaleOf(this.fontSettings.pref, this.fontSettings.systemScale,
       this.fontSettings.customSize);
-    const key: string = `${this.themeSettings.isDark}:${scale}`;
+    const key: string = `${this.visualSettings.theme}:${this.themeSettings.isDark}:${scale}`;
     loadThreadAuthorBadgeImage(this.getUIContext(), key, (): void => {
       this.BadgeSnapshot();
     }).then((badge: ThreadAuthorBadgeImage) => {

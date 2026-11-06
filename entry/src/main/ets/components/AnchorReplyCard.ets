@@ -9,8 +9,8 @@
  */
 
 import { PostItem } from '../model/ThreadDetail';
-import { AgreeState } from '../viewmodel/ThreadDetailVM';
-import { DetailTheme } from '../theme/Theme';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
+import { AppTheme, DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
 import { ThreadAuthorBadge } from './ThreadAuthorBadge';
@@ -25,6 +25,9 @@ import { postCommentTarget } from '../model/CommentAction';
 export struct AnchorReplyCard {
   @Param tid: number = 0;
   @Param threadTitle: string = '';
+  @Param canDelete: boolean = false;
+  @Param deletePending: boolean = false;
+  @Event onDelete: () => void = (): void => {};
   @Event onOpenAuthor: () => void = (): void => {};
   @Require @Param item: PostItem;
   /** 作者是否是楼主 */
@@ -47,7 +50,7 @@ export struct AnchorReplyCard {
     Text(text)
       .fontSize(11)
       .flexShrink(0)
-      .fontColor(filled ? '#FFFFFF' : DetailTheme.ACCENT_DARK)
+      .fontColor(filled ? AppTheme.ON_ACCENT : DetailTheme.ACCENT_DARK)
       .backgroundColor(filled ? DetailTheme.ACCENT : DetailTheme.ACCENT_LIGHT)
       .borderRadius(4)
       .padding({ left: 5, right: 5, top: 2, bottom: 2 })
@@ -55,6 +58,7 @@ export struct AnchorReplyCard {
 
   build() {
     CommentActionHost({ target: postCommentTarget(this.item, this.tid, this.threadTitle),
+      canDelete: this.canDelete, deletePending: this.deletePending, onDelete: this.onDelete,
       content: (): void => { this.ReplyContent(); } })
   }
 

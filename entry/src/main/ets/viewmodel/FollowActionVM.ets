@@ -1,4 +1,5 @@
 import { confirmForumFollow, invalidateForumRead, readForumShared } from './ForumReadCache';
+import { FOLLOW_ACTION_CACHE_ENTRIES } from '../model/CachePolicy';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TiebaApi } from '../api/TiebaApi';
@@ -46,7 +47,6 @@ export class FollowActionVM {
   @Trace verificationError: string = '';
   @Trace self: boolean = false;
   private api: TiebaApi = new TiebaApi();
-  private readContext: common.UIAbilityContext | undefined = undefined;
   private owner: string;
   private sequence: number = 0;
   private readAt: number = 0;
@@ -78,10 +78,10 @@ export class FollowActionVM {
     this.loading = false;
   }
 
-  private async read(device: TiebaDevice, sequence: number = this.sequence): Promise<boolean | undefined> {
+  private async read(device: TiebaDevice, context: common.UIAbilityContext, sequence: number = this.sequence): Promise<boolean | undefined> {
     const session = authSession.session();
     if (this.kind === 'forum') {
-      const response = await readForumShared(this.readContext!, this.name, this.id, this.verifying);
+      const response = await readForumShared(context, this.name, this.id, this.verifying);
       return response.ok && response.data.forum.id === this.id ? response.data.forum.followed : undefined;
     }
     const response = await this.api.fetchPublicProfile(device, session, this.id, this.portrait);
@@ -95,11 +95,10 @@ export class FollowActionVM {
     if (this.loading || this.pending || this.verifying || this.self || !this.current()) { return ''; }
     if (this.known && Date.now() - this.readAt < READ_CACHE_MS) { return ''; }
     if (!authSession.isLoggedIn()) { this.known = true; this.following = false; return ''; }
-    this.readContext = context;
     const sequence: number = ++this.sequence;
     this.loading = true;
     try {
-      const value: boolean | undefined = await this.read(await DeviceIdentity.ensure(context), sequence);
+      const value: boolean | undefined = await this.read(await DeviceIdentity.ensure(context), context, sequence);
       if (!this.current() || sequence !== this.sequence) { return ''; }
       if (value === undefined) { return '无法读取关注状态，请重试'; }
       const corrected: boolean = !this.known && this.verificationError.length > 0 && value !== this.following;
@@ -116,7 +115,6 @@ export class FollowActionVM {
   /** 写响应已明确成功时，资料端点的核对与重试不再阻塞按钮。 */
   private async verify(device: TiebaDevice, target: boolean | undefined, sequence: number,
     context: common.UIAbilityContext): Promise<void> {
-    this.readContext = context;
     this.verifying = true;
     const started: number = Date.now();
     let value: boolean | undefined = undefined;
@@ -124,7 +122,7 @@ export class FollowActionVM {
       for (let attempt: number = 0; attempt < 3; attempt++) {
         if (attempt > 0) { await new Promise<void>((resolve) => { setTimeout(resolve, 500); }); }
         if (!this.current() || sequence !== this.sequence) { return; }
-        try { value = await this.read(device, sequence); } catch (err) { value = undefined; }
+        try { value = await this.read(device, context, sequence); } catch (err) { value = undefined; }
         if (!this.current() || sequence !== this.sequence) { return; }
         if (value !== undefined && (target === undefined || value === target)) {
           const changed: boolean = value !== this.following;
@@ -220,13 +218,32 @@ export class FollowActionVM {
   }
 }
 
-const actions: Map<string, FollowActionVM> = new Map<string, FollowActionVM>();
+// 弱索引保留仍被页面使用的共享实例；只有最近的有限条目被缓存强持有。
+const actions: Map<string, WeakRef<FollowActionVM>> = new Map();
+const recentActions: Map<string, FollowActionVM> = new Map();
+let actionOwner: string = '';
+function bindActions(): void {
+  const owner: string = accountKey();
+  if (owner !== actionOwner) {
+    actions.clear(); recentActions.clear(); actionOwner = owner;
+  }
+  actions.forEach((reference: WeakRef<FollowActionVM>, key: string): void => {
+    if (reference.deref() === undefined) { actions.delete(key); }
+  });
+}
 export function followAction(kind: FollowKind, id: number, portrait: string, name: string): FollowActionVM {
+  bindActions();
   const key: string = `${accountKey()}:${kind}:${id > 0 ? String(id) : profilePortrait(portrait)}`;
-  let action: FollowActionVM | undefined = actions.get(key);
+  let action: FollowActionVM | undefined = actions.get(key)?.deref();
   if (action === undefined) {
     action = new FollowActionVM(kind, id, portrait, name);
-    actions.set(key, action);
+    actions.set(key, new WeakRef<FollowActionVM>(action));
+  }
+  recentActions.delete(key);
+  recentActions.set(key, action);
+  while (recentActions.size > FOLLOW_ACTION_CACHE_ENTRIES) {
+    const oldest: string = Array.from(recentActions.keys())[0];
+    recentActions.delete(oldest);
   }
   return action;
 }

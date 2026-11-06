@@ -1,7 +1,7 @@
 import { VideoClip } from '../model/VideoClip';
 import { VideoPlaybackVM, videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { AppTheme } from '../theme/Theme';
-import { sliderMaterial } from '../common/appearance/MotionPolicy';
+import { sliderMaterial, motionContentCover } from '../common/appearance/MotionPolicy';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
 import { common } from '@kit.AbilityKit';
 import { VideoWindowPolicy } from '../utils/VideoWindowPolicy';
@@ -112,7 +112,7 @@ export struct VideoPlayer {
       }.width('100%')
       if (this.active() && this.vm.durationMs > 0) {
         Slider({ value: this.progress(), min: 0, max: this.vm.durationMs })
-          .systemMaterial(sliderMaterial())
+          .systemMaterial(sliderMaterial(immersive))
           .enabled(!this.vm.seeking && (this.vm.state === 'playing' || this.vm.state === 'paused' || this.vm.state === 'completed'))
           .onChange((value: number, mode: SliderChangeMode) => {
             if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) { this.previewMs = value; this.dragging = true; }
@@ -159,7 +159,7 @@ export struct VideoPlayer {
         if (this.active() && this.vm.interruptionNotice.length > 0) { Text(this.vm.interruptionNotice).fontSize(12).fontColor(Color.White) }
         if (this.windowNotice.length > 0) { Text(this.windowNotice).fontSize(12).fontColor(Color.White) }
         Slider({ value: this.active() ? this.progress() : 0, min: 0, max: Math.max(1, this.vm.durationMs) })
-          .systemMaterial(sliderMaterial())
+          .systemMaterial(sliderMaterial(true))
           .enabled(this.active() && !this.vm.seeking && this.vm.durationMs > 0 && ['playing', 'paused', 'completed'].indexOf(this.vm.state) >= 0)
           .blockColor(Color.White).selectedColor(Color.White).trackColor('#66FFFFFF').height(28)
           .blockSize({ width: 7, height: 7 }).trackThickness(2)
@@ -190,6 +190,7 @@ export struct VideoPlayer {
       this.Controls()
     }.width('100%').borderRadius(12).clip(true)
       .bindContentCover(this.fullscreen, this.Fullscreen(), { enableSafeArea: false, backgroundColor: Color.Black,
+        modalTransition: motionContentCover(),
         onWillDismiss: (action: DismissContentCoverAction): void => { action.dismiss(); },
         onDisappear: (): void => { this.setFullscreen(false); this.useInline(); } })
     }

@@ -6,6 +6,14 @@ import { common } from '@kit.AbilityKit';
 const STORE_NAME: string = 'tieba_browse_history';
 const KEY_HISTORY: string = 'items';
 
+// 所有读改写共用队列，清空也必须排在已开始的写入之后。
+let historyWrite: Promise<void> = Promise.resolve();
+function enqueueHistory<T>(write: () => Promise<T>): Promise<T> {
+  const pending: Promise<T> = historyWrite.then(write, write);
+  historyWrite = pending.then((): void => {}, (): void => {});
+  return pending;
+}
+
 /** 历史上限。超出后从最旧的（尾部）开始淘汰 */
 export const BROWSE_HISTORY_MAX: number = 200;
 
@@ -91,6 +99,11 @@ export function mergeBrowseEntry(existing: BrowseItem, incoming: BrowseItem): Br
  */
 export async function addBrowseHistory(context: common.UIAbilityContext,
   item: BrowseItem): Promise<BrowseItem[]> {
+  return enqueueHistory((): Promise<BrowseItem[]> => addBrowseHistoryNow(context, item));
+}
+
+async function addBrowseHistoryNow(context: common.UIAbilityContext,
+  item: BrowseItem): Promise<BrowseItem[]> {
   if (item.tid <= 0) {
     return loadBrowseHistory(context);
   }
@@ -125,6 +138,11 @@ export async function addBrowseHistory(context: common.UIAbilityContext,
 
 export async function markBrowseDeleted(context: common.UIAbilityContext,
   tid: number): Promise<boolean> {
+  return enqueueHistory((): Promise<boolean> => markBrowseDeletedNow(context, tid));
+}
+
+async function markBrowseDeletedNow(context: common.UIAbilityContext,
+  tid: number): Promise<boolean> {
   if (tid <= 0) {
     return false;
   }
@@ -152,6 +170,10 @@ export async function markBrowseDeleted(context: common.UIAbilityContext,
 
 /** 清空全部浏览历史 */
 export async function clearBrowseHistory(context: common.UIAbilityContext): Promise<void> {
+  return enqueueHistory((): Promise<void> => clearBrowseHistoryNow(context));
+}
+
+async function clearBrowseHistoryNow(context: common.UIAbilityContext): Promise<void> {
   try {
     const store: preferences.Preferences = await preferences.getPreferences(context, STORE_NAME);
     await store.put(KEY_HISTORY, '');

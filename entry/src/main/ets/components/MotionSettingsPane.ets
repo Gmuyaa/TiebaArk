@@ -37,13 +37,13 @@ export struct MotionSettingsPane {
   build() {
     Column() {
       SettingsCard({ content: (): void => { this.Master(); } })
-      SettingsNote({ text: '关闭总开关会保留各项选择，重新开启后恢复。' })
       SettingsGroupTitle({ title: 'ArkUI' })
       SettingsCard({ content: (): void => { this.GroupRows(MotionGroup.ARKUI, ARKUI_MOTIONS); } })
-      SettingsNote({ text: '系统弹出动效包含非线性形变与边缘流光。滑动粒子关闭后使用常规滑块，实际光效随设备和系统设置变化。' })
       SettingsGroupTitle({ title: 'HDS' })
       SettingsCard({ content: (): void => { this.GroupRows(MotionGroup.HDS, HDS_MOTIONS); } })
-      SettingsNote({ text: '光源与流光用于沉浸按钮和胶囊的交互；滚动模糊用于页面顶栏。' })
+      SettingsNote({ text: '实际动效随设备和系统设置变化。' })
+      if (this.prefs.systemReducedMotion) { SettingsNote({ text: '系统已开启减少动态效果，应用自定义过渡已简化。' }) }
+      if (this.prefs.systemMotionError.length > 0) { SettingsNote({ text: this.prefs.systemMotionError }) }
       if (this.prefs.saveError.length > 0) { SettingsNote({ text: this.prefs.saveError }) }
     }.width('100%')
   }

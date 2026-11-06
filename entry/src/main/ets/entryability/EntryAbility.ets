@@ -1,4 +1,5 @@
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { applyNativeTheme } from '../theme/NativeTheme';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
@@ -38,6 +39,7 @@ export default class EntryAbility extends UIAbility {
     themeModeStore.load(this.context);
     smartReachStore.load(this.context);
     motionStore.load(this.context);
+    motionStore.startSystemTracking();
 
     fontScaleStore.load(this.context);
 
@@ -83,6 +85,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    motionStore.stopSystemTracking();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onDestroy');
   }
 
@@ -96,6 +99,9 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Succeeded in loading the content.');
+      visualThemeStore.setThemeRefresher(applyNativeTheme);
+      themeModeStore.setPaletteRefresher(applyNativeTheme);
+      applyNativeTheme();
     });
 
     windowStage.getMainWindow().then((win: window.Window) => {
@@ -114,6 +120,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    visualThemeStore.setThemeRefresher(undefined);
+    themeModeStore.setPaletteRefresher(undefined);
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
@@ -139,6 +147,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    motionStore.startSystemTracking();
     smartReachStore.foreground = true;
     foregroundRefresh.onForeground();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onForeground');

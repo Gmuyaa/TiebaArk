@@ -4,7 +4,9 @@ import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
-import { floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession } from '../model/SmartReach';
+import {
+  floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession, floatingButtonHitRegion
+} from '../model/SmartReach';
 import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
 
 /** 页面尺寸坐标系内的48vp按钮；握姿只换边，拖拽松手吸附最近侧边，保留高度。 */
@@ -164,13 +166,13 @@ export struct ForumRefreshButton {
 
   @Builder
   Button(left: boolean) {
-    // 材质承载器内部手势不参与拖拽仲裁，外层统一处理点击与移动。
+    // 整个材质子树退出命中测试，触控区外的手势交给底下的列表。
     Stack() {
       GlassCircleButton({ symbol: $r('sys.symbol.arrow_clockwise'), diameter: 48, iconSize: 24 })
-        .hitTestBehavior(HitTestMode.None)
+        .hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
     }
       .width(48).height(48)
-      .hitTestBehavior(HitTestMode.Block)
+      .responseRegion(floatingButtonHitRegion(48))
       .id('forumRefreshButton')
       .position({ x: this.x, y: this.y })
       .opacity(this.busy ? 0.6 : 1)

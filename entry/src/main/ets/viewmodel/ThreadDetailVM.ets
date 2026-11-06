@@ -3,12 +3,12 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  AgreeResponse, ReplyResponse, StoreOpResponse, SubPostResponse,
+  ApiResult, ReplyResponse, StoreOpResponse, SubPostResponse,
   ThreadDetailResponse, TiebaApi
 } from '../api/TiebaApi';
 import {
-  copyPostItem, isAgreeSupported, PostItem, ReplySortType, resolveAgreeCount, resolveAgreeLiked,
-  resolveForumName, SubPostItem, SubPostThreadState, ThreadDetail, syncSubPostThreadStates, unsupportedAgreeTip
+  copyPostItem, PostItem, ReplySortType,
+  resolveForumName, SubPostItem, SubPostPage, SubPostThreadState, ThreadDetail, syncSubPostThreadStates
 } from '../model/ThreadDetail';
 import { MemePicItem } from '../model/MemeEmoji';
 import { subReplyContent } from '../model/ReplyEditor';
@@ -16,63 +16,17 @@ import { EmojiPickerVM } from './EmojiPickerVM';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { AddPostTarget, AgreeObjType, TiebaDevice, TiebaSession } from '../net/TiebaParams';
 import { authSession } from '../auth/AuthSession';
+import { AgreeActionVM, AgreeState, AgreeTarget } from './AgreeActionVM';
+import { noteContentDeleted } from './ContentDeletionRevision';
 
 /** 每页楼层数。服务端实测会按自己的 page_size 返回，这里只是请求意图 */
 const REQUEST_PAGE_SIZE: number = 30;
 /** 每页楼中楼条数。与详情页一样，服务端可能按自己的 page_size 返回 */
 const SUB_POST_PAGE_SIZE: number = 30;
 
-const AGREE_CONFIRM_DELAY_MS: number = 3000;
-
 const FLOW_TAG: string = 'AgreeFlow';
 const FLOW_DOMAIN: number = 0x0000;
 const FLOW_FLAG: (v: boolean) => number = (v: boolean): number => v ? 1 : 0;
-
-/** 单层回复的可观察点赞状态，供相关组件共享。 */
-@ObservedV2
-export class AgreeState {
-  /** confirmed：服务端权威状态（来自重新读取的 `agree.has_agree` 与 `agree.agree_num`） */
-  @Trace isAgreed: boolean = false;
-  @Trace count: number = 0;
-  /**
-   * optimistic：本地"还没被服务端确认"的那次翻转。
-   * 与服务端值做 XOR 得到显示值：确认读回后会清零，显示回到服务端真值。
-   */
-  @Trace toggled: boolean = false;
-  /** opAgree 写请求在途；仅供状态展示，点击仍可即时反转。 */
-  @Trace pending: boolean = false;
-
-  constructor(agreed: boolean, count: number) {
-    this.isAgreed = agreed;
-    this.count = count;
-  }
-
-  /** 界面显示的点赞态：confirmed 值 + optimistic 翻转 */
-  liked(): boolean {
-    return resolveAgreeLiked(this.isAgreed, this.toggled);
-  }
-
-  /** 界面显示的点赞数：confirmed 数值 + optimistic 翻转的 ±1，不为负 */
-  displayCount(): number {
-    return resolveAgreeCount(this.count, this.isAgreed, this.toggled);
-  }
-}
-
-/** 同一点赞目标的串行写入：只保留用户最后一次点击意图。 */
-class AgreeWriteState {
-  owner: string = authSession.sessionKey();
-  desired: boolean;
-  expected: boolean;
-  state: AgreeState;
-  seq: number;
-
-  constructor(desired: boolean, expected: boolean, state: AgreeState, seq: number) {
-    this.desired = desired;
-    this.expected = expected;
-    this.state = state;
-    this.seq = seq;
-  }
-}
 
 @ObservedV2
 export class ThreadDetailVM {
@@ -118,6 +72,8 @@ export class ThreadDetailVM {
   @Trace storePending: boolean = false;
 
   @Trace replyPending: boolean = false;
+  @Trace deletePending: boolean = false;
+  @Trace threadDeleted: boolean = false;
   /**
    * 最近一次**发表成功**的楼层 pid（0 = 还没有）。
    *
@@ -170,17 +126,21 @@ export class ThreadDetailVM {
    * 因此这里只做 `set`，从不在同 pid 上换新实例。
    */
   private agreeStates: Map<number, AgreeState> = new Map<number, AgreeState>();
-  /** 同一协议目标一次只发一笔写入，连点只更新 desired，响应后按需发下一笔。 */
-  private agreeWrites: Map<string, AgreeWriteState> = new Map<string, AgreeWriteState>();
-  /**
-   * 每层楼的**确认读回代次**：受理后安排 3s 读回；刷新或重载时旧读回作废。
-   */
-  private agreeConfirmSeq: Map<number, number> = new Map<number, number>();
+  private agreeActions: AgreeActionVM = new AgreeActionVM();
   /** 请求版本号。每次"重来一次"的操作（首次加载 / 刷新 / 切排序）都 +1，
    * 请求返回时比对：版本号对不上说明期间又发起了新请求，旧结果直接丢弃，
    * 避免慢响应覆盖新状态造成数据串页。
    */
   private requestSeq: number = 0;
+  private disposed: boolean = false;
+  private deleteOperation: number = 0;
+  /** 删除一级评论会让后续页前移，续页先补读当前末页以免跳过移入的评论。 */
+  private rereadPageAfterDelete: number = 0;
+  /** 最多一个待同步删除目标，直到所属页不再回显才解除；不保存内容、不落盘。 */
+  private deletedPid: number = 0;
+  private deletedParentPid: number = 0;
+  private deletedPage: number = 1;
+  private deletedSort: ReplySortType = ReplySortType.ASC;
 
   forumNameHint: string = '';
 
@@ -197,7 +157,29 @@ export class ThreadDetailVM {
    */
   private absorbDetail(source: ThreadDetail): ThreadDetail {
     source.forumName = resolveForumName(source.forumName, this.forumNameHint);
+    source.posts = this.filterDeletedPosts(source.posts);
     return source;
+  }
+
+  private filterDeletedPosts(posts: PostItem[]): PostItem[] {
+    return this.deletedPid > 0 && this.deletedParentPid === 0 ?
+      posts.filter((post: PostItem): boolean => post.pid !== this.deletedPid) : posts;
+  }
+
+  private finishDeletionSync(): void {
+    this.deletedPid = 0;
+    this.deletedParentPid = 0;
+    if (this.errorText.startsWith('评论已删除，')) { this.errorText = ''; }
+  }
+
+  private deletionPageMatches(currentPage: number, totalPage: number, requested: number): boolean {
+    return currentPage === requested || (totalPage > 0 && totalPage < requested && currentPage === totalPage);
+  }
+
+  private updateDeletedTotalPage(totalPage: number): void {
+    if (totalPage <= 0) { return; }
+    this.knownTotalPage = totalPage;
+    if (this.rereadPageAfterDelete > totalPage) { this.rereadPageAfterDelete = totalPage; }
   }
 
   /**
@@ -205,11 +187,16 @@ export class ThreadDetailVM {
    * 失败时保留 errorText 供界面展示，不抛异常。
    */
   async load(context: common.UIAbilityContext, tid: number, targetPid: number = 0): Promise<void> {
+    if (this.deletePending) { return; }
     if (tid <= 0) {
       this.errorText = '帖子 id 无效';
       return;
     }
     const sameThread: boolean = this.tid === tid;
+    if (!sameThread) { this.deletedPid = 0; this.deletedParentPid = 0; }
+    this.disposed = false;
+    this.threadDeleted = false;
+    this.rereadPageAfterDelete = 0;
     const previousSubPids: number[] = sameThread ? this.readSubPostIds() : [];
     this.tid = tid;
     this.loading = true;
@@ -222,6 +209,9 @@ export class ThreadDetailVM {
 
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (sameThread && this.deletedPid > 0) {
+        await this.confirmPendingDeletion(device, this.currentSession(), (): boolean => seq === this.requestSeq);
+      }
       let targetPage: number = 0;
       let response: ThreadDetailResponse = await this.api.fetchThreadDetail(
         device, this.currentSession(), tid, 1, REQUEST_PAGE_SIZE, this.sortType, targetPid);
@@ -302,7 +292,7 @@ export class ThreadDetailVM {
    * 只替换回复列表并重置分页、楼中楼状态。
    */
   async refresh(context: common.UIAbilityContext): Promise<void> {
-    if (this.tid <= 0 || this.loading || this.isRefreshing || this.isLoadingMore ||
+    if (this.disposed || this.deletePending || this.threadDeleted || this.tid <= 0 || this.loading || this.isRefreshing || this.isLoadingMore ||
       this.isSwitchingSort) {
       return;
     }
@@ -311,6 +301,7 @@ export class ThreadDetailVM {
       return;
     }
     this.isRefreshing = true;
+    this.rereadPageAfterDelete = 0;
     const previousSubPids: number[] = this.readSubPostIds();
     this.errorText = '';
     this.requestSeq++;
@@ -318,6 +309,9 @@ export class ThreadDetailVM {
 
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (this.deletedPid > 0) {
+        await this.confirmPendingDeletion(device, this.currentSession(), (): boolean => seq === this.requestSeq);
+      }
       const requestPage: number = this.firstPageForSort(this.sortType);
       const requestSort: ReplySortType = this.sortType;
       const response: ThreadDetailResponse = await this.api.fetchThreadDetail(
@@ -365,7 +359,7 @@ export class ThreadDetailVM {
    * 用条数推算页码迟早对不上。
    */
   async loadMore(context: common.UIAbilityContext): Promise<void> {
-    if (this.loading || this.isRefreshing || this.isLoadingMore || this.isSwitchingSort ||
+    if (this.disposed || this.deletePending || this.threadDeleted || this.loading || this.isRefreshing || this.isLoadingMore || this.isSwitchingSort ||
       !this.hasMore || this.loadedPage <= 0) {
       return;
     }
@@ -377,8 +371,9 @@ export class ThreadDetailVM {
 
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
-      const nextPage: number = this.sortType === ReplySortType.DESC
-        ? this.loadedPage - 1 : this.loadedPage + 1;
+      if (seq !== this.requestSeq || this.disposed || this.threadDeleted) { return; }
+      const nextPage: number = this.rereadPageAfterDelete > 0 ? this.rereadPageAfterDelete :
+        (this.sortType === ReplySortType.DESC ? this.loadedPage - 1 : this.loadedPage + 1);
       const response: ThreadDetailResponse = await this.api.fetchThreadDetail(
         device, this.currentSession(), this.tid, nextPage, REQUEST_PAGE_SIZE, requestSort);
       if (requestSort !== this.sortType || seq !== this.requestSeq) {
@@ -392,7 +387,8 @@ export class ThreadDetailVM {
       }
 
       // 只追加尚未出现的 pid，避免服务端重复页造成重复楼层。
-      this.posts = this.mergePostsByPid(this.posts, response.data.posts);
+      this.posts = this.mergePostsByPid(this.posts, this.filterDeletedPosts(response.data.posts));
+      this.rereadPageAfterDelete = 0;
       this.rememberPostPages(response.data.posts, response.data.page.currentPage, false);
       this.updatePaging(response.data.page.currentPage, response.data.page.totalPage,
         response.data.page.hasMore);
@@ -401,9 +397,9 @@ export class ThreadDetailVM {
       this.syncSubStates(this.posts, false);
     } catch (err) {
       const e: Error = err as Error;
-      this.errorText = `加载失败：${e.message}`;
+      if (seq === this.requestSeq) { this.errorText = `加载失败：${e.message}`; }
     } finally {
-      this.isLoadingMore = false;
+      if (seq === this.requestSeq) { this.isLoadingMore = false; }
     }
   }
 
@@ -446,7 +442,7 @@ export class ThreadDetailVM {
    * 倒序从最后一页开始并逐页递减；不会对当前已加载页做 reverse。
    */
   async switchReplySort(context: common.UIAbilityContext, newType: ReplySortType): Promise<void> {
-    if (newType === this.sortType || this.tid <= 0 || this.loading || this.isRefreshing ||
+    if (this.disposed || this.deletePending || this.threadDeleted || newType === this.sortType || this.tid <= 0 || this.loading || this.isRefreshing ||
       this.isLoadingMore || this.isSwitchingSort || this.posts.length === 0) {
       return;
     }
@@ -458,6 +454,7 @@ export class ThreadDetailVM {
     const previousPage: number = this.loadedPage;
     const previousHasMore: boolean = this.hasMore;
     this.sortType = newType;
+    this.rereadPageAfterDelete = 0;
     this.isSwitchingSort = true;
     this.errorText = '';
     this.requestSeq++;
@@ -517,6 +514,7 @@ export class ThreadDetailVM {
 
   /** 过滤响应里可能重复携带的主帖，并把新回复接到现有主帖后。 */
   private replaceRepliesKeepingMain(incoming: PostItem[]): void {
+    incoming = this.filterDeletedPosts(incoming);
     if (this.posts.length === 0) {
       this.posts = incoming;
       return;
@@ -560,6 +558,7 @@ export class ThreadDetailVM {
    */
   async toggleSubPosts(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
+    if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     let state: SubPostThreadState | undefined = this.findSubState(pid);
     if (state === undefined) {
       state = new SubPostThreadState();
@@ -589,6 +588,7 @@ export class ThreadDetailVM {
    */
   async ensureSubPostPreview(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
+    if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     const state: SubPostThreadState | undefined = this.findSubState(pid);
     if (state === undefined || state.loadedOnce || state.loading) {
       return;
@@ -755,138 +755,286 @@ export class ThreadDetailVM {
     return ThreadDetail.locateMainPost(this.detail);
   }
 
-  /** 回复点赞与取消点赞的异步状态管理。 */
+  /** 菜单确认绑定账号、帖子和读取批次，旧确认框不能操作刷新后的内容。 */
+  deletionOwner(): string {
+    return this.disposed || !authSession.isLoggedIn() ? '' :
+      `${authSession.sessionKey()}:${this.tid}:${this.requestSeq}`;
+  }
+
+  private ownsContent(uid: number): boolean {
+    return !this.disposed && !this.threadDeleted && authSession.isLoggedIn() &&
+      Number.isSafeInteger(uid) && uid > 0 && Number.isSafeInteger(authSession.snapshot.uid) &&
+      uid === authSession.snapshot.uid;
+  }
+
+  canDeleteThread(): boolean {
+    const main: PostItem | undefined = this.mainPost();
+    return this.ownsContent(this.detail.author.id) && Number.isSafeInteger(this.tid) && this.tid > 0 &&
+      main !== undefined && main.pid > 0 && this.posts.some((post: PostItem): boolean => post.pid === main.pid);
+  }
+
+  canDeletePost(item: PostItem): boolean {
+    const main: PostItem | undefined = this.mainPost();
+    return this.ownsContent(item.author.id) && Number.isSafeInteger(item.pid) && item.pid > 0 &&
+      item.floor !== 1 && item.pid !== this.detail.mainPostId && item.pid !== main?.pid && this.posts.includes(item);
+  }
+
+  canDeleteSubPost(parentPid: number, item: SubPostItem): boolean {
+    const state: SubPostThreadState | undefined = this.findSubState(parentPid);
+    return this.ownsContent(item.author.id) && Number.isSafeInteger(item.pid) && item.pid > 0 &&
+      Number.isSafeInteger(parentPid) && parentPid > 0 && this.containsPid(parentPid) &&
+      state !== undefined && state.subPosts.includes(item);
+  }
+
+  async deleteThread(context: common.UIAbilityContext, confirmedOwner: string): Promise<string> {
+    return this.deleteContent(context, confirmedOwner);
+  }
+
+  async deletePost(context: common.UIAbilityContext, item: PostItem, confirmedOwner: string): Promise<string> {
+    return this.deleteContent(context, confirmedOwner, item);
+  }
+
+  async deleteSubPost(context: common.UIAbilityContext, parentPid: number, item: SubPostItem,
+    confirmedOwner: string): Promise<string> {
+    return this.deleteContent(context, confirmedOwner, undefined, parentPid, item);
+  }
+
+  /** 只有严格成功回执才移除内容；网络失败或含糊响应绝不作本地成功。 */
+  private async deleteContent(context: common.UIAbilityContext, confirmedOwner: string,
+    post?: PostItem, parentPid: number = 0, sub?: SubPostItem): Promise<string> {
+    if (this.deletePending) { return '删除处理中，请稍候'; }
+    if (confirmedOwner.length === 0 || confirmedOwner !== this.deletionOwner()) {
+      return '账号或页面已变化，请重新确认删除';
+    }
+    if (this.loading || this.isRefreshing || this.isSwitchingSort || this.replyPending) {
+      return '内容正在更新，请稍后再删除';
+    }
+    const validTarget: () => boolean = (): boolean => sub !== undefined ? this.canDeleteSubPost(parentPid, sub) :
+      (post !== undefined ? this.canDeletePost(post) : this.canDeleteThread());
+    if (!validTarget()) { return '只能删除本人当前可见的内容，请刷新后重试'; }
+    if (this.deletedPid > 0) { return '上一条删除仍待服务端同步，请下拉刷新核对后再删除'; }
+    const fid: number = this.detail.forumId;
+    if (!Number.isSafeInteger(fid) || fid <= 0) { return '帖子信息还没加载完'; }
+    const tid: number = this.tid;
+    const deletedPage: number = sub !== undefined ? (this.subPostPages.get(sub.pid) ?? 1) :
+      (post !== undefined ? (this.postPages.get(post.pid) ?? this.loadedPage) : 1);
+    const deletedSort: ReplySortType = this.sortType;
+    const owner: string = authSession.sessionKey();
+    const session: TiebaSession = this.currentSession();
+    const seq: number = ++this.requestSeq;
+    const operation: number = ++this.deleteOperation;
+    const current: () => boolean = (): boolean => !this.disposed && this.tid === tid &&
+      this.requestSeq === seq && authSession.matchesSession(session, owner);
+    this.deletePending = true;
+    this.isLoadingMore = false;
+    // 此前在途的楼层/楼中楼请求已失效；释放它们的加载状态，失败后仍可重试。
+    for (const state of this.subStates) { state.loading = false; }
+    this.touchSubStates();
+    try {
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current() || !validTarget()) { return '账号或页面已变化，未继续删除'; }
+      if (this.currentSession().tbs.length === 0) {
+        const refreshed = await authSession.refreshTbs(context);
+        if (!current()) { return '账号或页面已变化，未继续删除'; }
+        if (!refreshed.ok) { return '登录凭据未就绪，请重新登录后删除'; }
+      }
+      const writeSession: TiebaSession = this.currentSession();
+      const result: ApiResult = sub !== undefined
+        ? await this.api.deleteMyPost(device, writeSession, fid, tid, sub.pid, true)
+        : (post !== undefined ? await this.api.deleteMyPost(device, writeSession, fid, tid, post.pid, false)
+          : await this.api.deleteMyThread(device, writeSession, fid, tid));
+      // 即便已离页/换账号，服务端确认删除也须使其他列表的旧副本失效。
+      if (result.ok) { noteContentDeleted(); }
+      if (!current()) { return '账号或页面已变化，请在原账号刷新核对删除结果'; }
+      if (!result.ok) { return `${result.describeFailure()}；请刷新核对后再操作`; }
+      this.deletedPid = sub !== undefined ? sub.pid : (post !== undefined ? post.pid : 0);
+      this.deletedParentPid = sub !== undefined ? parentPid : 0;
+      this.deletedPage = Math.max(1, deletedPage);
+      this.deletedSort = deletedSort;
+      if (sub !== undefined) {
+        this.removeDeletedSubPost(parentPid, sub.pid);
+        await this.refreshRepliedFloor(context, parentPid);
+      } else if (post !== undefined) {
+        this.removeDeletedPost(post.pid);
+      } else {
+        this.threadDeleted = true;
+        this.posts = [];
+        this.visiblePosts = [];
+        this.detail.posts = [];
+        this.subStates = [];
+        this.hasMore = false;
+        return '';
+      }
+      if (!current()) { return '账号或页面已变化，内容已删除，请刷新查看'; }
+      if (this.deletedParentPid > 0 && this.deletedPid > 0 && this.deletedPage > 1) {
+        await this.confirmPendingDeletion(device, writeSession, current);
+      }
+      await this.refreshDeletedReplyCount(device, writeSession, current);
+      return current() ? '' : '账号或页面已变化，内容已删除，请刷新查看';
+    } catch (_) {
+      return '删除结果未确认，请刷新核对后再操作';
+    } finally {
+      if (operation === this.deleteOperation) { this.deletePending = false; }
+    }
+  }
+
+  private removeDeletedPost(pid: number): void {
+    const state: SubPostThreadState | undefined = this.findSubState(pid);
+    if (state !== undefined) {
+      for (const sub of state.subPosts) {
+        this.subPostPages.delete(sub.pid);
+        this.subPostParents.delete(sub.pid);
+        this.agreeStates.delete(sub.pid);
+      }
+    }
+    this.posts = this.posts.filter((post: PostItem): boolean => post.pid !== pid);
+    this.detail.posts = this.posts;
+    this.subStates = this.subStates.filter((item: SubPostThreadState): boolean => item.pid !== pid);
+    this.postPages.delete(pid);
+    this.agreeStates.delete(pid);
+    if (this.focusedReplyPid === pid) { this.focusedReplyPid = 0; }
+    if (this.hasMore && this.sortType !== ReplySortType.DESC) { this.rereadPageAfterDelete = this.loadedPage; }
+    this.syncVisiblePosts();
+  }
+
+  private removeDeletedSubPost(parentPid: number, pid: number): void {
+    const previous: SubPostThreadState | undefined = this.findSubState(parentPid);
+    if (previous === undefined) { return; }
+    const state: SubPostThreadState = new SubPostThreadState();
+    state.pid = parentPid;
+    state.expanded = previous.expanded;
+    state.subPosts = previous.subPosts.filter((sub: SubPostItem): boolean => sub.pid !== pid);
+    state.page = new SubPostPage();
+    state.page.totalCount = Math.max(state.subPosts.length, previous.page.totalCount - 1);
+    // 页码可能已前移，先补读第一页。失败后保留现有内容并允许重新读取，不能继续旧页码。
+    state.loadedOnce = false;
+    this.subStates = this.subStates.map((item: SubPostThreadState): SubPostThreadState => item.pid === parentPid ? state : item);
+    this.subPostPages.delete(pid);
+    this.subPostParents.delete(pid);
+    this.agreeStates.delete(pid);
+    this.posts = this.posts.map((post: PostItem): PostItem => {
+      if (post.pid !== parentPid) { return post; }
+      const updated: PostItem = copyPostItem(post);
+      updated.subPostCount = Math.max(state.subPosts.length, post.subPostCount - 1);
+      return updated;
+    });
+    this.detail.posts = this.posts;
+    this.syncVisiblePosts();
+  }
+
+  /** 回复总数由 pb/page 重新确认，不猜测删除父楼对楼中楼总数的影响。 */
+  private async refreshDeletedReplyCount(device: TiebaDevice, session: TiebaSession,
+    current: () => boolean): Promise<void> {
+    if (!current()) { return; }
+    if (this.deletedPid > 0 && this.deletedParentPid > 0) {
+      if (this.errorText.length === 0) { this.errorText = '评论已删除，回复数暂未更新，请下拉刷新'; }
+      return;
+    }
+    try {
+      const page: number = this.deletedPid > 0 ? this.deletedPage : 1;
+      const sort: ReplySortType = this.deletedPid > 0 ? this.deletedSort : ReplySortType.ASC;
+      const response: ThreadDetailResponse = await this.api.fetchThreadDetail(
+        device, session, this.tid, page, REQUEST_PAGE_SIZE, sort);
+      if (!current()) { return; }
+      if (!response.ok) { this.errorText = '评论已删除，回复数暂未更新，请下拉刷新'; return; }
+      if (this.deletedPid > 0) {
+        if (response.data.posts.some((post: PostItem): boolean => post.pid === this.deletedPid)) {
+          this.errorText = '评论已删除，服务端列表尚未更新，请稍后下拉刷新'; return;
+        }
+        if (!this.deletionPageMatches(response.data.page.currentPage, response.data.page.totalPage, page)) {
+          this.errorText = '评论已删除，返回页码不一致，请下拉刷新核对'; return;
+        }
+        this.finishDeletionSync();
+      }
+      this.updateDeletedTotalPage(response.data.page.totalPage);
+      response.data.posts = this.posts;
+      this.detail = this.absorbDetail(response.data);
+    } catch (_) {
+      if (current()) { this.errorText = '评论已删除，回复数暂未更新，请下拉刷新'; }
+    }
+  }
+
+  /** 只读一次原页确认同步，后页删除无需用户滚回原页；未确认不重发写操作。 */
+  private async confirmPendingDeletion(device: TiebaDevice, session: TiebaSession,
+    current: () => boolean): Promise<void> {
+    if (this.deletedPid <= 0 || !current()) { return; }
+    const owner: string = authSession.sessionKey();
+    const pid: number = this.deletedPid;
+    try {
+      if (this.deletedParentPid > 0) {
+        const response: SubPostResponse = await this.api.fetchSubPosts(device, session, this.tid,
+          this.deletedParentPid, this.detail.author.id, this.deletedPage, SUB_POST_PAGE_SIZE);
+        if (!current() || owner !== authSession.sessionKey() || pid !== this.deletedPid) { return; }
+        if (response.ok && this.deletionPageMatches(response.data.currentPage, response.data.totalPage, this.deletedPage) &&
+          !response.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === pid)) {
+          const parentPid: number = this.deletedParentPid;
+          const state: SubPostThreadState | undefined = this.findSubState(parentPid);
+          if (state !== undefined) { state.page.totalCount = response.data.totalCount; }
+          this.posts = this.posts.map((post: PostItem): PostItem => {
+            if (post.pid !== parentPid) { return post; }
+            const updated: PostItem = copyPostItem(post);
+            updated.subPostCount = response.data.totalCount;
+            return updated;
+          });
+          this.detail.posts = this.posts;
+          this.syncVisiblePosts();
+          this.touchSubStates();
+          this.finishDeletionSync(); return;
+        }
+      } else {
+        const response: ThreadDetailResponse = await this.api.fetchThreadDetail(device, session, this.tid,
+          this.deletedPage, REQUEST_PAGE_SIZE, this.deletedSort);
+        if (!current() || owner !== authSession.sessionKey() || pid !== this.deletedPid) { return; }
+        if (response.ok && this.deletionPageMatches(response.data.page.currentPage, response.data.page.totalPage, this.deletedPage) &&
+          !response.data.posts.some((post: PostItem): boolean => post.pid === pid)) {
+          this.updateDeletedTotalPage(response.data.page.totalPage);
+          this.finishDeletionSync(); return;
+        }
+      }
+    } catch (_) { /* 删除回执已确认，读回异常只保留待同步目标。 */ }
+    if (current() && owner === authSession.sessionKey()) {
+      this.errorText = '评论已删除，服务端列表尚未更新，请稍后下拉刷新';
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.requestSeq++;
+    this.deleteOperation++;
+    this.deletePending = false;
+    this.deletedPid = 0;
+    this.deletedParentPid = 0;
+  }
+
+  /** 页面只提供目标身份与读回位置，写入串行化由共享状态机负责。 */
   async toggleAgree(context: common.UIAbilityContext, item: PostItem | SubPostItem,
     objType: AgreeObjType = AgreeObjType.POST, parentPid: number = 0): Promise<string> {
     const pid: number = item.pid;
     const state: AgreeState = objType === AgreeObjType.SUB_POST
       ? this.subAgreeState(item as SubPostItem) : this.agreeState(pid);
-
-    if (!this.currentSession().hasBduss()) {
-      return '需要登录后才能点赞';
-    }
-
-    if (!isAgreeSupported(objType)) {
-      return unsupportedAgreeTip(objType);
-    }
-    if (objType === AgreeObjType.SUB_POST && parentPid <= 0) {
-      return '暂时无法定位这条回复';
-    }
-
-    const key: string = `${objType}:${this.tid}:${pid}`;
-    const before: boolean = state.liked();
-    const target: boolean = !before;
-
-    state.toggled = !state.toggled;
-    hilog.info(FLOW_DOMAIN, FLOW_TAG,
-      'source=localState(optimistic) pid=%{public}d isMain=%{public}s target.agreed=%{public}s'
-        + ' old[isAgreed=%{public}s liked=%{public}s count=%{public}d]',
-      pid, String(FLOW_FLAG(pid === this.detail.mainPostId)), String(FLOW_FLAG(target)),
-      String(FLOW_FLAG(state.isAgreed)), String(FLOW_FLAG(before)), state.count);
-
-    const existing: AgreeWriteState | undefined = this.agreeWrites.get(key);
-    if (existing !== undefined && existing.state === state && existing.seq === this.requestSeq && existing.owner === authSession.sessionKey()) {
-      existing.desired = target;
-      hilog.info(FLOW_DOMAIN, FLOW_TAG,
-        'source=queued-latest pid=%{public}d desired=%{public}s', pid, String(FLOW_FLAG(target)));
-      return '';
-    }
-
-    // 新点击立即废掉上一轮尚未完成的确认读回。
-    const previous: number | undefined = this.agreeConfirmSeq.get(pid);
-    this.agreeConfirmSeq.set(pid, (previous === undefined ? 0 : previous) + 1);
-    const flight: AgreeWriteState = new AgreeWriteState(target, before, state, this.requestSeq);
-    this.agreeWrites.set(key, flight);
-    state.pending = true;
-    return await this.runAgreeWrites(context, pid, objType, parentPid, key, flight,
-      this.tid, this.detail.forumId);
-  }
-
-  /** 请求串行化，但用户每次点击都直接改变可见状态。 */
-  private async runAgreeWrites(context: common.UIAbilityContext, pid: number,
-    objType: AgreeObjType, parentPid: number, key: string, flight: AgreeWriteState,
-    tid: number, forumId: number): Promise<string> {
-    let reason: string = '';
-    let wrote: boolean = false;
-    const session: TiebaSession = this.currentSession();
-    const owner: string = authSession.sessionKey();
-    const current: () => boolean = (): boolean => authSession.matchesSession(session, owner) &&
-      flight.seq === this.requestSeq && this.tid === tid;
-    try {
-      const device: TiebaDevice = await DeviceIdentity.ensure(context);
-      if (!current()) { return '账号或帖子已变化，未继续点赞'; }
-      while (current() && flight.desired !== flight.expected) {
-        const target: boolean = flight.desired;
-        // 请求已发出后即使响应异常，也要读回核对可能已经落账的服务端状态。
-        wrote = true;
-        const response: AgreeResponse = await this.api.agreePost(
-          device, session, tid, pid, target, objType,
-          objType === AgreeObjType.POST ? forumId : 0);
-        if (!current()) { return '账号或帖子已变化，请重新读取点赞结果'; }
-        if (response.ok) {
-          flight.expected = target;
-          hilog.info(FLOW_DOMAIN, FLOW_TAG,
-            'source=accepted pid=%{public}d target=%{public}s score=%{public}s',
-            pid, String(FLOW_FLAG(target)), response.agreeScore);
-        } else if (flight.desired === target) {
-          reason = response.describeFailure();
-          flight.state.toggled = flight.state.isAgreed !== flight.expected;
-          hilog.info(FLOW_DOMAIN, FLOW_TAG,
-            'source=write-rollback pid=%{public}d expected=%{public}s reason=%{public}s',
-            pid, String(FLOW_FLAG(flight.expected)), reason);
-          break;
-        }
-      }
-    } catch (err) {
-      const e: Error = err as Error;
-      reason = `点赞失败：${e.message}`;
-      flight.state.toggled = flight.state.isAgreed !== flight.expected;
-    } finally {
-      flight.state.pending = false;
-      if (this.agreeWrites.get(key) === flight) {
-        this.agreeWrites.delete(key);
-      }
-      if (wrote && current()) {
-        this.scheduleAgreeConfirm(context, pid, objType, parentPid);
-      }
-    }
-    return reason;
-  }
-
-  private scheduleAgreeConfirm(context: common.UIAbilityContext, pid: number,
-    objType: AgreeObjType, parentPid: number): void {
-    const prev: number | undefined = this.agreeConfirmSeq.get(pid);
-    const token: number = (prev === undefined ? 0 : prev) + 1;
-    this.agreeConfirmSeq.set(pid, token);
+    const tid: number = this.tid;
     const seq: number = this.requestSeq;
-    setTimeout((): void => {
-      this.finishAgreeConfirm(context, pid, objType, parentPid, token, seq);
-    }, AGREE_CONFIRM_DELAY_MS);
-  }
-
-  private async finishAgreeConfirm(context: common.UIAbilityContext, pid: number,
-    objType: AgreeObjType, parentPid: number, token: number, seq: number): Promise<void> {
-    try {
-      if (objType === AgreeObjType.SUB_POST) {
-        await this.confirmSubAgreeFromServer(context, pid, parentPid, token, seq);
-      } else {
-        await this.confirmAgreeFromServer(context, pid, token, seq);
-      }
-    } catch (err) {
-      const e: Error = err as Error;
-      hilog.warn(FLOW_DOMAIN, FLOW_TAG,
-        'source=confirm-unexpected-error pid=%{public}d reason=%{public}s', pid, e.message);
-    }
+    const target: AgreeTarget = { tid: tid, pid: pid, forumId: this.detail.forumId,
+      objType: objType, parentPid: parentPid, generation: seq };
+    return this.agreeActions.toggle(context, target, state,
+      (): boolean => this.tid === tid && this.requestSeq === seq,
+      async (current: () => boolean): Promise<void> => {
+        if (objType === AgreeObjType.SUB_POST) {
+          await this.confirmSubAgreeFromServer(context, pid, parentPid, current);
+        } else {
+          await this.confirmAgreeFromServer(context, pid, current);
+        }
+      });
   }
 
   private async confirmAgreeFromServer(context: common.UIAbilityContext, pid: number,
-    token: number, seq: number): Promise<void> {
-    const current: number | undefined = this.agreeConfirmSeq.get(pid);
-    if (current === undefined || current !== token || seq !== this.requestSeq) {
+    current: () => boolean): Promise<void> {
+    if (!current()) {
       return; // 已有点更新的读回，或期间刷新/重载/切排序过 → 过期，跳过
     }
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current()) { return; }
       const isMain: boolean = pid === this.detail.mainPostId;
       const floorPage: number | undefined = this.postPages.get(pid);
       if (!isMain && floorPage === undefined) {
@@ -897,8 +1045,7 @@ export class ThreadDetailVM {
       const response: ThreadDetailResponse = await this.api.fetchThreadDetail(
         device, this.currentSession(), this.tid, isMain ? 1 : floorPage!, REQUEST_PAGE_SIZE,
         isMain ? ReplySortType.ASC : this.sortType);
-      const latest: number | undefined = this.agreeConfirmSeq.get(pid);
-      if (latest === undefined || latest !== token || seq !== this.requestSeq) {
+      if (!current()) {
         return; // 读取期间状态又被推进了，这次读数过期
       }
       if (!response.ok) {
@@ -947,7 +1094,8 @@ export class ThreadDetailVM {
 
   /** 楼中楼用 floor 端点读回，不能用帖子详情的一级楼层列表确认。 */
   private async confirmSubAgreeFromServer(context: common.UIAbilityContext, pid: number,
-    parentPid: number, token: number, seq: number): Promise<void> {
+    parentPid: number, current: () => boolean): Promise<void> {
+    if (!current()) { return; }
     const page: number | undefined = this.subPostPages.get(pid);
     if (page === undefined || this.subPostParents.get(pid) !== parentPid) {
       hilog.warn(FLOW_DOMAIN, FLOW_TAG, 'source=sub-confirm-skip(page-unknown) pid=%{public}d', pid);
@@ -955,11 +1103,11 @@ export class ThreadDetailVM {
     }
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current()) { return; }
       const response: SubPostResponse = await this.api.fetchSubPosts(
         device, this.currentSession(), this.tid, parentPid, this.detail.author.id, page,
         SUB_POST_PAGE_SIZE);
-      const latest: number | undefined = this.agreeConfirmSeq.get(pid);
-      if (latest !== token || seq !== this.requestSeq || !response.ok) {
+      if (!current() || !response.ok) {
         return;
       }
       for (let i = 0; i < response.data.subPosts.length; i++) {
@@ -1061,6 +1209,8 @@ export class ThreadDetailVM {
   /** 发送回复。成功后更新对应列表，失败保留输入；不把请求已发送视为回复已发布。 */
   async submitReply(context: common.UIAbilityContext, content: string,
     targetPid: number = 0, withTail?: boolean, subPost?: SubPostItem): Promise<string> {
+    if (this.disposed || this.threadDeleted) { return '页面已关闭或帖子已删除'; }
+    if (this.deletePending) { return '删除处理中，请稍候'; }
     const text: string = content.trim();
     if (text.length === 0) {
       return '回复内容为空';
@@ -1201,6 +1351,7 @@ export class ThreadDetailVM {
   /** 重试某层楼中楼第一页。与 toggleSubPosts 分开，避免"重试"按钮把区域收起来 */
   async retrySubPosts(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
+    if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     const state: SubPostThreadState | undefined = this.findSubState(pid);
     if (state === undefined || state.loading || state.loadedOnce) {
       return;
@@ -1214,6 +1365,7 @@ export class ThreadDetailVM {
   /** 加载更多楼中楼。失败时保留已加载内容，只在区域底部提示 */
   async loadMoreSubPosts(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
+    if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     const state: SubPostThreadState | undefined = this.findSubState(pid);
     if (state === undefined || state.loading || !state.hasMore || state.page.currentPage <= 0) {
       return;
@@ -1254,6 +1406,18 @@ export class ThreadDetailVM {
       }
 
       if (response.data.currentPage !== page) { state.errorText = '返回页码不一致，请重试'; return; }
+      if (this.deletedPid > 0 && this.deletedParentPid === pid) {
+        if (response.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === this.deletedPid)) {
+          state.errorText = '评论已删除，服务端列表尚未更新，请稍后重试';
+          state.loadedOnce = false;
+          state.hasMore = false;
+          this.errorText = state.errorText;
+          return;
+        }
+        if (page === this.deletedPage || response.data.totalPage < this.deletedPage) {
+          this.finishDeletionSync();
+        }
+      }
       if (page <= 1) {
         for (let i = 0; i < state.subPosts.length; i++) {
           this.subPostPages.delete(state.subPosts[i].pid);

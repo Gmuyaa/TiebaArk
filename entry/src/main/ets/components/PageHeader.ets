@@ -1,6 +1,7 @@
 import { AppTheme } from '../theme/Theme';
 import { UiLayout } from '../common/appearance/UiLayout';
 import { GlassBackButton } from './GlassBackButton';
+import { GlassCircleButton } from './GlassCircleButton';
 import { common } from '@kit.AbilityKit';
 import { readStatusBarVp, STATUS_BAR_FALLBACK_VP } from '../utils/SafeArea';
 
@@ -50,6 +51,7 @@ export struct RootPageHeader {
 @ComponentV2
 export struct PageHeader {
   @Param title: string = '';
+  @Param closeLabel: string = '';
   @Event onBack: () => void = (): void => {};
   @BuilderParam actions: () => void = this.emptyActions;
 
@@ -57,7 +59,12 @@ export struct PageHeader {
 
   build() {
     Row({ space: 8 }) {
-      GlassBackButton({ onTap: (): void => { this.onBack(); } })
+      if (this.closeLabel.length > 0) {
+        GlassCircleButton({ symbol: $r('sys.symbol.xmark'), iconWeight: FontWeight.Regular,
+          accessibilityLabel: this.closeLabel, onTap: (): void => { this.onBack(); } })
+      } else {
+        GlassBackButton({ onTap: (): void => { this.onBack(); } })
+      }
       Text(this.title).fontSize(UiLayout.HEADER_TITLE).fontWeight(FontWeight.Medium)
         .fontColor(AppTheme.TEXT_MAIN).maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)

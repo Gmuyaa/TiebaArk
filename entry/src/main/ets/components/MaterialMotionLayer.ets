@@ -1,6 +1,7 @@
 import { hdsEffect } from '@kit.UIDesignKit';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionStore } from '../common/appearance/MotionStore';
+import { AppTheme } from '../theme/Theme';
 
 /** 官方光场只承载背景；文字图标由宿主在整个材质控件上方绘制。 */
 @ComponentV2
@@ -12,7 +13,8 @@ export struct MaterialMotionLayer {
     const enabled: boolean = motionStore.isOn(MotionEffect.HDS_POINT_LIGHT);
     return new hdsEffect.HdsEffectBuilder().pointLight({
       sourceType: enabled && this.pressed ? hdsEffect.PointLightSourceType.SOFT : hdsEffect.PointLightSourceType.NONE,
-      illuminatedType: enabled ? hdsEffect.PointLightIlluminatedType.BORDER_CONTENT : hdsEffect.PointLightIlluminatedType.NONE
+      illuminatedType: enabled ? hdsEffect.PointLightIlluminatedType.BORDER_CONTENT : hdsEffect.PointLightIlluminatedType.NONE,
+      options: { color: AppTheme.TOUCH_LIGHT }
     }).buildEffect();
   }
 
@@ -20,8 +22,8 @@ export struct MaterialMotionLayer {
     return new hdsEffect.HdsEffectBuilder().shaderEffect({
       effectType: hdsEffect.EffectType.DUAL_EDGE_FLOW_LIGHT,
       animation: { duration: 1200, iterations: -1 },
-      params: { firstEdgeFlowLight: { startPos: 0, endPos: 1, color: '#9985BFFF' },
-        secondEdgeFlowLight: { startPos: 0.5, endPos: 1.5, color: '#9984E1D0' } }
+      params: { firstEdgeFlowLight: { startPos: 0, endPos: 1, color: AppTheme.FLOW_EDGE_PRIMARY },
+        secondEdgeFlowLight: { startPos: 0.5, endPos: 1.5, color: AppTheme.FLOW_EDGE_SECONDARY } }
     }).buildEffect();
   }
 
@@ -29,8 +31,8 @@ export struct MaterialMotionLayer {
     return new hdsEffect.HdsEffectBuilder().shaderEffect({
       effectType: hdsEffect.EffectType.UV_BACKGROUND_FLOW_LIGHT,
       animation: { duration: 1600, iterations: -1 },
-      params: { colorSource: ['#3385BFFF', '#2284E1D0', '#22C0A7EE'],
-        colorTarget: ['#2284E1D0', '#22C0A7EE', '#3385BFFF'] }
+      params: { colorSource: [AppTheme.FLOW_BACKGROUND_START, AppTheme.FLOW_BACKGROUND_MIDDLE, AppTheme.FLOW_BACKGROUND_END],
+        colorTarget: [AppTheme.FLOW_BACKGROUND_MIDDLE, AppTheme.FLOW_BACKGROUND_END, AppTheme.FLOW_BACKGROUND_START] }
     }).buildEffect();
   }
 

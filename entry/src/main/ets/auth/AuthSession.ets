@@ -15,6 +15,7 @@
  */
 
 import { common } from '@kit.AbilityKit';
+import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TbsResponse, TiebaApi } from '../api/TiebaApi';
 import { TiebaDevice, TiebaSession } from '../net/TiebaParams';
@@ -386,7 +387,9 @@ export class AuthSession {
    * 不收 `context`：登录校验走网页域 GET，不需要 `UIAbilityContext`；
    * 收一个用不到的参数只会让调用方以为它有作用。
    */
-  async loginWithBduss(bdussInput: string, stokenInput: string = ''): Promise<LoginResult> {
+  async loginWithBduss(bdussInput: string, stokenInput: string = '',
+    active: () => boolean = (): boolean => true): Promise<LoginResult> {
+    if (!active()) { return LoginResult.failure('登录操作已取消'); }
     const bduss: string = normalizeBduss(bdussInput);
     const invalid: string = validateBduss(bduss);
     if (invalid.length > 0) {
@@ -404,7 +407,7 @@ export class AuthSession {
       return LoginResult.failure(`登录校验失败：${e.message}`);
     }
 
-    if (operation !== this.credentialOperation) { return LoginResult.failure('登录操作已取消'); }
+    if (operation !== this.credentialOperation || !active()) { return LoginResult.failure('登录操作已取消'); }
     // 只记分支判定与长度，**不记凭据**。没有这行就只能靠猜失败在哪一步。
     hilog.info(0x0000, 'AuthSession',
       'login verdict: ok=%{public}s isLogin=%{public}s tbsLen=%{public}s transportErr=%{public}s',
@@ -433,8 +436,14 @@ export class AuthSession {
 
     // Invalidate old-account profile reads before credential storage begins.
     this.profileVersion++;
-    const saved: StoreResult = await AuthStore.save(bundle);
+    const saved: StoreResult = await AuthStore.save(bundle,
+      (): boolean => operation === this.credentialOperation && active());
     if (operation !== this.credentialOperation) { return LoginResult.failure('登录操作已取消'); }
+    if (!active()) {
+      this.credentialOperation++;
+      if (saved.ok) { await AuthStore.clear(); }
+      return LoginResult.failure('登录操作已取消');
+    }
     // 先落盘再改内存状态：内存一旦显示"已登录"，界面就会按已登录分派
     this.applyCredentials(bundle);
     this.fetchProfileAndUpdate();
@@ -472,11 +481,12 @@ export class AuthSession {
     return this.loginWithBduss(parsed.bduss, parsed.stoken);
   }
 
-  async loginFromWebCookies(bduss: string, stoken: string): Promise<LoginResult> {
+  async loginFromWebCookies(bduss: string, stoken: string,
+    active: () => boolean = (): boolean => true): Promise<LoginResult> {
     authSource = AUTH_SOURCE_WEB;
     hilog.info(0x0000, 'AuthSession',
       'web_login cookies: bduss=present stoken=%{public}s', stoken.length > 0 ? 'present' : 'empty');
-    return this.loginWithBduss(bduss, stoken);
+    return this.loginWithBduss(bduss, stoken, active);
   }
 
   /**
@@ -515,7 +525,7 @@ export class AuthSession {
    * 退出登录。
    *
    * 只清**账号**凭据与账号相关状态（BDUSS / stoken / tbs / 登录态；
-   * 将来 ArkWeb 登录带来的 Cookie 也在此一并清）。
+   * ArkWeb 登录带来的 Cookie 也在此一并清）。
    * **不重置设备身份**（`DeviceIdentity` 的 androidId/uuid），
    * 这样退出后匿名浏览仍可用，也不会因为换设备指纹触发风控。
    */
@@ -524,7 +534,11 @@ export class AuthSession {
     const oldUid: number = this.stableForumUid;
     this.applyCredentials(new CredentialBundle());
     const result: StoreResult = await AuthStore.clear();
+    let cookiesCleared: boolean = true;
+    try { await webview.WebCookieManager.clearAllCookies(); }
+    catch (_) { cookiesCleared = false; }
     await deleteForumSnapshot(context, oldUid);
+    if (!cookiesCleared) { return StoreResult.failure('网页登录状态清理失败，请重试退出登录'); }
     return result;
   }
 

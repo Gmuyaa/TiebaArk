@@ -9,7 +9,7 @@
  */
 
 import { SubPostItem } from '../model/ThreadDetail';
-import { AgreeState } from '../viewmodel/ThreadDetailVM';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { DetailTheme } from '../theme/Theme';
 import { COMMENT_NICKNAME_SIZE } from '../common/appearance/PostTypography';
 import { AvatarComponent } from './AvatarComponent';
@@ -25,6 +25,9 @@ export struct SubReplyDetailItem {
   @Param tid: number = 0;
   @Param parentPid: number = 0;
   @Param threadTitle: string = '';
+  @Param canDelete: boolean = false;
+  @Param deletePending: boolean = false;
+  @Event onDelete: () => void = (): void => {};
   @Event onOpenAuthor: () => void = (): void => {};
   @Require @Param sub: SubPostItem;
   @Require @Param agreeState: AgreeState;
@@ -44,6 +47,7 @@ export struct SubReplyDetailItem {
 
   build() {
     CommentActionHost({ target: subCommentTarget(this.sub, this.tid, this.parentPid, this.threadTitle),
+      canDelete: this.canDelete, deletePending: this.deletePending, onDelete: this.onDelete,
       content: (): void => { this.ReplyContent(); } })
   }
 

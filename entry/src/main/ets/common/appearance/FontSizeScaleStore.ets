@@ -19,14 +19,14 @@ const KEY_CUSTOM_SIZE: string = 'customSize';
 /**
  * 全局单例：App 内只有一个"字体大小"偏好。
  *
- * 与 `ThemeModeStore` 同一取舍：读/写失败一律静默（本次会话内仍生效，
- * 只是下次启动可能回到旧值）——偏好存储异常不该影响 App 启动。
+ * 读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。
  */
 @ObservedV2
 export class FontSizeScaleStore {
   /** 用户偏好：跟随系统或自定义。 */
   @Trace pref: FontSizePref = DEFAULT_FONT_SIZE_PREF;
   @Trace customSize: number = FONT_SIZE_BASE;
+  @Trace saveError: string = '';
 
   /**
    * 系统当前字体缩放比（`onFontSizeScaleUpdated` 持续刷新；跟随系统档用它）。
@@ -77,6 +77,7 @@ export class FontSizeScaleStore {
   setPref(pref: FontSizePref, context: common.UIAbilityContext): void {
     const next: FontSizePref = normalizeFontSizePref(pref as number);
     if (next === this.pref) {
+      if (this.saveError.length > 0) { this.retrySave(context); }
       return;
     }
     this.pref = next;
@@ -105,9 +106,16 @@ export class FontSizeScaleStore {
       store.putSync(KEY_PREF, this.pref as number);
       store.putSync(KEY_CUSTOM_SIZE, this.customSize);
       store.flushSync();
+      this.saveError = '';
     } catch (e) {
+      this.saveError = '字体大小本次已生效，保存失败，重启后可能恢复旧值';
       hilog.warn(DOMAIN, TAG, 'font size save failed: %{public}s', String(e));
     }
+  }
+
+  /** 保留实时预览，只重试当前字号与模式的保存。 */
+  retrySave(context: common.UIAbilityContext): void {
+    this.save(context);
   }
 
   /**

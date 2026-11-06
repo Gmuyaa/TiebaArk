@@ -21,7 +21,20 @@ export function homeComposeBounds(width: number, height: number, top: number): F
 }
 
 export const THREAD_ACTION_BUTTON_SIZE: number = 52;
-export const THREAD_ACTION_HIT_INSET: number = 4;
+
+export interface FloatingButtonHitRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 触控区居中，四角也落在 48vp 和 52vp 圆面内。 */
+export function floatingButtonHitRegion(diameter: number, x: number = 0, y: number = 0): FloatingButtonHitRegion {
+  const size: number = 32;
+  const inset: number = (diameter - size) / 2;
+  return { x: x + inset, y: y + inset, width: size, height: size };
+}
 
 /** 帖子按钮的拖拽范围；松手吸边由组件处理。 */
 export function threadActionBounds(width: number, height: number, top: number): FloatingBounds {

@@ -64,7 +64,9 @@ export struct ImageMenuPosition {
   }
   private finish(): void {
     this.dragging = false; this.pressed = false; this.cancel();
-    this.x = this.x < (this.minX() + this.maxX()) / 2 ? this.minX() : this.maxX();
+    this.getUIContext().animateTo({ duration: motionDuration(220, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
+      this.x = this.x < (this.minX() + this.maxX()) / 2 ? this.minX() : this.maxX();
+    });
     this.prefs.setImagePosition(positionRatio(this.x, this.minX(), this.maxX()),
       positionRatio(this.y, this.minY(), this.maxY()), this.context()).catch((error: Error): void => {
       if (this.alive) { this.getUIContext().getPromptAction().showToast({ message: error.message }); }

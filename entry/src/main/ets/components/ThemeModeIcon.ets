@@ -7,7 +7,7 @@ export struct ThemeModeIcon {
   @Param mode: ThemeModePref = ThemeModePref.FOLLOW_SYSTEM;
   @Param isDark: boolean = false;
   @Param iconSize: number = 22;
-  @Param iconColor: ResourceColor = AppTheme.ICON;
+  @Param iconColor: ResourceColor | undefined = undefined;
 
   private symbol(): Resource {
     switch (normalizeThemeModePref(this.mode as number)) {
@@ -27,7 +27,7 @@ export struct ThemeModeIcon {
     SymbolGlyph(this.symbol())
       .fontSize(this.iconSize).maxFontScale(1)
       .fontWeight(FontWeight.Regular)
-      .fontColor([this.iconColor])
+      .fontColor([this.iconColor ?? AppTheme.ICON])
       .width(this.iconSize)
       .height(this.iconSize)
   }

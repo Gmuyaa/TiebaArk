@@ -20,6 +20,7 @@ export struct ThreadPreviewCard {
   @Param authorAvatar: string = '';
   @Param forumName: string = '';
   @Param forumAvatar: string = '';
+  @Param forumAvatarRevision: number = 0;
   /** 我的帖子复用吧内卡片布局，以吧身份替代作者身份。 */
   @Param forumIdentity: boolean = false;
   @Param headerStatus: string = '';
@@ -152,7 +153,7 @@ export struct ThreadPreviewCard {
   IdentityHeader() {
     if (this.forumName.length > 0 && !this.forumIdentity) {
       Row({ space: ThreadCardLayout.SECTION_GAP }) {
-        ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName,
+        ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName, retryRevision: this.forumAvatarRevision,
           avatarSize: ThreadCardLayout.AVATAR_SIZE, radius: forumAvatarRadius(ThreadCardLayout.AVATAR_SIZE) })
           .id('thread-card-forum-avatar').flexShrink(0).onClick(() => { this.openForum(); })
         Column({ space: 2 }) {
@@ -184,7 +185,7 @@ export struct ThreadPreviewCard {
     } else {
       Row({ space: ThreadCardLayout.SECTION_GAP }) {
         if (this.forumIdentity) {
-          ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName,
+          ForumAvatarImage({ url: this.forumAvatar, forumName: this.forumName, retryRevision: this.forumAvatarRevision,
             avatarSize: ThreadCardLayout.AVATAR_SIZE, radius: forumAvatarRadius(ThreadCardLayout.AVATAR_SIZE) })
             .id('thread-card-primary-forum-avatar').onClick(() => { this.openForum(); })
         } else {

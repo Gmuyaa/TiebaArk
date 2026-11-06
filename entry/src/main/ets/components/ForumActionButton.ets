@@ -1,40 +1,82 @@
 import { AppTheme } from '../theme/Theme';
 import { MaterialTabs } from './MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
+import { materialManager } from '../common/material/MaterialManager';
+import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { VisualTheme } from '../common/appearance/VisualTheme';
 
-/** 吧头与吧列表复用的玻璃操作按钮；背景上的文字随宿主选择可读颜色。 */
+/** 签到、关注与回关共用的小型原生玻璃按钮；视觉高度32，触控高度至少44。 */
 @ComponentV2
 export struct ForumActionButton {
   @Param label: string = '';
   @Param busy: boolean = false;
   @Param disabled: boolean = false;
-  @Param onHero: boolean = true;
-  @Param compact: boolean = false;
-  @Local buttonWidth: number = 0;
+  @Param completed: boolean = false;
+  @Param retry: boolean = false;
+  @Param actionSymbol: Resource = $r('sys.symbol.plus');
+  @Param accessibilityLabel: string = '';
+  @Local contentWidth: number = 76;
+  @Local contentHeight: number = 32;
   @Event onTap: () => void = (): void => {};
-  build() {
-    Stack() {
-    if (this.onHero && this.buttonWidth > 0) {
-      MaterialTabs({ slot: MaterialSlot.FORUM_ACTION_BUTTON, barHeight: this.compact ? 28 : 36,
-        barWidth: this.buttonWidth })
-        .width(this.buttonWidth).height(this.compact ? 28 : 36)
-        .position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None)
+
+  private foreground(): ResourceColor {
+    if (this.completed || this.retry) { return AppTheme.TEXT_SUB; }
+    return visualThemeStore.theme !== VisualTheme.CLASSIC && !visualThemeStore.isPaper
+      ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN;
+  }
+
+  private activate(): void {
+    if (!this.busy && !this.disabled) { this.onTap(); }
+  }
+
+  @Builder
+  MaterialButton() {
+    if (materialManager.useArkUI) {
+      Button({ type: ButtonType.Capsule }) {
+        Row().width('100%').height('100%')
+      }
+      .width(this.contentWidth).height(this.contentHeight).margin(0).padding(0)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(materialManager.officialOf(MaterialSlot.FORUM_ACTION_BUTTON))
+      .accessibilityLevel('no').onClick((): void => {})
+    } else {
+      Row().width('100%').height('100%').hitTestBehavior(HitTestMode.None)
     }
-    Text(this.label)
-      .fontSize(this.compact ? 12 : 14).fontWeight(FontWeight.Medium)
-      .fontColor(this.onHero ? AppTheme.TEXT_MAIN : AppTheme.ACCENT_DARK)
-      .textAlign(TextAlign.Center).height(this.compact ? 28 : 36)
-      .constraintSize({ minWidth: this.compact ? 52 : 72, maxWidth: this.compact ? 84 : 116 })
-      .padding({ left: this.compact ? 8 : 12, right: this.compact ? 8 : 12 }).borderRadius(this.compact ? 14 : 18)
-      .border({ width: this.onHero ? 0 : 0.75, color: AppTheme.ACCENT }).clip(true)
-      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      .opacity(this.busy ? 0.6 : 1).enabled(!this.disabled)
-      .onClick((): void => { this.onTap(); })
-      .accessibilityText(this.label)
-    }.borderRadius(this.compact ? 14 : 18).clip(false)
-      .onAreaChange((_old: Area, area: Area): void => {
-        const width: number = Number(area.width);
-        if (width > 0 && Math.abs(width - this.buttonWidth) > 0.5) { this.buttonWidth = width; }
-      })
+  }
+
+  build() {
+    Column() {
+      Stack() {
+        MaterialTabs({ slot: MaterialSlot.FORUM_ACTION_BUTTON, barWidth: this.contentWidth,
+          barHeight: this.contentHeight, componentMaterial: true,
+          barContent: (): void => { this.MaterialButton(); } })
+          .width(this.contentWidth).height(this.contentHeight)
+          .position({ x: 0, y: 0 }).clip(false)
+        Row({ space: 4 }) {
+          if (this.busy) {
+            LoadingProgress().width(12).height(12).color(this.foreground())
+              .accessibilityLevel('no')
+          } else {
+            SymbolGlyph(this.retry ? $r('sys.symbol.arrow_clockwise') :
+              (this.completed ? $r('sys.symbol.checkmark') : this.actionSymbol))
+              .fontSize(12).fontWeight(FontWeight.Regular).fontColor([this.foreground()])
+              .accessibilityLevel('no')
+          }
+          Text(this.label).fontSize(13).fontWeight(FontWeight.Medium).fontColor(this.foreground())
+            .textAlign(TextAlign.Center).maxLines(1)
+        }.justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+          .constraintSize({ minWidth: 76, minHeight: 32 })
+          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .accessibilityGroup(true).accessibilityText(this.accessibilityLabel || this.label)
+          .accessibilityDescription(this.busy ? '正在处理' : (this.disabled ? '不可操作' : ''))
+          .hitTestBehavior(HitTestMode.None).onClick((): void => { this.activate(); })
+          .onAreaChange((_old: Area, area: Area): void => {
+            this.contentWidth = Number(area.width);
+            this.contentHeight = Number(area.height);
+          })
+      }.clip(false)
+    }
+      .constraintSize({ minHeight: 44 }).justifyContent(FlexAlign.Center).flexShrink(0).clip(false)
+      .parallelGesture(TapGesture().onAction((): void => { this.activate(); }))
   }
 }

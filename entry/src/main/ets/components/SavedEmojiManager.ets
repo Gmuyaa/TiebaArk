@@ -71,7 +71,7 @@ export struct SavedEmojiManager {
         if (this.vm.editing) {
           if (this.vm.selected.indexOf(item.picId) >= 0) {
             Stack() {
-              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([Color.White])
+              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([AppTheme.ON_ACCENT])
             }.width(22).height(22).borderRadius(11).backgroundColor(AppTheme.ACCENT).margin(5)
           } else {
             Circle().width(22).height(22).fill(Color.Transparent).stroke(AppTheme.TEXT_SUB).strokeWidth(1).margin(5)

@@ -11,12 +11,14 @@ import { ForbiddenForums } from '../model/ForbiddenForums';
 import { ForumMemberGroup } from '../model/ForumMember';
 import { ForumSearchPage } from '../model/ForumSearch';
 import { HotTopicItem } from '../model/HotTopic';
+import { HotTopicCardInfo } from '../model/HotTopicCard';
 import { ImageUploadResult } from '../model/ImageUpload';
 import { ImageWatermark } from '../model/ImageWatermark';
 import { MemeEmojiData } from '../model/MemeEmoji';
 import { MessageSettings } from '../model/MessageSettings';
 import { StoredThread, UserPostItem } from '../model/MyContent';
 import { NotifyItem } from '../model/Notify';
+import { NotifyUnreadCounts } from '../model/NotifyUnread';
 import { OfficialMessageSettings } from '../model/OfficialMessages';
 import { OfficialSignResult, OfficialSignCapability } from '../model/OfficialSign';
 import { DirectoryData } from '../model/PageDirectory';
@@ -36,9 +38,18 @@ export class ThreadListResponse extends ApiResult {
   data: ThreadListResult = new ThreadListResult();
 }
 
+export class NotifyUnreadResponse extends ApiResult {
+  data: NotifyUnreadCounts = new NotifyUnreadCounts();
+}
+
 /** 拉取帖子详情的结果 */
 export class ThreadDetailResponse extends ApiResult {
   data: ThreadDetail = new ThreadDetail();
+}
+
+/** 话题列表按帖子身份补齐公开卡片资料；不持有完整楼层与账号资料。 */
+export class HotTopicCardResponse extends ApiResult {
+  data: HotTopicCardInfo = new HotTopicCardInfo();
 }
 
 /** 拉取楼中楼的结果 */

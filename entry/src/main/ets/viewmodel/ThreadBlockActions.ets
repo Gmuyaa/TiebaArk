@@ -35,7 +35,8 @@ export class ThreadBlockActions {
       if (!current()) { return '账号已变化，请在原账号确认屏蔽结果'; }
       if (response.ok && response.confirmed) {
         await threadBlockStore.rememberBlockedForum(context, thread.sourceForum);
-        return '';
+        if (!current()) { return '账号已变化，请在原账号确认屏蔽结果'; }
+        return threadBlockStore.forumsSaveError.length > 0 ? `贴吧账号已屏蔽该吧；${threadBlockStore.forumsSaveError}` : '';
       }
       /*
        * 服务端没有确认（或请求就失败了）：仍然按用户的意思在本机屏蔽，
@@ -44,11 +45,19 @@ export class ThreadBlockActions {
       hilog.info(0x0, 'ThreadBlock', 'forum block unconfirmed: %{public}s',
         response.describeFailure());
       await threadBlockStore.rememberBlockedForum(context, thread.sourceForum);
+      if (!current()) { return '账号已变化，请在原账号确认屏蔽结果'; }
+      if (threadBlockStore.forumsSaveError.length > 0) {
+        return `服务端未确认（${response.describeFailure()}）；${threadBlockStore.forumsSaveError}`;
+      }
       return `${name}吧已在本机屏蔽；服务端未确认（${response.describeFailure()}）`;
     } catch (err) {
       if (!current()) { return '账号已变化，未写入当前账号的屏蔽记录'; }
       const message: string = (err as Error).message;
       await threadBlockStore.rememberBlockedForum(context, thread.sourceForum);
+      if (!current()) { return '账号已变化，请在原账号确认屏蔽结果'; }
+      if (threadBlockStore.forumsSaveError.length > 0) {
+        return `服务端请求失败：${message}；${threadBlockStore.forumsSaveError}`;
+      }
       return `${name}吧已在本机屏蔽；服务端请求失败：${message}`;
     } finally {
       this.busy = false;
@@ -74,7 +83,8 @@ export class ThreadBlockActions {
         return '拉黑状态未确认，请稍后重试';
       }
       await threadBlockStore.rememberBlockedUser(context, thread.authorId, thread.authorName);
-      return '';
+      if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      return threadBlockStore.usersSaveError.length > 0 ? `贴吧账号已拉黑该用户；${threadBlockStore.usersSaveError}` : '';
     } catch (err) {
       return `屏蔽用户失败：${(err as Error).message}`;
     } finally {
@@ -85,6 +95,7 @@ export class ThreadBlockActions {
   /** 隐藏这一条帖子（纯本机，可在 设置 → 隐私设置 → 隐藏 恢复） */
   async hideThread(context: common.UIAbilityContext, thread: ThreadBrief): Promise<string> {
     if (thread.tid <= 0) { return '帖子身份无效，无法隐藏'; }
+    const owner: string = authSession.sessionKey();
     const item: HiddenThread = new HiddenThread();
     item.tid = thread.tid;
     item.title = thread.title;
@@ -92,7 +103,9 @@ export class ThreadBlockActions {
     item.authorName = thread.authorName;
     item.timeMs = Date.now();
     await threadBlockStore.hide(context, item);
-    return '';
+    if (owner !== authSession.sessionKey()) { return '账号已变化，请重新读取隐藏记录'; }
+    if (threadBlockStore.hiddenSaveError.length > 0) { return threadBlockStore.hiddenSaveError; }
+    return threadBlockStore.isHidden(thread.tid) ? '' : '隐藏未完成，请重新读取后重试';
   }
 
   /**
@@ -114,7 +127,8 @@ export class ThreadBlockActions {
       if (message.length > 0) { return message; }
       if (!vm.known || vm.blocked) { return '拉黑状态未确认，请稍后重试'; }
       await threadBlockStore.forgetBlockedUser(context, uid);
-      return '';
+      if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      return threadBlockStore.usersSaveError.length > 0 ? `贴吧账号已解除拉黑；${threadBlockStore.usersSaveError}` : '';
     } catch (err) {
       return `解除拉黑失败：${(err as Error).message}`;
     } finally {

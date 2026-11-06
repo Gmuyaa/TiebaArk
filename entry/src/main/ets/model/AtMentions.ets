@@ -10,7 +10,7 @@ interface AtRow {
 interface AtPage { has_more?: number | string; current_page?: number | string; }
 interface AtEnvelope {
   error_code?: number | string; error_msg?: string;
-  at_list?: AtRow[]; reply_list?: AtRow[]; page?: AtPage;
+  at_list?: AtRow[] | string; reply_list?: AtRow[]; page?: AtPage;
 }
 
 /** JSON 数字不得修复已丢失的精度；字符串 ID 保持原样。 */
@@ -35,7 +35,10 @@ export function parseAtMentions(text: string): NotifyResult {
       out.message = stringValue(raw.error_msg) || '@我的响应未确认'; return out;
     }
     // 与 axb 相同：reply_list 存在时优先，否则 at_list。错误形态不能退到另一字段掩盖。
-    const rows: AtRow[] | undefined = raw.reply_list !== undefined ? raw.reply_list : raw.at_list;
+    // 当前真实空响应：at_list="" 且 page.has_more=0；仅兼容已核实的这一种空形态。
+    const source: AtRow[] | string | undefined = raw.reply_list !== undefined ? raw.reply_list : raw.at_list;
+    const rows: AtRow[] | undefined = Array.isArray(source) ? source as AtRow[] :
+      raw.reply_list === undefined && source === '' && (raw.page?.has_more === 0 || raw.page?.has_more === '0') ? [] : undefined;
     if (!Array.isArray(rows) || raw.page === undefined || raw.page === null) { throw new Error('通知列表或分页缺失'); }
     if (raw.page.has_more !== 0 && raw.page.has_more !== '0' && raw.page.has_more !== 1 && raw.page.has_more !== '1') { throw new Error('分页未确认'); }
     if (raw.page.current_page !== undefined) {

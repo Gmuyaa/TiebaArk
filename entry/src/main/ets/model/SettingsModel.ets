@@ -10,7 +10,7 @@ export enum SettingsPane {
   ACTION_BAR = 2,
   /** 首页顶部频道页签样式 */
   TOP_NAV = 3,
-  /** 关于贴吧Ark（只读信息 + 版本详情入口 + 项目链接） */
+  /** 关于贴吧Ark（只读版本信息与项目链接） */
   ABOUT = 4,
 
   DARK_MODE = 5,
@@ -41,17 +41,22 @@ export enum SettingsPane {
   FORUM_LEVEL = 26,
   SIGN_SETTINGS = 27,
 
+  /** 已退役的旧分类；保留编号，不再提供入口。 */
   PERSONALIZATION = 28,
-
+  /** 已退役的旧分类；保留编号，不再提供入口。 */
   HARMONY_FEATURES = 29,
-
+  /** 已退役的空分类；保留编号，不再提供入口。 */
   OTHER_SETTINGS = 30,
   /** 吧内分区默认导航：热门或最新，本机偏好。 */
   FORUM_DEFAULT_TAB = 31,
   HDS_MATERIAL = 32,
   HIDDEN_THREADS = 33,
   IMAGE_MENU = 34,
-  MOTION = 35
+  MOTION = 35,
+  INTERACTION = 36,
+  POSTING = 37,
+  NAVIGATION_LAYOUT = 38,
+  MATERIAL_EFFECTS = 39
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -145,8 +150,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.177';
-export const SETTINGS_VERSION_CODE: string = '2611029';
+export const SETTINGS_APP_VERSION: string = '1.0.203';
+export const SETTINGS_VERSION_CODE: string = '2611055';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -158,9 +163,10 @@ function paneEntry(key: string, label: string, value: string, pane: SettingsPane
   };
 }
 
-function switchEntry(key: string, label: string, checked: boolean, enabled: boolean = true): SettingsEntry {
+function switchEntry(key: string, label: string, checked: boolean, enabled: boolean = true,
+  subtitle: string = ''): SettingsEntry {
   return {
-    key: key, label: label, value: '', kind: SettingsEntryKind.SWITCH,
+    key: key, label: label, value: '', subtitle: subtitle, kind: SettingsEntryKind.SWITCH,
     pane: SettingsPane.NONE, action: key, enabled: enabled, danger: false, checked: checked
   };
 }
@@ -168,37 +174,39 @@ function switchEntry(key: string, label: string, checked: boolean, enabled: bool
 export function buildSettingsGroups(state: SettingsState): SettingsGroup[] {
   return [
     {
-      key: 'experience', title: '使用体验', entries: [
-        paneEntry('appearance', '外观设计', '', SettingsPane.APPEARANCE),
-        paneEntry('browsing', '浏览设置', '', SettingsPane.BROWSING)
+      key: 'appearance', title: '外观与布局', entries: [
+        paneEntry('appearance', '外观与布局', '', SettingsPane.APPEARANCE)
       ]
     },
     {
-      key: 'harmony', title: '鸿蒙特性', entries: [
-        paneEntry('harmony_features', '鸿蒙特性设置', '', SettingsPane.HARMONY_FEATURES)
+      key: 'browsing', title: '浏览与图片', entries: [
+        paneEntry('browsing', '浏览与图片', '', SettingsPane.BROWSING)
       ]
     },
     {
-      key: 'personalization', title: '个性化', entries: [
-        paneEntry('personalization', '个性化', '', SettingsPane.PERSONALIZATION)
+      key: 'interaction', title: '操作与动效', entries: [
+        paneEntry('interaction', '操作与动效', '', SettingsPane.INTERACTION)
       ]
     },
     {
-      key: 'account_prefs', title: '贴吧账号偏好', entries: [
+      key: 'posting', title: '发帖与互动', entries: [
+        paneEntry('posting', '发帖与互动', '', SettingsPane.POSTING)
+      ]
+    },
+    {
+      key: 'messages', title: '消息设置', entries: [
         paneEntry('messages', '消息设置', '', SettingsPane.MESSAGE)
       ]
     },
     {
-      key: 'data_privacy', title: '数据与隐私', entries: [
-        // 右侧是**阶段文案**（真实占用 / 暂无缓存文件 / 读取失败），不是裸字节
-        paneEntry('cache_clean', '缓存清理', state.cacheLabel, SettingsPane.CACHE),
-        paneEntry('permissions', '隐私设置', '', SettingsPane.PRIVACY_SETTINGS)
+      key: 'privacy', title: '屏蔽与隐私', entries: [
+        paneEntry('permissions', '屏蔽与隐私', '', SettingsPane.PRIVACY_SETTINGS)
       ]
     },
     {
-      key: 'other', title: '其它', entries: [
-
-        paneEntry('other_settings', '其它设置', '', SettingsPane.OTHER_SETTINGS)
+      key: 'cache', title: '缓存清理', entries: [
+        // 右侧保留真实占用、空缓存或读取失败等阶段文案。
+        paneEntry('cache_clean', '缓存清理', state.cacheLabel, SettingsPane.CACHE)
       ]
     },
     {
@@ -209,60 +217,63 @@ export function buildSettingsGroups(state: SettingsState): SettingsGroup[] {
   ];
 }
 
-/** 分类页里的设置项；首页只展示分类与分组标题，不混入具体开关。 */
+/** 分类页里的设置项；首页只展示分类入口，不混入具体开关。 */
 export function buildSettingsCategoryEntries(pane: SettingsPane, state: SettingsState): SettingsEntry[] {
   switch (pane) {
-    case SettingsPane.BROWSING:
-      // 浏览设置：内容加载方式与吧内默认分区。
-      // A-08 低流量模式：打开后不自动加载图片（列表、正文图集、视频流；见 LowFlowStore 头注释）
+    case SettingsPane.APPEARANCE:
+      // 基础外观四项由页面直接渲染；这里仅提供有独立内容的两个子页。
       return [
-        switchEntry('low_flow', '低流量模式', state.lowFlow),
-        paneEntry('image_watermark', '图片水印', '', SettingsPane.IMAGE_WATERMARK),
-        paneEntry('forum_default_tab', '吧内分区默认导航', state.forumDefaultTabLabel,
-          SettingsPane.FORUM_DEFAULT_TAB)
+        paneEntry('navigation_layout', '导航布局', '', SettingsPane.NAVIGATION_LAYOUT),
+        paneEntry('material_effects', '材质效果', '', SettingsPane.MATERIAL_EFFECTS)
       ];
-    case SettingsPane.HARMONY_FEATURES:
-
+    case SettingsPane.BROWSING:
+      return [
+        paneEntry('forum_default_tab', '进吧默认分区', state.forumDefaultTabLabel,
+          SettingsPane.FORUM_DEFAULT_TAB),
+        switchEntry('low_flow', '低流量模式', state.lowFlow, true, '列表与正文不自动加载图片'),
+        paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
+        switchEntry('super_resolution', '显示超分按钮', state.superResolution)
+      ];
+    case SettingsPane.MATERIAL_EFFECTS:
       return [
         paneEntry('material_mode', '沉浸材质厚度', state.materialLabel.trim(), SettingsPane.MATERIAL),
-        paneEntry('hds_material_level', '兼容材质效果', state.hdsMaterialLabel ?? '精美', SettingsPane.HDS_MATERIAL),
-        paneEntry('action_bar_style', '帖子页底栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
+        paneEntry('hds_material_level', '兼容材质效果', state.hdsMaterialLabel ?? '精美', SettingsPane.HDS_MATERIAL)
+      ];
+    case SettingsPane.NAVIGATION_LAYOUT:
+      return [
         paneEntry('home_top_nav_style', '首页顶栏样式', state.topNavLabel.trim(), SettingsPane.TOP_NAV),
+        paneEntry('action_bar_style', '帖子页底栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
+        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true),
         switchEntry('hide_status_bar', '隐藏状态栏', state.hideStatusBar),
         switchEntry('hide_top_navigation', '隐藏顶部导航栏', state.hideTopNavigation),
-        switchEntry('hide_bottom_navigation', '隐藏底部导航栏', state.hideBottomNavigation),
-
-        switchEntry('super_resolution', '图像超分', state.superResolution),
+        switchEntry('hide_bottom_navigation', '隐藏底部导航栏', state.hideBottomNavigation)
+      ];
+    case SettingsPane.INTERACTION:
+      return [
         switchEntry('smart_reach', '智感握姿', state.smartReach ?? true),
         switchEntry('home_compose_smart_reach', '首页发帖按钮跟随握姿', state.homeComposeSmartReach ?? true, state.smartReach ?? true),
         switchEntry('forum_tabs_smart_reach', '分类胶囊跟随握姿', state.forumTabsSmartReach ?? true,
           state.smartReach ?? true),
-        paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
         switchEntry('image_menu_smart_reach', '看图胶囊跟随握姿', state.imageMenuSmartReach ?? true, state.smartReach ?? true),
-        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true),
         paneEntry('motion', '动效', '', SettingsPane.MOTION)
       ];
-    case SettingsPane.PERSONALIZATION:
-
+    case SettingsPane.POSTING:
       return [
-        paneEntry('sign_settings', '签到设置', '', SettingsPane.SIGN_SETTINGS),
+        paneEntry('image_watermark', '图片水印', '', SettingsPane.IMAGE_WATERMARK),
         paneEntry('tails', '小尾巴', '', SettingsPane.TAILS),
-        // 「隐私标记」在界面上一律叫**吧务身份标记**（避免与"隐私设置"混淆）
-        paneEntry('privacy_marks', '吧务身份标记', '', SettingsPane.PRIVACY_MARKS)
+        paneEntry('privacy_marks', '吧务身份标记', '', SettingsPane.PRIVACY_MARKS),
+        paneEntry('sign_settings', '签到方案', '', SettingsPane.SIGN_SETTINGS)
       ];
     case SettingsPane.PRIVACY_SETTINGS:
 
       return [
         paneEntry('forbidden_forums', '屏蔽吧', '', SettingsPane.FORBIDDEN_FORUMS),
 
-        paneEntry('block_manage', '拉黑', '', SettingsPane.BLOCK_MANAGE),
-        paneEntry('hidden_threads', '隐藏', '', SettingsPane.HIDDEN_THREADS),
+        paneEntry('block_manage', '拉黑的用户', '', SettingsPane.BLOCK_MANAGE),
+        paneEntry('hidden_threads', '隐藏的帖子', '', SettingsPane.HIDDEN_THREADS),
         paneEntry('app_permissions', '系统权限', '', SettingsPane.APP_PERMISSIONS),
         paneEntry('data_use', '数据使用说明', '', SettingsPane.DATA_USE)
       ];
-    case SettingsPane.OTHER_SETTINGS:
-
-      return [];
     default:
       return [];
   }
@@ -316,7 +327,7 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.FORUM_LEVEL:
       return '吧等级标签';
     case SettingsPane.SIGN_SETTINGS:
-      return '签到设置';
+      return '签到方案';
     case SettingsPane.MATERIAL:
       return '沉浸材质厚度';
     case SettingsPane.HDS_MATERIAL:
@@ -328,7 +339,7 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.IMAGE_MENU:
       return '看图菜单显示方式';
     case SettingsPane.FORUM_DEFAULT_TAB:
-      return '吧内分区默认导航';
+      return '进吧默认分区';
     case SettingsPane.DARK_MODE:
       return '深色模式';
     case SettingsPane.ABOUT:
@@ -336,9 +347,17 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.ACCOUNT:
       return '账号与资料';
     case SettingsPane.APPEARANCE:
-      return '外观设计';
+      return '外观与布局';
     case SettingsPane.BROWSING:
-      return '浏览设置';
+      return '浏览与图片';
+    case SettingsPane.INTERACTION:
+      return '操作与动效';
+    case SettingsPane.POSTING:
+      return '发帖与互动';
+    case SettingsPane.NAVIGATION_LAYOUT:
+      return '导航布局';
+    case SettingsPane.MATERIAL_EFFECTS:
+      return '材质效果';
     case SettingsPane.HARMONY_FEATURES:
       return '鸿蒙特性设置';
     case SettingsPane.MOTION:
@@ -358,9 +377,9 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.FORBIDDEN_FORUMS:
       return '屏蔽吧';
     case SettingsPane.BLOCK_MANAGE:
-      return '拉黑';
+      return '拉黑的用户';
     case SettingsPane.HIDDEN_THREADS:
-      return '隐藏';
+      return '隐藏的帖子';
     case SettingsPane.PRIVACY_MARKS:
       return '吧务身份标记';
     case SettingsPane.IMAGE_WATERMARK:
@@ -368,7 +387,7 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.APP_PERMISSIONS:
       return '系统权限';
     case SettingsPane.PRIVACY_SETTINGS:
-      return '隐私设置';
+      return '屏蔽与隐私';
     case SettingsPane.DATA_USE:
       return '数据使用说明';
     case SettingsPane.VERSION:
@@ -378,6 +397,46 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.NONE:
     default:
       return '设置';
+  }
+}
+
+/** 内容页和选项菜单的逻辑父页；顶栏、系统返回与返回手势共用。 */
+export function settingsParentPane(pane: SettingsPane): SettingsPane {
+  switch (pane) {
+    case SettingsPane.NAVIGATION_LAYOUT:
+    case SettingsPane.MATERIAL_EFFECTS:
+    case SettingsPane.DARK_MODE:
+    case SettingsPane.FONT_SIZE:
+    case SettingsPane.FORUM_LEVEL:
+      return SettingsPane.APPEARANCE;
+    case SettingsPane.TOP_NAV:
+    case SettingsPane.ACTION_BAR:
+      return SettingsPane.NAVIGATION_LAYOUT;
+    case SettingsPane.MATERIAL:
+    case SettingsPane.HDS_MATERIAL:
+      return SettingsPane.MATERIAL_EFFECTS;
+    case SettingsPane.FORUM_DEFAULT_TAB:
+    case SettingsPane.IMAGE_MENU:
+      return SettingsPane.BROWSING;
+    case SettingsPane.MOTION:
+      return SettingsPane.INTERACTION;
+    case SettingsPane.IMAGE_WATERMARK:
+    case SettingsPane.TAILS:
+    case SettingsPane.PRIVACY_MARKS:
+    case SettingsPane.SIGN_SETTINGS:
+      return SettingsPane.POSTING;
+    case SettingsPane.OFFICIAL_MESSAGES:
+      return SettingsPane.MESSAGE;
+    case SettingsPane.FORBIDDEN_FORUMS:
+    case SettingsPane.BLOCK_MANAGE:
+    case SettingsPane.HIDDEN_THREADS:
+    case SettingsPane.APP_PERMISSIONS:
+    case SettingsPane.DATA_USE:
+      return SettingsPane.PRIVACY_SETTINGS;
+    case SettingsPane.VERSION:
+      return SettingsPane.ABOUT;
+    default:
+      return SettingsPane.NONE;
   }
 }
 

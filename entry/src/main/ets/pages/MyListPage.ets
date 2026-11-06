@@ -4,10 +4,15 @@ import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpi
 /** 浏览历史、收藏、回复与帖子列表页面，共用列表布局与对应 VM。 */
 
 import { common } from '@kit.AbilityKit';
+import { accessibility } from '@kit.AccessibilityKit';
 import { promptAction } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppTheme } from '../theme/Theme';
 import { PageHeader } from '../components/PageHeader';
+import { GlassCircleButton } from '../components/GlassCircleButton';
+import { GlassPillButton } from '../components/GlassPillButton';
+import { GlassToast } from '../components/GlassToast';
+import { MaterialSlot } from '../common/material/MaterialConfig';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { MyListItem, MyListVM, kindTitle, parseKind } from '../viewmodel/MyListVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
@@ -18,12 +23,15 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ImageViewer } from '../components/ImageViewer';
+import { animateImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
+import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
 
 /** 已删除帖子的左下角提示（标题同色灰显，见 `CardItem`） */
 const DELETED_LABEL: string = '该帖子已被删除';
 /** 发帖时选了「个人主页不可见」的标签，与官方「我的帖子」右上角一致 */
 const HIDE_FROM_PROFILE_LABEL: string = '主页不可见';
+const FAVORITE_ACTION_INSET: number = 84;
 
 @ComponentV2
 export struct MyListPage {
@@ -35,7 +43,19 @@ export struct MyListPage {
   @Local refreshing: boolean = false;
   @Local viewerImages: string[] = [];
   @Local viewerIndex: number = 0;
+  @Local favoriteResult: string = '';
+  private favoriteResultTimer: number = -1;
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
+  private deletionRevision: number = contentDeletionRevision();
+  @Local pageVisible: boolean = false;
+
+  @Monitor('vm.loading', 'vm.loadingMore', 'vm.threadPendingTid', 'vm.removing', 'pageVisible')
+  refreshAfterDeletion(): void {
+    if (!this.pageVisible || this.vm.loading || this.vm.loadingMore || this.vm.threadPendingTid > 0 ||
+      this.vm.removing || this.deletionRevision === contentDeletionRevision()) { return; }
+    this.deletionRevision = contentDeletionRevision();
+    void this.vm.load(this.hostContext());
+  }
   private imageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
 
   private imageScroller(tid: number): ListScroller {
@@ -97,23 +117,54 @@ export struct MyListPage {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
-  aboutToDisappear(): void { this.vm.dispose(); }
+  aboutToDisappear(): void {
+    this.clearFavoriteResult();
+    this.vm.dispose();
+  }
+
+  private clearFavoriteResult(): void {
+    clearTimeout(this.favoriteResultTimer);
+    this.favoriteResultTimer = -1;
+    this.favoriteResult = '';
+  }
+
+  private showFavoriteResult(message: string): void {
+    if (message.length === 0) { return; }
+    this.clearFavoriteResult();
+    this.favoriteResult = message;
+    this.favoriteResultTimer = setTimeout((): void => {
+      this.favoriteResultTimer = -1;
+      this.favoriteResult = '';
+    }, message.length <= 12 ? 2000 : 3500);
+    if (accessibility.isOpenAccessibilitySync()) {
+      const event = new accessibility.EventInfo('announceForAccessibilityNotInterrupt',
+        this.hostContext().abilityInfo.bundleName, 'common');
+      event.textAnnouncedForAccessibility = message;
+      void accessibility.sendAccessibilityEvent(event).catch(() => {});
+    }
+  }
 
   private confirmRemoveFavorites(): void {
-    if (this.vm.removing || this.vm.selected.length === 0) { return; }
+    if (!this.canRemoveFavorites()) { return; }
     const confirmed: number[] = this.vm.selected.slice();
     const confirmedOwner: string = this.vm.selectionOwner();
-    promptAction.showDialog({
+    this.getUIContext().getPromptAction().showDialog({
       title: '取消收藏',
-      message: `将取消选中的 ${this.vm.selected.length} 条收藏。`,
-      buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '取消收藏', color: AppTheme.ACCENT_DARK }]
-    }).then((result) => {
-      if (result.index === 1) { this.vm.removeSelected(this.hostContext(), confirmed, confirmedOwner); }
+      message: `将取消选中的 ${confirmed.length} 条收藏。`,
+      buttons: [{ text: '取消', color: AppTheme.TEXT_SUB }, { text: '取消收藏', color: AppTheme.DANGER_TEXT }]
+    }).then(async (result): Promise<void> => {
+      if (result.index === 1) {
+        this.showFavoriteResult(await this.vm.removeSelected(this.hostContext(), confirmed, confirmedOwner));
+      }
     }).catch(() => {});
   }
 
+  private canRemoveFavorites(): boolean {
+    return this.vm.selected.length > 0 && !this.vm.removing &&
+      !this.vm.loading && !this.vm.loadingMore;
+  }
+
   private openThread(item: MyListItem): void {
-    if (this.vm.kind === 'fav' && this.vm.managing) { this.vm.toggleSelected(item.tid); return; }
     if (item.tid <= 0) {
       return;
     }
@@ -131,7 +182,15 @@ export struct MyListPage {
   }
 
   private goBack(): void {
+    if (this.vm.managing) { this.vm.toggleManaging(); return; }
     NavigationService.back();
+  }
+
+  private headerTitle(): string {
+    if (!this.vm.managing) { return kindTitle(this.vm.kind); }
+    if (this.vm.stoppingRemoval) { return '正在停止…'; }
+    if (this.vm.removing) { return '正在取消收藏…'; }
+    return this.vm.selected.length === 0 ? '未选择' : `已选择 ${this.vm.selected.length} 项`;
   }
 
   /** 吧名展示文本：服务端给的多半不带"吧"字，缺就补上（与参考图一致） */
@@ -155,10 +214,16 @@ export struct MyListPage {
 
   @Builder
   HeaderActions() {
-    if (this.vm.kind === 'fav' && this.vm.items.length > 0) {
-      Text(this.vm.managing ? '完成' : '管理').fontSize(14)
-        .constraintSize({ minHeight: 40, minWidth: 40 }).textAlign(TextAlign.Center).fontColor(AppTheme.ACCENT_DARK)
-        .enabled(!this.vm.removing).onClick(() => { this.vm.toggleManaging(); })
+    if (this.vm.kind === 'fav' && (this.vm.managing || this.vm.items.length > 0)) {
+      if (this.vm.managing) {
+        GlassPillButton({ label: this.vm.allLoadedSelected() ? '取消全选' : '全选',
+          pillWidth: this.vm.allLoadedSelected() ? 88 : 64,
+          active: !this.vm.removing && !this.vm.loading && !this.vm.loadingMore,
+          onTap: (): void => { this.vm.selectLoaded(); } })
+      } else {
+        GlassPillButton({ label: '多选', active: !this.vm.loading && !this.vm.loadingMore,
+          onTap: (): void => { this.vm.toggleManaging(); } })
+      }
     }
 
     if (this.vm.kind === 'history' && this.vm.items.length > 0) {
@@ -194,7 +259,9 @@ export struct MyListPage {
       Stack() {
       Column() {
         // ── 页头：返回 + 标题（+ 历史页的"清空"）──
-        PageHeader({ title: kindTitle(this.vm.kind), onBack: (): void => { this.goBack(); },
+        PageHeader({ title: this.headerTitle(),
+          closeLabel: this.vm.managing ? (this.vm.removing ? '停止取消收藏' : '退出多选') : '',
+          onBack: (): void => { this.goBack(); },
           actions: (): void => { this.HeaderActions(); } })
 
       if (this.vm.kind === 'fav') {
@@ -229,6 +296,22 @@ export struct MyListPage {
     .height('100%')
     .padding({ top: this.statusBarH })
     .backgroundColor(AppTheme.BG)
+      if (this.vm.managing) {
+        Row() {
+          GlassCircleButton({ symbol: $r('sys.symbol.trash'), iconWeight: FontWeight.Regular,
+            accessibilityLabel: '取消所选收藏', diameter: 56, iconSize: 24, slot: MaterialSlot.BOTTOM_BAR,
+            onTap: (): void => { this.confirmRemoveFavorites(); } })
+            .enabled(this.canRemoveFavorites()).opacity(this.canRemoveFavorites() ? 1 : 0.4)
+        }.width('100%').justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.Transparent)
+          .position({ x: 0, y: '100%' }).translate({ y: -FAVORITE_ACTION_INSET })
+      }
+      if (this.favoriteResult.length > 0) {
+        Column() {
+          Blank()
+          GlassToast({ message: this.favoriteResult })
+        }.width('100%').height('100%').clip(false).hitTestBehavior(HitTestMode.None)
+          .padding({ left: 16, right: 16, bottom: this.vm.managing ? FAVORITE_ACTION_INSET + 12 : AppTheme.BAR_SAFE_H + 16 })
+      }
       if (this.viewerImages.length > 0) {
         ImageViewer({ imageUrls: this.viewerImages, initialIndex: this.viewerIndex,
           onClose: (): void => { this.viewerImages = []; } })
@@ -237,6 +320,17 @@ export struct MyListPage {
     }
     // 本页页头完全由内容自绘（GlassBackButton + 标题在页面流内），绝不显示 HDS 默认标题栏
     .hideTitleBar(true)
+    .onShown((): void => { this.pageVisible = true; this.refreshAfterDeletion(); })
+    .onHidden((): void => { this.pageVisible = false; this.clearFavoriteResult(); })
+    .onBackPressed((): boolean => {
+      if (this.viewerImages.length > 0) {
+        animateImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
+        return true;
+      }
+      if (!this.vm.managing) { return false; }
+      this.goBack();
+      return true;
+    })
   }
 
   @Builder
@@ -305,22 +399,6 @@ export struct MyListPage {
   @Builder
   FavoritesBody() {
     Column() {
-      if (this.vm.managing) {
-        Row() {
-          Text(this.vm.selected.length === this.vm.items.length ? '取消全选' : '全选已加载')
-            .fontSize(13).fontColor(AppTheme.ACCENT_DARK)
-            .enabled(!this.vm.removing).onClick(() => { this.vm.selectLoaded(); })
-          Blank()
-          Text(this.vm.removing ? '正在取消收藏…' : `取消收藏 (${this.vm.selected.length})`)
-            .fontSize(13).fontColor(AppTheme.ACCENT_DARK)
-            .enabled(!this.vm.removing && !this.vm.loading && !this.vm.loadingMore && this.vm.selected.length > 0)
-            .onClick(() => { this.confirmRemoveFavorites(); })
-        }.width('100%').padding({ left: 16, right: 16, top: 8, bottom: 8 })
-      }
-      if (this.vm.manageNotice.length > 0) {
-        Text(this.vm.manageNotice).fontSize(12).fontColor(AppTheme.TEXT_SUB)
-          .width('100%').padding(12)
-      }
       Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
         Column() {
           if (this.vm.items.length === 0) {
@@ -335,23 +413,22 @@ export struct MyListPage {
                 onAction: (): void => { void this.vm.load(this.hostContext()); } })
             }
             List({ space: 10 }) {
-              ForEach(this.vm.items, (item: MyListItem) => {
-                ListItem() {
-                  Row({ space: 8 }) {
-                    if (this.vm.managing) {
-                      Checkbox().select(this.vm.selected.includes(item.tid)).enabled(!this.vm.removing)
-                        .onChange(() => { this.vm.toggleSelected(item.tid); })
-                    }
-                    Column() { this.CardItem(item) }.layoutWeight(1)
-                  }.width('100%')
-                }
-              }, (item: MyListItem) => `${item.tid}-${item.forumAvatar}-${item.isDeleted}`)
+              Repeat<MyListItem>(this.vm.items)
+                .each((row: RepeatItem<MyListItem>) => {
+                  ListItem() { this.FavoriteRow(row.item) }
+                })
+                .key((item: MyListItem): string =>
+                  `${item.tid}-${item.forumAvatar}-${item.isDeleted}-${item.title}-${item.coverUrl}`)
+                .virtualScroll({ reusable: false })
               ListItem() {
                 ListFooter({ loading: this.vm.loadingMore, error: this.vm.pagingError, hasMore: this.vm.hasMore,
                 onRetry: (): void => { void this.vm.loadMore(this.hostContext()); } })
               }
+              if (this.vm.managing) {
+                ListItem() { Row().height(FAVORITE_ACTION_INSET).width('100%') }
+              }
             }.padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
-              .edgeEffect(motionEdgeEffect()).onReachEnd(() => {
+              .cachedCount(2).edgeEffect(motionEdgeEffect()).onReachEnd(() => {
                 if (this.vm.pagingError.length === 0) { this.vm.loadMore(this.hostContext()); }
               })
           }
@@ -363,6 +440,23 @@ export struct MyListPage {
         this.vm.load(this.hostContext()).finally(() => { this.refreshing = false; });
       })
     }.width('100%').layoutWeight(1)
+  }
+
+  @Builder
+  FavoriteRow(item: MyListItem) {
+    Row() {
+      Column() { this.CardItem(item) }.layoutWeight(1)
+      if (this.vm.managing) {
+        Checkbox().select(this.vm.isSelected(item.tid)).width(20).height(20)
+          .selectedColor(AppTheme.ACCENT).unselectedColor(AppTheme.TEXT_MUTED)
+          .mark({ strokeColor: AppTheme.ON_ACCENT })
+          .margin({ left: 4, right: 16 }).enabled(!this.vm.removing)
+          .accessibilityText(`选择${item.title}`)
+          .onChange((selected: boolean) => {
+            if (selected !== this.vm.isSelected(item.tid)) { this.vm.toggleSelected(item.tid); }
+          })
+      }
+    }.width('100%').backgroundColor(AppTheme.CARD).borderRadius(AppTheme.CARD_RADIUS)
   }
 
   @Builder
@@ -522,7 +616,8 @@ export struct MyListPage {
     .backgroundColor(AppTheme.CARD)
     .borderRadius(AppTheme.CARD_RADIUS)
     .onClick(() => {
-      this.openThread(item);
+      if (this.vm.managing) { this.vm.toggleSelected(item.tid); }
+      else { this.openThread(item); }
     })
   }
 }

@@ -13,7 +13,7 @@ export struct TaggedThreadText {
   @Param textSize: number = 16;
   @Param lineSize: number = 24;
   @Param weight: FontWeight = FontWeight.Bold;
-  @Param textColor: ResourceColor = AppTheme.TEXT_MAIN;
+  @Param textColor: ResourceColor | undefined = undefined;
   @Param lines: number = 3;
   @Param fillPinned: boolean = true;
 
@@ -41,7 +41,7 @@ export struct TaggedThreadText {
             } else { Span(piece.text) }
           }, (piece: ContentPiece, index: number) => `${index}:${piece.text}:${piece.emojiUrl}`)
       }.fontSize(this.textSize).fontWeight(this.weight)
-        .fontColor(this.textColor).lineHeight(`${this.lineSize}fp`)
+        .fontColor(this.textColor ?? AppTheme.TEXT_MAIN).lineHeight(`${this.lineSize}fp`)
         .textIndent(`${this.firstIndent()}vp`)
         .maxLines(this.lines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         .accessibilityText(`${this.labels.join(' ')} ${this.text}`.trim())

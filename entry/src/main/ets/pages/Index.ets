@@ -10,13 +10,15 @@ import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { AnimatorResult, curves, display, window } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { authSession } from '../auth/AuthSession';
+import { authSession, AuthSession } from '../auth/AuthSession';
+import { NotifyUnreadVM, notifyUnreadVM } from '../viewmodel/NotifyUnreadVM';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import { HdsNavigation, HdsTabsController, BlurStrategy, ScrollEffectType } from '@kit.UIDesignKit';
 import { ThreadDetailPage } from './ThreadDetail';
 import { portraitUrl } from '../model/ThreadDetail';
 import { ForumPage } from './ForumPage';
+import { ForumSquarePage } from './ForumSquarePage';
 import { SearchResultPage } from './SearchResultPage';
 import { SearchPage } from './SearchPage';
 import { ScanPage } from './ScanPage';
@@ -36,7 +38,7 @@ import {
 } from '../navigation/AppNavigation';
 import { materialManager } from '../common/material/MaterialManager';
 import { MotionEffect } from '../common/appearance/MotionConfig';
-import { motionStore } from '../common/appearance/MotionStore';
+import { motionStore, MotionStore } from '../common/appearance/MotionStore';
 import { motionDuration } from '../common/appearance/MotionPolicy';
 import { MaterialTabs } from '../components/MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
@@ -94,8 +96,35 @@ struct Index {
   /** 当前页签，与 HDS Tab 切换同步，用于保持页面状态 */
   @Local currentIndex: number = 0;
   @Local pageVisible: boolean = true;
+  @Local motionPreferences: MotionStore = motionStore;
   @Local foreground: ForegroundRefresh = foregroundRefresh;
+  @Local unread: NotifyUnreadVM = notifyUnreadVM;
+  @Local unreadAuth: AuthSession = authSession;
+  private unreadTimer: number = -1;
   private foregroundRevision: number = foregroundRefresh.revision;
+
+  /** 外壳统一读取计数，消息页与底栏共用；不自动读取会消费未读的分类列表。 */
+  @Monitor('foreground.isForeground', 'foreground.revision', 'pageVisible', 'homeNavVisible',
+    'unreadAuth.snapshot', 'unread.previewRevision')
+  private syncUnreadRefresh(): void {
+    this.stopUnreadRefresh();
+    this.unread.syncAccount();
+    if (!this.pageVisible || !this.foreground.isForeground || !authSession.isLoggedIn()) { return; }
+    void this.reloadUnread();
+    this.unreadTimer = setInterval((): void => {
+      if (this.pageVisible && this.foreground.isForeground && authSession.isLoggedIn()) {
+        void this.reloadUnread();
+      }
+    }, 30000);
+  }
+
+  private stopUnreadRefresh(): void {
+    if (this.unreadTimer !== -1) { clearInterval(this.unreadTimer); this.unreadTimer = -1; }
+  }
+
+  private async reloadUnread(): Promise<void> {
+    await this.unread.refresh(this.getUIContext().getHostContext() as common.UIAbilityContext);
+  }
 
   @Monitor('foreground.revision', 'pageVisible', 'homeNavVisible')
   onForegroundRefresh(): void {
@@ -151,6 +180,20 @@ struct Index {
   private homeFollowScroller: ListScroller = new ListScroller();
   private homeHotScroller: ListScroller = new ListScroller();
 
+  @Monitor('motionPreferences.enabled', 'motionPreferences.arkuiEnabled', 'motionPreferences.selected',
+    'motionPreferences.systemReducedMotion')
+  private onMotionPreferenceChanged(): void {
+    this.appNavStack.disableAnimation(!motionStore.isOn(MotionEffect.MOVE));
+    if (this.bottomAnimator !== undefined) { this.animateBottomBar(this.bottomNavigationHidden()); }
+  }
+
+  pageTransition() {
+    if (!motionStore.isOn(MotionEffect.MOVE)) {
+      PageTransitionEnter({ duration: 0 })
+      PageTransitionExit({ duration: 0 })
+    }
+  }
+
   /** 首页查看器独占系统返回；普通内容页仍由共享导航栈处理。 */
   onBackPress(): boolean {
     if (this.viewerUrls.length === 0) { return false; }
@@ -191,6 +234,12 @@ struct Index {
 
     const widthVp: number = px2vp(display.getDefaultDisplaySync().width);
     this.barSideMargin = bottomBarSideMarginVp(widthVp);
+    this.syncUnreadRefresh();
+  }
+
+  aboutToDisappear(): void {
+    this.stopUnreadRefresh();
+    this.unread.reset();
   }
 
   onPageHide(): void {
@@ -218,7 +267,8 @@ struct Index {
   /** 浮面统一以展开时的中心定位；补偿缩小后的半高差，避免底边锚点与控制器平移叠加。 */
   private bottomBarBottomMargin(): number {
     if (!materialManager.useArkUI) { return AppTheme.BAR_SAFE_H; }
-    return AppTheme.BAR_SAFE_H + AppTheme.BAR_CONTENT_H * (1 - this.bottomBarScaleFactor()) / 2 - this.bottomOffsetY;
+    return AppTheme.BAR_SAFE_H + AppTheme.BAR_CONTENT_H * (1 - this.bottomBarScaleFactor()) / 2 -
+      (motionStore.isOn(MotionEffect.MOVE) ? this.bottomOffsetY : 0);
   }
 
   /** 宽高、前景与底距共用声明进度；控制器仅调整透明度，不再参与定位。 */
@@ -240,7 +290,7 @@ struct Index {
     this.bottomBarCollapsed = false;
     const hiddenY: number = AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H;
     const context: UIContext = this.getUIContext();
-    if (!motionStore.isOn(MotionEffect.MOVE)) {
+    if (!motionStore.isOn(MotionEffect.MOVE) && !motionStore.isOn(MotionEffect.SCALE) && !motionStore.isOn(MotionEffect.FADE)) {
       context.animateTo({ duration: 0 }, (): void => {
         this.setBottomBarPose(hidden ? 0.25 : 1, hidden ? hiddenY : 0, hidden ? 0 : 1);
         this.tabsController.setTabBarOpacity(hidden ? 0 : 1);
@@ -299,7 +349,8 @@ struct Index {
     }
     animateTo({
       duration: motionDuration(target ? 300 : 440),
-      curve: target || !motionStore.isOn(MotionEffect.SPRING) ? Curve.EaseIn : curves.springMotion(0.38, 0.64),
+      curve: target || !motionStore.isOn(MotionEffect.MOVE) || !motionStore.isOn(MotionEffect.SPRING)
+        ? Curve.EaseIn : curves.springMotion(0.38, 0.64),
       onFinish: () => {
         if (version !== this.statusBarRequestVersion) { return; }
         if (!target) {
@@ -319,7 +370,7 @@ struct Index {
         if (version === this.statusBarRequestVersion && !this.homeScrollHidden) {
           this.homePillRevealReady = true;
         }
-      }, 120);
+      }, motionDuration(120));
     }
     const targetStatusHidden: boolean = target && homeNavigationHideStore.hideStatusBar;
     const context: common.UIAbilityContext =
@@ -328,7 +379,7 @@ struct Index {
       if (version !== this.statusBarRequestVersion) {
         return;
       }
-      await win.setSpecificSystemBarEnabled('status', !targetStatusHidden, true);
+      await win.setSpecificSystemBarEnabled('status', !targetStatusHidden, motionStore.isOn(MotionEffect.MOVE));
       if (!targetStatusHidden) {
         let contentColor: string;
         try {
@@ -344,7 +395,7 @@ struct Index {
         });
       }
       if (version !== this.statusBarRequestVersion) {
-        await win.setSpecificSystemBarEnabled('status', !this.statusBarHidden(), true);
+        await win.setSpecificSystemBarEnabled('status', !this.statusBarHidden(), motionStore.isOn(MotionEffect.MOVE));
       }
     }).catch((e: Error) => {
       hilog.warn(0x0, 'TiebaTop', 'status bar visibility failed: %{public}s', e.message);
@@ -587,6 +638,8 @@ struct Index {
       ThreadDetailPage({ routeParams: pageInfos as ThreadDetailParams })
     } else if (name === AppRoute.FORUM_PAGE) {
       ForumPage({ routeParams: pageInfos as ForumPageParams })
+    } else if (name === AppRoute.FORUM_SQUARE_PAGE) {
+      ForumSquarePage()
     } else if (name === AppRoute.SEARCH_RESULT_PAGE) {
       SearchResultPage({ routeParams: pageInfos as SearchResultParams })
     } else if (name === AppRoute.SEARCH_PAGE) {
@@ -629,17 +682,17 @@ struct Index {
   tabBuilder(label: string, index: number, slot: TabSlot) {
 
     Column({ space: 2 * this.bottomBarScaleFactor() }) {
-
-      if (index === this.currentIndex) {
-        SymbolGlyph(slot.iconFill)
-          .fontSize(24 * this.bottomBarScaleFactor())
-          .maxFontScale(1)
-          .fontColor([this.slotColor(index)])
+      if (index === 2 && this.unread.counts.total() > 0) {
+        Badge({ count: this.unread.counts.total(), maxCount: 99,
+          position: { x: 17 * this.bottomBarScaleFactor(), y: -4 * this.bottomBarScaleFactor() },
+          style: { badgeSize: 16 * this.bottomBarScaleFactor(), fontSize: 10 * this.bottomBarScaleFactor(),
+            fontWeight: FontWeight.Medium,
+            badgeColor: AppTheme.NOTIFY_BADGE_BACKGROUND, color: AppTheme.NOTIFY_BADGE_TEXT } }) {
+          this.TabIcon(index, slot)
+        }.width(24 * this.bottomBarScaleFactor()).height(24 * this.bottomBarScaleFactor())
+        .accessibilityLevel('no')
       } else {
-        SymbolGlyph(slot.icon)
-          .fontSize(24 * this.bottomBarScaleFactor())
-          .maxFontScale(1)
-          .fontColor([this.slotColor(index)])
+        this.TabIcon(index, slot)
       }
       Text(label)
         .fontSize(10 * this.bottomBarScaleFactor())
@@ -651,6 +704,9 @@ struct Index {
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .id(`main-tab-${index}`)
+    .accessibilityGroup(true)
+    .accessibilityText(this.tabAccessibility(label, index))
+    .accessibilitySelected(this.currentIndex === index)
     .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
     .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
     .onClick(() => {
@@ -668,6 +724,21 @@ struct Index {
       }
       this.changeTabIndex(index);
     })
+  }
+
+  @Builder
+  TabIcon(index: number, slot: TabSlot) {
+    SymbolGlyph(index === this.currentIndex ? slot.iconFill : slot.icon)
+      .fontSize(24 * this.bottomBarScaleFactor()).maxFontScale(1)
+      .fontColor([this.slotColor(index)]).accessibilityLevel('no')
+  }
+
+  private tabAccessibility(label: string, index: number): string {
+    if (index !== 2) { return label; }
+    if (!this.unread.loaded) { return `${label}，未读数${this.unread.error.length > 0 ? '读取失败' : '尚未读取'}`; }
+    const count: number = this.unread.counts.total();
+    return `${label}，${count > 0 ? `${count}条未读` : '没有未读消息'}` +
+      (this.unread.error.length > 0 ? '，上次结果，刷新失败' : '');
   }
 
   /**

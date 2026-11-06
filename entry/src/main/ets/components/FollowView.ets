@@ -1,6 +1,3 @@
-import { MotionEffect } from '../common/appearance/MotionConfig';
-import { motionStore } from '../common/appearance/MotionStore';
-import { motionDuration, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { RootPageHeader } from './PageHeader';
 import { PageState } from './PageState';
 import { followChanges } from '../viewmodel/FollowActionVM';
@@ -8,6 +5,7 @@ import { followChanges } from '../viewmodel/FollowActionVM';
 import { common } from '@kit.AbilityKit';
 import { promptAction, router } from '@kit.ArkUI';
 import { FollowVM } from '../viewmodel/FollowVM';
+import { ForumActionButton } from './ForumActionButton';
 import { GlassCircleButton } from './GlassCircleButton';
 import { ForumLevelBadge } from './ForumLevelBadge';
 import { FollowForumItem } from '../model/FollowForum';
@@ -21,23 +19,69 @@ import { SignStrategyStore, signStrategyStore } from '../common/appearance/SignS
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { UiLayout } from '../common/appearance/UiLayout';
-import { ForumSquareView } from './ForumSquareView';
 
 @ComponentV2
 export struct FollowView {
-  @Local squareSelected: boolean = false;
-  @Local squareVisited: boolean = false;
-  private pageSwiper: SwiperController = new SwiperController();
   @Param active: boolean = true;
   @Local foreground: ForegroundRefresh = foregroundRefresh;
   private foregroundRevision: number = foregroundRefresh.revision;
   private foregroundRefreshPending: boolean = false;
   private foregroundExperiencePending: boolean = false;
   private foregroundAccount: string = '';
+  @Local refreshing: boolean = false;
+  private refreshGestureId: number = 0;
+  private consumedRefreshGestureId: number = -1;
+  private refreshSequence: number = 0;
+
+  private resetPullRefresh(): void {
+    this.refreshSequence++;
+    this.refreshing = false;
+    this.consumedRefreshGestureId = -1;
+  }
+
+  private handleRefreshTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) { this.refreshGestureId++; }
+  }
+
+  private releaseRefreshAnimation(): void {
+    if (this.refreshing) { return; }
+    // 原生组件可能在同一手势结束后重放回调；主动复位动画而不重复请求。
+    const sequence: number = this.refreshSequence;
+    this.refreshing = true;
+    setTimeout((): void => {
+      if (sequence === this.refreshSequence) { this.refreshing = false; }
+    }, 0);
+  }
+
+  private async refreshForums(fromGesture: boolean = false): Promise<void> {
+    if (fromGesture && this.consumedRefreshGestureId === this.refreshGestureId) {
+      this.releaseRefreshAnimation();
+      return;
+    }
+    if (fromGesture) { this.consumedRefreshGestureId = this.refreshGestureId; }
+    if (!this.active || !authSession.isLoggedIn() || this.vm.loading || this.vm.signingAll ||
+      this.vm.signingFname.length > 0) {
+      if (fromGesture) { this.releaseRefreshAnimation(); }
+      return;
+    }
+    const sequence: number = ++this.refreshSequence;
+    this.refreshing = true;
+    // 与回前台一致：列表完成后只强制核对当前可见吧的签到、等级与连签信息。
+    this.foregroundExperiencePending = true;
+    try {
+      await this.vm.load(this.hostContext(), true);
+    } finally {
+      if (sequence === this.refreshSequence) { this.refreshing = false; }
+    }
+  }
 
   @Monitor('foreground.revision', 'active')
   onForegroundRefresh(): void {
-    if (!this.active) { this.foregroundRefreshPending = false; this.foregroundExperiencePending = false; return; }
+    if (!this.active) {
+      this.foregroundRefreshPending = false; this.foregroundExperiencePending = false;
+      this.resetPullRefresh();
+      return;
+    }
     if (this.foregroundRevision === this.foreground.revision) { return; }
     this.foregroundRevision = this.foreground.revision;
     this.foregroundAccount = authSession.forumCacheSessionKey();
@@ -87,6 +131,9 @@ export struct FollowView {
     const account: string = authSession.forumCacheSessionKey();
     if (account === this.account) { return; }
     this.account = account;
+    this.resetPullRefresh();
+    this.foregroundExperiencePending = false;
+    this.visibleForums.clear();
     void this.vm.load(this.hostContext());
   }
   /** 状态栏高度（vp），见 SafeArea.ets */
@@ -107,54 +154,22 @@ export struct FollowView {
   private hostContext(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
-  aboutToDisappear(): void { this.vm.dispose(); }
+  aboutToDisappear(): void { this.resetPullRefresh(); this.vm.dispose(); }
 
   build() {
     Column() {
-      RootPageHeader({ titleContent: (): void => { this.PageTabs(); },
+      RootPageHeader({ title: '我的关注',
         actions: (): void => { this.HeaderActions(); } })
-      Swiper(this.pageSwiper) {
-        Column() { this.FollowContent() }.width('100%').height('100%')
-        Column() {
-          if (this.squareVisited) {
-            ForumSquareView({ bottomBarOcclusion: this.bottomBarOcclusion,
-              active: this.active && this.squareSelected })
-          }
-        }.width('100%').height('100%')
-      }
-      .indicator(false).loop(false).cachedCount(1)
-      .duration(motionDuration(400)).curve(motionSwiperCurve())
-      .onAnimationStart((_index: number, targetIndex: number): void => {
-        if (targetIndex === 1) { this.squareVisited = true; }
-      })
-      .onChange((index: number): void => { this.squareSelected = index === 1; })
-      .width('100%').layoutWeight(1)
+      Column() { this.FollowContent() }.width('100%').layoutWeight(1)
     }.width('100%').height('100%')
   }
 
   @Builder
-  PageTabs() {
-    Row({ space: 12 }) {
-      this.PageTab('我的关注', false)
-      this.PageTab('吧广场', true)
-    }.width('100%')
-  }
-
-  @Builder
-  PageTab(title: string, square: boolean) {
-    Text(title).fontSize(this.squareSelected === square ? UiLayout.ROOT_TITLE : UiLayout.HEADER_TITLE)
-      .fontWeight(this.squareSelected === square ? FontWeight.Bold : FontWeight.Regular)
-      .fontColor(this.squareSelected === square ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
-      .constraintSize({ minHeight: 48 }).maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .layoutWeight(square ? 3 : 4)
-      .borderRadius(12)
-      .id(square ? 'follow-tab-square' : 'follow-tab-following')
-      .accessibilitySelected(this.squareSelected === square)
-      .onClick((): void => {
-        if (square) { this.squareVisited = true; }
-        this.pageSwiper.changeIndex(square ? 1 : 0, motionStore.isOn(MotionEffect.MOVE));
-      })
+  ForumSquareEntry() {
+    GlassCircleButton({ symbol: $r('sys.symbol.compass'), diameter: 40, iconSize: 22,
+      iconWeight: FontWeight.Regular, accessibilityLabel: '吧广场',
+      onTap: (): void => { NavigationService.openForumSquare(); } })
+      .id('follow-square-entry').margin(4)
   }
 
   @Builder
@@ -168,33 +183,59 @@ export struct FollowView {
         onLogin: (): void => {
           router.pushUrl({ url: 'pages/Login' });
         }
-      })
+      }).layoutWeight(1)
     } else {
-      this.FollowPage()
+      Refresh({ refreshing: this.refreshing }) {
+        this.FollowPage()
+      }
+      .width('100%').layoutWeight(1)
+      .pullToRefresh(!this.vm.loading && !this.vm.signingAll && this.vm.signingFname.length === 0)
+      .onTouch((event: TouchEvent): void => { this.handleRefreshTouch(event); })
+      .onRefreshing((): void => { void this.refreshForums(true); })
+      .id('follow-refresh')
     }
   }
 
-  /** 头部：左「我的关注」标题 + 右侧沉浸光感日历签到圆按钮。 */
+  private allSigned(): boolean {
+    return this.vm.forums.length > 0 && this.vm.forums.every((item: FollowForumItem): boolean =>
+      item.signKnown && item.isSigned);
+  }
+
+  private signAllDisabled(): boolean {
+    return this.vm.signingAll || this.vm.loading || this.vm.signingFname.length > 0 ||
+      this.vm.forums.length === 0 || this.allSigned();
+  }
+
+  private signAll(): void {
+    if (this.signAllDisabled()) { return; }
+    this.vm.signInAll(this.hostContext()).then((message: string) => {
+      if (message.length > 0) { promptAction.showToast({ message, duration: 2400 }); }
+    });
+  }
+
+  @Builder
+  SignAllProgress() {
+    LoadingProgress().width(20).height(20).color(AppTheme.TEXT_SUB)
+  }
+
+  /** 顶栏两个圆形动作保持同尺寸；列表签到仍沿用小型胶囊。 */
   @Builder
   HeaderActions() {
-    // 签到按钮收起时仍保留槽位，避免两个标题的加权宽度随页签切换变化。
-    Stack() {
-      if (!this.squareSelected && authSession.snapshot.isLoggedIn()) {
+    Row({ space: 4 }) {
+      this.ForumSquareEntry()
+      if (authSession.snapshot.isLoggedIn()) {
         GlassCircleButton({
-          symbol: $r('sys.symbol.calendar'), diameter: 40, iconSize: 22, iconWeight: FontWeight.Regular,
+          symbol: this.allSigned() ? $r('sys.symbol.checkmark') : $r('sys.symbol.calendar'),
+          diameter: 40, iconSize: 22, iconWeight: FontWeight.Regular,
+          useCustomIcon: this.vm.signingAll, customIcon: (): void => { this.SignAllProgress(); },
           accessibilityLabel: this.vm.signingAll ? '正在签到' :
-            (this.signStrategy.strategy === 2 ? '混合签到' : (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到')),
-          onTap: (): void => {
-            this.vm.signInAll(this.hostContext()).then((message: string) => {
-              if (message.length > 0) {
-                promptAction.showToast({ message: message, duration: 2400 });
-              }
-            });
-          }
-        }).enabled(!this.vm.signingAll && this.vm.forums.length > 0)
-          .opacity(!this.vm.signingAll && this.vm.forums.length > 0 ? 1 : 0.4)
+            (this.allSigned() ? '所有关注的吧已签到' :
+              (this.signStrategy.strategy === 2 ? '混合签到' : (this.signStrategy.strategy === 1 ? '官方批量签到' : '一键签到'))),
+          onTap: (): void => { this.signAll(); }
+        }).id('follow-sign-all').margin(4).enabled(!this.signAllDisabled())
+          .opacity(this.signAllDisabled() && !this.vm.signingAll ? 0.5 : 1)
       }
-    }.width(40).height(40).id('follow-header-actions')
+    }.id('follow-header-actions')
   }
 
   @Builder
@@ -204,13 +245,13 @@ export struct FollowView {
         PageState({ fillRemaining: true, loading: true, message: '正在加载关注的吧…' }).layoutWeight(1)
       } else if (this.vm.forums.length === 0 && this.vm.errorText.length > 0) {
         PageState({ fillRemaining: true, title: '加载失败', message: this.vm.errorText, actionLabel: '重试',
-          onAction: (): void => { void this.vm.load(this.hostContext(), true); } }).layoutWeight(1)
+          onAction: (): void => { void this.refreshForums(); } }).layoutWeight(1)
       } else if (this.vm.forums.length === 0) {
         PageState({ fillRemaining: true, message: '还没有关注任何吧' }).layoutWeight(1)
       } else {
         if (this.vm.errorText.length > 0) {
           PageState({ compact: true, message: '更新失败，正在显示上次数据', actionLabel: '重试',
-            onAction: (): void => { void this.vm.load(this.hostContext(), true); } })
+            onAction: (): void => { void this.refreshForums(); } })
         }
         this.FollowList()
       }
@@ -264,10 +305,12 @@ export struct FollowView {
 
         Row({ space: 6 }) {
           ForumLevelBadge({ level: item.level, levelName: item.levelName }).flexShrink(0)
-          Text(`连签 ${item.continuousCount >= 0 ? item.continuousCount : '--'} 天`)
-            .fontSize(UiLayout.META).fontColor(AppTheme.TEXT_SUB)
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
+          if (item.continuousCount >= 0) {
+            Text(`连签 ${item.continuousCount} 天`)
+              .fontSize(UiLayout.META).fontColor(AppTheme.TEXT_SUB)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
@@ -295,36 +338,29 @@ export struct FollowView {
     })
   }
 
-  /** 签到按钮：未签到可点（真实写操作），已签到变灰不可点 */
+  private signLabel(item: FollowForumItem): string {
+    if (this.vm.signingFname === item.fname) { return '签到中…'; }
+    if (!item.signKnown) { return this.vm.loading ? '读取中…' : '重试签到状态'; }
+    return item.isSigned ? '已签到' : '签到';
+  }
+
+  /** 未知状态只读重试；提交和完成状态均不允许重复写入。 */
   @Builder
   SignButton(item: FollowForumItem) {
-    Text(!item.signKnown ? '读取中…' : item.isSigned ? '已签到'
-      : (this.vm.signingFname === item.fname ? '签到中…' : '签到'))
-      .fontSize(UiLayout.STATE_BODY)
-      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      .constraintSize({ minHeight: 48, minWidth: 64 }).flexShrink(0)
-      .textAlign(TextAlign.Center)
-      .fontColor(item.isSigned ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK)
-      .backgroundColor(item.isSigned ? Color.Transparent : AppTheme.ACCENT_LIGHT)
-      .border({ width: item.isSigned ? 0.5 : 0, color: AppTheme.DIVIDER })
-      .borderRadius(12)
-      .padding({
-        left: 10,
-        right: 10,
-        top: 4,
-        bottom: 4
-      })
-      .opacity(this.vm.signingAll || this.vm.signingFname.length > 0 ? 0.5 : 1)
-      .accessibilityText(`${item.fname}，${!item.signKnown ? '读取中' : item.isSigned ? '已签到' :
-        this.vm.signingFname === item.fname ? '签到中' : '签到'}`)
-      .onClick(() => {
-        if (!item.signKnown) { void this.vm.load(this.hostContext(), true); return; }
+    ForumActionButton({ label: this.signLabel(item), actionSymbol: $r('sys.symbol.calendar'),
+      busy: this.vm.signingFname === item.fname || (!item.signKnown && this.vm.loading),
+      completed: item.signKnown && item.isSigned, retry: !item.signKnown && !this.vm.loading,
+      disabled: (item.signKnown && item.isSigned) || this.vm.loading || this.vm.signingAll || this.vm.signingFname.length > 0,
+      accessibilityLabel: `${item.fname}，${this.signLabel(item)}`,
+      onTap: (): void => {
+        if (!item.signKnown) { void this.refreshForums(); return; }
         // 写操作防连点在 VM 内部（signingFname 占位）；结果用 toast 反馈
         this.vm.signIn(this.hostContext(), item).then((message: string) => {
           if (message.length > 0) {
             promptAction.showToast({ message: message, duration: 2000 });
           }
         });
-      })
+      }
+    })
   }
 }

@@ -94,6 +94,10 @@ export struct ForumListView {
   @Local auth: AuthSession = authSession;
   @Monitor('auth.sessionRevision')
   onAccountChanged(): void {
+    this.followRefreshSeq++;
+    this.followRefreshing = false;
+    this.followGestureId = 0;
+    this.followConsumedGestureId = -1;
     this.vm.resetAccount(); this.followVm.resetAccount();
     void threadBlockStore.load(this.hostContext());
     if (authSession.isLoggedIn()) {
@@ -122,6 +126,18 @@ export struct ForumListView {
   // 顶部频道是 UI 状态，不与 vm.mode（指定吧浏览状态）绑定。
   @Local selectedChannel: string = '推荐';
   private imageScrollers: Map<number, ListScroller> = new Map();
+  /** 对象内补图保持卡片身份；刷新产生的新对象即使同 tid 也必须重新绑定内容。 */
+  private cardKeys: WeakMap<ThreadBrief, string> = new WeakMap();
+  private nextCardKey: number = 0;
+
+  private cardKey(item: ThreadBrief): string {
+    let key: string | undefined = this.cardKeys.get(item);
+    if (key === undefined) {
+      key = `${threadBriefIdentity(item)}-${++this.nextCardKey}`;
+      this.cardKeys.set(item, key);
+    }
+    return key;
+  }
   /** 只保留当前两份数据集的横滑位置；离屏不删除，刷新移除且另一频道也不再引用时释放。 */
   @Monitor('vm.threads', 'followVm.threads')
   pruneImageScrollers(): void {
@@ -163,7 +179,7 @@ export struct ForumListView {
   /** 玻璃头实测总高（含状态栏区），用作列表首位透明占位项的高度。0 = 尚未实测。 */
   @Local headerH: number = 0;
 
-  /** 普通 ThreadBrief 字段不单独触发更新；此状态触发 key 重算，各卡仍只按自己的 avatarStamp 重建。 */
+  /** 普通 ThreadBrief 字段不单独触发更新；仅通知头像参数重读，不改变卡片身份。 */
   @Local avatarEpoch: number = 0;
 
   private avatarQueue: ForumAvatarQueue | undefined = undefined;
@@ -354,12 +370,15 @@ export struct ForumListView {
     }
   }
 
-  /** 以 Refresh 自身状态判断手势刷新来源，避免嵌套滚动事件误触发刷新。 */
+  /** 推荐与热榜沿用 Refresh 自身状态判断手势来源。 */
   private sawDragSinceIdle: boolean = false;
   private touchDownAtMs: number = 0;
   private lastRecommendDoneMs: number = 0;
-  private lastFollowDoneMs: number = 0;
   private lastHotDoneMs: number = 0;
+  /** 关注只按自身手势去重，不把加载期间开始的新下拉当作旧手势。 */
+  private followGestureId: number = 0;
+  private followConsumedGestureId: number = -1;
+  private followRefreshSeq: number = 0;
 
   private isFreshGesture(doneMs: number): boolean {
     const sawDrag: boolean = this.sawDragSinceIdle;
@@ -428,26 +447,34 @@ export struct ForumListView {
     }
   }
 
-  private async handleFollowRefresh(fromGesture: boolean): Promise<void> {
-    if (this.followRefreshing) {
-      return;
-    }
+  private handleFollowTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) { this.followGestureId++; }
+  }
 
-    if (fromGesture && !this.isFreshGesture(this.lastFollowDoneMs)) {
-      hilog.info(0x0000, 'ForumListView', 'follow refresh swallow (replayed trigger, not fresh gesture)');
-      this.followRefreshing = true;
-      setTimeout((): void => {
-        this.followRefreshing = false;
-      }, REFRESH_ECHO_MS);
+  private async handleFollowRefresh(fromGesture: boolean): Promise<void> {
+    if (fromGesture && this.followConsumedGestureId === this.followGestureId) {
+      // 框架可能在结束后回放同一手势；只复位其动画，不启动另一轮请求。
+      if (!this.followRefreshing) {
+        const seq: number = this.followRefreshSeq;
+        this.followRefreshing = true;
+        setTimeout((): void => {
+          if (seq === this.followRefreshSeq) { this.followRefreshing = false; }
+        }, 0);
+      }
       return;
     }
+    this.followConsumedGestureId = this.followGestureId;
+    const seq: number = ++this.followRefreshSeq;
     this.followRefreshing = true;
     try {
-      await this.followVm.load(this.hostContext());
+      await this.followVm.load(this.hostContext(), true);
+      if (seq === this.followRefreshSeq && this.followVm.errorText.length > 0 &&
+        this.followVm.threads.length > 0) {
+        promptAction.showToast({ message: this.followVm.errorText, duration: 2000 });
+      }
     } finally {
-      // 必须经历 true -> false，Refresh 才会结束系统刷新动画（同 handleRefresh）
-      this.lastFollowDoneMs = Date.now();
-      this.followRefreshing = false;
+      // 旧请求完成时不能结束新手势的动画。
+      if (seq === this.followRefreshSeq) { this.followRefreshing = false; }
     }
   }
 
@@ -521,7 +548,7 @@ export struct ForumListView {
     this.avatarQueue.enqueue(name, (url: string): void => {
       if (url.length > 0) {
         item.sourceForumAvatar = url;
-        // 头像版本自增：ForEach key 靠它变化才会重建这一张卡（见 key generator 的说明）
+        // 即使地址相同，也给失败的吧图一次重试机会；作者图和正文图保持原实例。
         item.avatarStamp++;
         this.avatarEpoch++;
         hilog.info(0x0, 'TiebaTop', 'AVQ backfilled forum=%{public}s', name);
@@ -626,11 +653,11 @@ export struct ForumListView {
     .padding({ top: this.statusBarH + 8, left: 14, right: 14 })
     .scale({ x: this.topNavigationHidden ? 0.04 : 1, y: this.topNavigationHidden ? 0.04 : 1,
       centerX: '50%', centerY: 0 })
-    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve() })
+    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.SCALE), curve: motionSpringCurve(MotionEffect.SCALE) })
     .translate({ y: this.topNavigationHidden ? -this.statusBarH - 8 : 0 })
     .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.MOVE), curve: motionSpringCurve() })
     .opacity(this.topNavigationHidden ? 0 : 1)
-    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve() })
+    .animation({ duration: motionDuration(this.topNavigationHidden ? 300 : 440, MotionEffect.FADE), curve: motionSpringCurve(MotionEffect.FADE) })
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.headerH = Number(newArea.height);
       hilog.info(0x0, 'TiebaTop', 'headerH=%{public}s gY=%{public}s gX=%{public}s',
@@ -662,13 +689,7 @@ export struct ForumListView {
         .onAppear(() => {
           this.maybeQueueAvatar(item);
         })
-      }, (item: ThreadBrief) => {
-
-        const epoch: number = this.avatarEpoch;
-
-        // 读取 epoch 保留响应式依赖；乘零避免一次回填重建所有卡片。不要删读或改成乘一。
-        return `${threadBriefIdentity(item)}-${item.avatarStamp + epoch * 0}`;
-      })
+      }, (item: ThreadBrief) => this.cardKey(item))
 
       ListItem() {
         this.FeedFooter(channel)
@@ -843,13 +864,7 @@ export struct ForumListView {
         this.handleFollowRefresh(true);
       })
       .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Down) {
-          this.touchDownAtMs = Date.now();
-        }
-      })
-
-      .onStateChange((state: RefreshStatus) => {
-        this.handleRefreshState(state);
+        this.handleFollowTouch(event);
       })
       .refreshOffset(REFRESH_OFFSET_VP)
       this.FeedRefreshOverlay('关注')
@@ -1052,11 +1067,21 @@ export struct ForumListView {
     })
   }
 
+  /** epoch 作为实参建立依赖；补图只更新子组件参数，保留作者图、正文图和点赞状态。 */
+  private cardForumAvatar(item: ThreadBrief, _epoch: number): string {
+    return item.sourceForumAvatar;
+  }
+
+  private cardForumAvatarRevision(item: ThreadBrief, _epoch: number): number {
+    return item.avatarStamp;
+  }
+
   @Builder
   ThreadCard(item: ThreadBrief) {
     ThreadPreviewCard({
       authorName: item.authorName, authorAvatar: item.authorAvatar,
-      forumName: this.forumOf(item), forumAvatar: item.sourceForumAvatar,
+      forumName: this.forumOf(item), forumAvatar: this.cardForumAvatar(item, this.avatarEpoch),
+      forumAvatarRevision: this.cardForumAvatarRevision(item, this.avatarEpoch),
       postedTime: formatPostTime(item.postedMs, Date.now()),
       title: item.title, summary: item.summary,
       isHelp: item.isHelp,

@@ -38,12 +38,19 @@ export struct ForumSquareView {
   }
   @Builder
   Category(name: string, id: string) {
-    Text(name).fontSize(13)
-      .fontWeight(this.vm.selected === id ? FontWeight.Bold : FontWeight.Regular)
-      .fontColor(this.vm.selected === id ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
-      .width('100%').constraintSize({ minHeight: 48 }).padding({ left: 8, right: 8, top: 9, bottom: 9 })
-      .backgroundColor(this.vm.selected === id ? AppTheme.ACCENT_LIGHT : Color.Transparent)
-      .borderRadius(10).textAlign(TextAlign.Center)
+    Row({ space: 9 }) {
+      Column().width(3).height(18).borderRadius(2)
+        .backgroundColor(this.vm.selected === id ? AppTheme.ACCENT_DARK : Color.Transparent)
+        .accessibilityLevel('no')
+      Text(name).fontSize(14)
+        .fontWeight(this.vm.selected === id ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.vm.selected === id ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+        .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Start)
+    }.width('100%').constraintSize({ minHeight: 44 }).padding({ top: 10, bottom: 10 })
+      .alignItems(VerticalAlign.Center)
+      .id(`square-category-${id}`)
+      .accessibilityGroup(true).accessibilityText(name)
       .accessibilitySelected(this.vm.selected === id)
       .onClick((): void => { this.select(id); })
   }
@@ -67,34 +74,47 @@ export struct ForumSquareView {
         }
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       if (item.followId() > 0) {
-        FollowButton({ kind: 'forum', targetId: item.followId(), targetName: item.name, forumStyle: true })
+        FollowButton({ kind: 'forum', targetId: item.followId(), targetName: item.name })
           .flexShrink(0)
       }
     }.width('100%').padding({ left: 10, right: 10, top: 10, bottom: 10 })
       .onClick((): void => { NavigationService.openForum({ forumName: item.name }); })
   }
   @Builder
+  Subcategory(name: string) {
+    Column({ space: 6 }) {
+      Text(name).fontSize(14).maxLines(1)
+        .fontWeight(this.vm.selectedSub === name ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.vm.selectedSub === name ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+      Row().width(20).height(2).borderRadius(1)
+        .backgroundColor(this.vm.selectedSub === name ? AppTheme.ACCENT_DARK : Color.Transparent)
+        .accessibilityLevel('no')
+    }.constraintSize({ minHeight: 44, minWidth: 52 })
+      .padding({ left: 12, right: 12, top: 8, bottom: 6 })
+      .justifyContent(FlexAlign.Center).flexShrink(0)
+      .id(`square-subcategory-${name}`)
+      .accessibilityGroup(true).accessibilityText(name)
+      .accessibilitySelected(this.vm.selectedSub === name)
+      .onClick((): void => {
+        this.forumsScroller.scrollTo({ xOffset: 0, yOffset: 0 });
+        void this.vm.selectSub(this.context(), name);
+      })
+  }
+  @Builder
   Subcategories() {
     Scroll(this.subcategoryScroller) {
-      Row({ space: 6 }) {
+      Row({ space: 4 }) {
         ForEach(this.vm.subcategories, (name: string) => {
-          Text(name).fontSize(12).padding({ left: 10, right: 10, top: 8, bottom: 8 })
-            .constraintSize({ minHeight: 48 })
-            .fontColor(this.vm.selectedSub === name ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
-            .backgroundColor(this.vm.selectedSub === name ? AppTheme.ACCENT_LIGHT : Color.Transparent)
-            .borderRadius(10).accessibilitySelected(this.vm.selectedSub === name)
-            .onClick((): void => {
-              this.forumsScroller.scrollTo({ xOffset: 0, yOffset: 0 });
-              void this.vm.selectSub(this.context(), name);
-            })
+          this.Subcategory(name)
         }, (name: string): string => `${this.vm.selected}-${name}`)
       }.padding({ left: 10, right: 10 })
     }.width('100%').align(Alignment.TopStart)
       .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+      .id('square-subcategories')
   }
   build() {
     Row() {
-      List({ space: 4 }) {
+      List({ space: 2 }) {
         if (this.vm.categories.length === 0) { ListItem() { this.Category('推荐', '推荐') } }
         ForEach(this.vm.categories, (item: SquareCategory) => {
           ListItem() { this.Category(item.name, item.id) }
@@ -103,7 +123,8 @@ export struct ForumSquareView {
           Column().width('100%').height(this.bottomBarOcclusion)
             .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
         }.id('square-category-bottom-occlusion')
-      }.width(88).height('100%').padding({ left: 6, right: 6 }).scrollBar(BarState.Off)
+      }.width(88).height('100%').padding({ left: 8, right: 8 }).scrollBar(BarState.Off)
+        .id('square-categories')
       Column() {
         if (this.vm.subcategories.length > 0) { this.Subcategories() }
         List({ scroller: this.forumsScroller }) {

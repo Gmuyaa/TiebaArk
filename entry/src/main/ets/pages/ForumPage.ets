@@ -912,6 +912,15 @@ export struct ForumPage {
     }
   }
 
+  private animateTabContent(shift: number, opacity: number, duration: number): void {
+    this.getUIContext().animateTo({ duration: motionDuration(duration, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
+      this.contentShift = shift;
+    });
+    this.getUIContext().animateTo({ duration: motionDuration(duration, MotionEffect.FADE), curve: Curve.EaseOut }, (): void => {
+      this.contentOpacity = opacity;
+    });
+  }
+
   /**
    * 切换真实吧页分类。滚动复位与错误提示沿用旧版行为；
    * 成功后把选中签滚到视口中间（tab 多时点右侧的签不至于停在看不见的地方）。
@@ -924,10 +933,7 @@ export struct ForumPage {
     const direction: number = index >= previous ? 1 : -1;
     const revision: number = ++this.tabAnimation;
     const offset: number = Math.min(this.scroller.currentOffset().yOffset, this.heroHeight() - FORUM_TOOLBAR_HEIGHT);
-    this.getUIContext().animateTo({ duration: motionDuration(100, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
-      this.contentShift = -12 * direction;
-      this.contentOpacity = 0.65;
-    });
+    this.animateTabContent(-12 * direction, 0.65, 100);
     const switching: Promise<boolean> = this.vm.switchTab(this.hostContext(), tab.id);
     this.revealTopCategory();
     const success: boolean = await switching;
@@ -942,16 +948,10 @@ export struct ForumPage {
       });
       setTimeout((): void => {
         if (!this.active || revision !== this.tabAnimation) { return; }
-        this.getUIContext().animateTo({ duration: motionDuration(260, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
-          this.contentShift = 0;
-          this.contentOpacity = 1;
-        });
+        this.animateTabContent(0, 1, 260);
       }, 16);
     } else {
-      this.getUIContext().animateTo({ duration: motionDuration(180, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
-        this.contentShift = 0;
-        this.contentOpacity = 1;
-      });
+      this.animateTabContent(0, 1, 180);
       if (this.vm.errorText.length > 0) {
         promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
       }

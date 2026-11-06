@@ -2,14 +2,17 @@ import { common } from '@kit.AbilityKit';
 import { KeyboardAvoidMode as PageKeyboardAvoidMode, LengthMetrics, window } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { ComposeMaterialBar } from '../components/ComposeMaterialBar';
-import { EmojiPickerPanel, EMOJI_GRID_MIN_HEIGHT } from '../components/EmojiPickerPanel';
+import { EmojiPickerPanel } from '../components/EmojiPickerPanel';
+import { emojiPanelHeight, emojiPanelGridHeight, emojiPanelDialogOptions } from '../components/EmojiPanelDialog';
 import { EmojiPickerVM } from '../viewmodel/EmojiPickerVM';
 import { MemePicItem } from '../model/MemeEmoji';
 import { emojiImageUrl } from '../model/ThreadDetail';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
-import { readEmojiEditor, restoreEmojiEditor } from '../utils/EmojiEditor';
-import { SearchTopMaterial } from '../components/SearchTopMaterial';
-import { MaterialSlot } from '../common/material/MaterialConfig';
+import { readEmojiEditor, restoreEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEditor';
+import { VisualThemeStore, visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionDuration } from '../common/appearance/MotionPolicy';
 import { ComposeOptionSheet } from '../components/ComposeOptionSheet';
 import { CloseIcon } from '../components/CloseIcon';
 import { GlassCircleButton } from '../components/GlassCircleButton';
@@ -20,9 +23,12 @@ import { COMPOSE_TYPES, TITLE_MIN_LENGTH, TITLE_MAX_LENGTH, ComposeDraft, Compos
 
 const TOP_BAR_HEIGHT: number = 40;
 const MEDIA_PREVIEW_SIZE: number = 96;
+const EMOJI_TRANSITION_MS: number = 220;
 
 @ComponentV2
 export struct ComposePage {
+  @Local visualSettings: VisualThemeStore = visualThemeStore;
+  @Local themeSettings: ThemeModeStore = themeModeStore;
   @Local vm: ComposeVM = new ComposeVM();
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local sheet: boolean = false;
@@ -39,6 +45,11 @@ export struct ComposePage {
   private keyboardAreaCb: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
   private keyboardWatchSeq: number = 0;
   private keyboardWaitTimer: number = -1;
+  private emojiDialogId: number = 0;
+  private emojiDialogSeq: number = 0;
+  private emojiDialogOpening: boolean = false;
+  private screenWvp: number = 0;
+  @Local safeBottomVp: number = AppTheme.BAR_SAFE_H;
   private bodyControllers: RichEditorController[] = [new RichEditorController(), new RichEditorController(),
     new RichEditorController(), new RichEditorController()];
   private rebuildingBodies: boolean[] = [false, false, false, false];
@@ -61,6 +72,8 @@ export struct ComposePage {
     window.getLastWindow(this.getUIContext().getHostContext() as common.UIAbilityContext).then((win: window.Window): void => {
       if (seq !== this.keyboardWatchSeq) { return; }
       this.keyboardWin = win;
+      this.screenWvp = px2vp(win.getWindowProperties().windowRect.width);
+      this.safeBottomVp = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
       this.updateKeyboard(px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height));
       this.keyboardAreaCb = (data: window.AvoidAreaOptions): void => {
         if (data.type === window.AvoidAreaType.TYPE_KEYBOARD) {
@@ -75,6 +88,7 @@ export struct ComposePage {
     this.keyboardVp = Math.max(0, height);
     if (this.keyboardVp > 0) {
       this.lastKeyboardVp = this.keyboardVp;
+      if (this.emojiOpen) { this.awaitEmojiKeyboard(); }
       if (this.emojiAwaitKeyboard) {
         this.emojiAwaitKeyboard = false;
         this.clearKeyboardWait();
@@ -89,6 +103,7 @@ export struct ComposePage {
   private stopKeyboardTracking(): void {
     ++this.keyboardWatchSeq;
     this.clearKeyboardWait();
+    this.closeEmojiPanelDialog();
     if (this.keyboardWin !== undefined && this.keyboardAreaCb !== undefined) {
       this.keyboardWin.off('avoidAreaChange', this.keyboardAreaCb);
     }
@@ -100,9 +115,7 @@ export struct ComposePage {
   }
 
   private emojiPanelHeight(): number {
-    // 沿用键盘高度，并保证能完整显示五行放大的表情。
-    return Math.max(EMOJI_GRID_MIN_HEIGHT + 60 + AppTheme.BAR_SAFE_H,
-      this.lastKeyboardVp > 0 ? this.lastKeyboardVp : 314);
+    return emojiPanelHeight(this.lastKeyboardVp);
   }
 
   private inputPanelHeight(): number {
@@ -113,11 +126,57 @@ export struct ComposePage {
     if (!this.emojiOpen) { return; }
     this.emojiAwaitKeyboard = true;
     this.emojiOpen = false;
+    this.closeEmojiPanelDialog();
     this.clearKeyboardWait();
     this.keyboardWaitTimer = setTimeout((): void => {
       this.keyboardWaitTimer = -1;
-      this.emojiAwaitKeyboard = false;
+      this.animateEmojiLayout((): void => { this.emojiAwaitKeyboard = false; });
     }, 1200);
+  }
+
+  /** 仅由表情开关引起的布局变化补间；系统键盘高度回调直接跟随系统。 */
+  private animateEmojiLayout(action: () => void): void {
+    this.getUIContext().animateTo({ duration: motionDuration(EMOJI_TRANSITION_MS, MotionEffect.MOVE),
+      curve: Curve.EaseOut }, action);
+  }
+
+  private collapseEmoji(): void {
+    this.clearKeyboardWait();
+    this.closeEmojiPanelDialog();
+    this.animateEmojiLayout((): void => { this.emojiOpen = false; this.emojiAwaitKeyboard = false; });
+  }
+
+  private openEmojiPanelDialog(): void {
+    if (this.emojiDialogId !== 0 || this.emojiDialogOpening || !this.emojiOpen) { return; }
+    this.emojiDialogOpening = true;
+    const seq: number = ++this.emojiDialogSeq;
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.openCustomDialog(emojiPanelDialogOptions((): void => { this.EmojiPanel(); },
+      this.screenWvp, this.emojiPanelHeight(),
+      (): void => { if (this.emojiDialogSeq === seq) { this.collapseEmoji(); } },
+      (): void => {
+        if (this.emojiDialogSeq === seq) {
+          this.emojiDialogId = 0; this.emojiDialogOpening = false;
+          this.collapseEmoji();
+        }
+      })).then((id: number): void => {
+      if (this.emojiDialogSeq !== seq || !this.emojiOpen) {
+        prompt.closeCustomDialog(id); return;
+      }
+      this.emojiDialogId = id; this.emojiDialogOpening = false;
+    }).catch((): void => {
+      if (this.emojiDialogSeq === seq) { this.emojiDialogOpening = false; this.collapseEmoji(); }
+    });
+  }
+
+  private closeEmojiPanelDialog(): void {
+    ++this.emojiDialogSeq;
+    this.emojiDialogOpening = false;
+    const id: number = this.emojiDialogId;
+    this.emojiDialogId = 0;
+    if (id !== 0) {
+      try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) { /* 已被系统回收。 */ }
+    }
   }
 
   private useEditorKeyboardMode(): void {
@@ -150,9 +209,7 @@ export struct ComposePage {
   }
 
   private openOption(kind: string): void {
-    this.emojiOpen = false;
-    this.emojiAwaitKeyboard = false;
-    this.clearKeyboardWait();
+    this.collapseEmoji();
     this.getUIContext().getFocusController().clearFocus();
     this.sheetKind = kind;
     this.optionDraft = this.vm.draft;
@@ -163,6 +220,15 @@ export struct ComposePage {
     if (!this.bodyReady[type] || this.rebuildingBodies[type]) { return; }
     this.vm.drafts[type].body = readEmojiEditor(this.bodyControllers[type], this.emojiPicker.memeTokenTable(),
       new Map<string, string>()).text;
+  }
+
+  @Monitor('visualSettings.theme', 'themeSettings.isDark')
+  refreshEditorColors(): void {
+    for (let type: number = 0; type < this.bodyControllers.length; type++) {
+      if (!this.bodyReady[type] || this.rebuildingBodies[type]) { continue; }
+      this.bodyControllers[type].setTypingStyle({ fontSize: 16, fontColor: AppTheme.TEXT_MAIN });
+      updateEmojiEditorTextColor(this.bodyControllers[type], AppTheme.TEXT_MAIN);
+    }
   }
 
   private restoreBody(type: number): void {
@@ -179,13 +245,14 @@ export struct ComposePage {
     this.syncBody(this.vm.type);
     if (this.emojiOpen) {
       this.awaitEmojiKeyboard();
+      this.getUIContext().getFocusController().activate(true, false);
       this.getUIContext().getFocusController().requestFocus('compose-body');
     } else {
-      this.emojiAwaitKeyboard = false;
       this.clearKeyboardWait();
-      this.emojiOpen = true;
+      this.animateEmojiLayout((): void => { this.emojiAwaitKeyboard = false; this.emojiOpen = true; });
       this.bodyControllers[this.vm.type].stopEditing();
       this.getUIContext().getFocusController().clearFocus();
+      this.openEmojiPanelDialog();
     }
   }
 
@@ -212,10 +279,8 @@ export struct ComposePage {
 
   @Builder
   EmojiPanel() {
-    Stack() {
-      SearchTopMaterial({ slot: MaterialSlot.REPLY_SHEET, panelHeight: this.emojiPanelHeight() })
-      EmojiPickerPanel({ picker: this.emojiPicker, tab: this.emojiTab,
-      gridHeight: Math.max(0, this.emojiPanelHeight() - 60 - AppTheme.BAR_SAFE_H), safeBottom: AppTheme.BAR_SAFE_H,
+    EmojiPickerPanel({ picker: this.emojiPicker, tab: this.emojiTab,
+      gridHeight: emojiPanelGridHeight(this.emojiPanelHeight()), safeBottom: this.safeBottomVp,
       onTabChange: (tab: number): void => { this.emojiTab = tab; },
       onManagerChange: (open: boolean): void => { this.emojiManaging = open; },
       onLoad: (): void => { void this.emojiPicker.loadMemePics(this.getUIContext().getHostContext() as common.UIAbilityContext); },
@@ -223,8 +288,6 @@ export struct ComposePage {
       onBuiltin: (code: number): void => { this.insertEmoji(emojiImageUrl(`image_emoticon${code}`)); },
       onMeme: (item: MemePicItem): void => { this.insertEmoji(this.emojiPicker.memeDisplayUrl(item)); },
       onDelete: (): void => { this.deleteEmoji(); } })
-    }.width('100%').height(this.emojiPanelHeight())
-      .borderRadius({ topLeft: 16, topRight: 16 }).clip(true)
   }
 
   private isOptionPanel(): boolean {
@@ -256,9 +319,7 @@ export struct ComposePage {
           .id(`compose-type-${index}`)
           .onClick((): void => {
             this.syncBody(this.vm.type);
-            this.emojiOpen = false;
-            this.emojiAwaitKeyboard = false;
-            this.clearKeyboardWait();
+            this.collapseEmoji();
             this.getUIContext().getFocusController().clearFocus(); this.vm.type = index;
           })
       }, (label: string): string => label)
@@ -268,7 +329,7 @@ export struct ComposePage {
   @Builder
   PublishAction() {
     Row({ space: 4 }) {
-      if (this.vm.publishing) { LoadingProgress().width(16).height(16) }
+      if (this.vm.publishing) { LoadingProgress().width(16).height(16).color(AppTheme.TEXT_SUB) }
       Text(this.vm.publishing ? '发布中' : '发布').fontSize(14).fontWeight(FontWeight.Bold)
         .fontColor(this.vm.publishing ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK).maxLines(1)
         .maxFontScale(1.25).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -302,7 +363,7 @@ export struct ComposePage {
       });
       if (result.index !== 1 || this.vm.publishing) { return; }
     }
-    this.emojiOpen = false;
+    this.collapseEmoji();
     this.getUIContext().getFocusController().clearFocus();
     // 发布成功会清空草稿，吧名必须在提交前留住
     const forumName: string = this.vm.draft.forum;
@@ -425,6 +486,8 @@ export struct ComposePage {
   @Builder
   BodyEditor(type: number) {
     RichEditor({ controller: this.bodyControllers[type] })
+      .caretColor(AppTheme.ACCENT)
+      .selectedBackgroundColor(AppTheme.SELECTION_BACKGROUND)
       .id('compose-body').width('100%').height(type === 0 ? 270 : 144).maxLength(20000)
       .placeholder(this.bodyHint(), { font: { size: 16 }, fontColor: AppTheme.TEXT_SUB })
       .backgroundColor(Color.Transparent).padding({ top: 8, left: 0, right: 0, bottom: 0 })
@@ -455,8 +518,10 @@ export struct ComposePage {
             placeholder: this.vm.type === 3 ? '你想解决什么问题？' : '写一个清晰的标题' })
             .id('compose-title').layoutWeight(1).height(48).fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor(AppTheme.TEXT_MAIN).placeholderColor(AppTheme.TEXT_SUB).maxLength(TITLE_MAX_LENGTH)
+            .caretColor(AppTheme.ACCENT).selectedBackgroundColor(AppTheme.SELECTION_BACKGROUND)
             .accessibilityText(`标题，${TITLE_MIN_LENGTH}至${TITLE_MAX_LENGTH}个字`)
             .backgroundColor(Color.Transparent).padding(0)
+            .onFocus((): void => { this.awaitEmojiKeyboard(); })
             .onChange((value: string): void => { this.vm.draft.title = value; })
         }.width('100%').border({ width: { bottom: 0.5 }, color: AppTheme.DIVIDER })
         Text('正文').fontSize(12).fontColor(AppTheme.TEXT_SUB).width('100%').padding({ top: 12 })
@@ -552,11 +617,12 @@ export struct ComposePage {
                 .fontSize(13).fontColor(AppTheme.TEXT_SUB).width('100%')
                 .padding({ top: 8, bottom: 8, left: 16, right: 16 })
             }
-            // 固定工具栏的实际遮挡避让，保证最后一个选项和失败原因能滚到工具栏上方。
-            Column().width('100%').height(this.vm.type === 0 || this.vm.type === 1 ? AppTheme.BAR_TOTAL_H : 12)
+            // 内容保留在原生面板背后供材质取样；末尾占位仍让最后一项能滚到工具栏上方。
+            Column().width('100%').height(this.inputPanelHeight() +
+              (this.vm.type === 0 || this.vm.type === 1 ? AppTheme.BAR_TOTAL_H : 12))
               .id('compose-tools-occlusion').accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
           }.width('100%').padding({ top: this.statusBarH + TOP_BAR_HEIGHT + 24 })
-        }.id('compose-editor-scroll').width('100%').height(`calc(100% - ${this.inputPanelHeight()}vp)`)
+        }.id('compose-editor-scroll').width('100%').height('100%')
           .scrollBar(BarState.Off).align(Alignment.TopStart)
         this.Header()
         if (this.vm.type === 0 || this.vm.type === 1) {
@@ -565,7 +631,6 @@ export struct ComposePage {
               ComposeMaterialBar({ barHeight: AppTheme.BAR_CONTENT_H, content: (): void => { this.Tools(); } })
                 .padding({ left: 16, right: 16 }).margin({ bottom: AppTheme.BAR_SAFE_H + this.inputPanelHeight() })
             }.width('100%')
-            if (this.emojiOpen) { this.EmojiPanel() }
           }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
         }
       }.width('100%').height('100%').backgroundColor(AppTheme.CARD)
@@ -583,7 +648,7 @@ export struct ComposePage {
       })
       .onBackPressed((): boolean => {
         if (this.emojiOpen || this.emojiAwaitKeyboard) {
-          this.emojiOpen = false; this.emojiAwaitKeyboard = false; this.clearKeyboardWait(); return true;
+          this.collapseEmoji(); return true;
         }
         this.close(); return true;
       })

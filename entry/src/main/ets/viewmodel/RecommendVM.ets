@@ -8,7 +8,7 @@ import {
 import {
   personalizedToBriefs
 } from '../model/PersonalizedFeed';
-import { forumAvatarCount, putForumAvatar } from '../model/ForumAvatarStore';
+import { forumAvatarCount, markForumAvatarFetched, putForumAvatar } from '../model/ForumAvatarStore';
 import { PersonalizedFeedResponse, ThreadListResponse, TiebaApi } from '../api/TiebaApi';
 import { PersonalizedParams, TiebaDevice, TiebaSession } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
@@ -236,8 +236,10 @@ export class RecommendVM {
         threads[i].sourceForum = this.mode;
         threads[i].sourceForumId = response.data.forum.id;
         threads[i].sourceForumAvatar = response.data.forum.avatar;
-
+      }
+      if (response.data.forum.avatar.trim().length > 0) {
         putForumAvatar(this.mode, response.data.forum.avatar);
+        markForumAvatarFetched(this.mode);
       }
       this.threads = mergeThreadPages(this.threads, threads);
       this.page = response.data.page;
@@ -300,8 +302,10 @@ export class RecommendVM {
         threads[i].sourceForum = name;
         threads[i].sourceForumId = this.forum.id;
         threads[i].sourceForumAvatar = this.forum.avatar;
-
+      }
+      if (this.forum.avatar.trim().length > 0) {
         putForumAvatar(name, this.forum.avatar);
+        markForumAvatarFetched(name);
       }
       this.threads = threads;
       this.loadedOnce = true;

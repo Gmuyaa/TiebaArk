@@ -13,3 +13,6 @@ export function isCacheEntryName(name: string): boolean {
   return name.length > 0 && name !== '.' && name !== '..' && name.indexOf('/') < 0 &&
     name.indexOf('\\') < 0;
 }
+
+/** 最近关注状态强引用上限；活跃页面另通过弱索引共享实例。 */
+export const FOLLOW_ACTION_CACHE_ENTRIES: number = 256;

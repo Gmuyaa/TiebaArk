@@ -8,6 +8,19 @@ import { VisualTheme, normalizeVisualTheme } from './VisualTheme';
 export class VisualThemeStore {
   @Trace theme: VisualTheme = VisualTheme.CLASSIC;
   private loaded: boolean = false;
+  private themeRefresher: (() => void) | undefined = undefined;
+
+  /** 由已初始化 ArkUI 的 Ability 注册，避免 store 与主题资源模块循环依赖。 */
+  setThemeRefresher(refresher: (() => void) | undefined): void {
+    this.themeRefresher = refresher;
+  }
+
+  private refreshNativeTheme(): void {
+    if (this.themeRefresher !== undefined) {
+      try { this.themeRefresher(); }
+      catch (_) { hilog.warn(0, 'TiebaVisualTheme', 'native theme refresh failed'); }
+    }
+  }
 
   get isPaper(): boolean { return this.theme === VisualTheme.PAPER; }
 
@@ -31,6 +44,7 @@ export class VisualThemeStore {
       store.putSync('theme', next as number);
       store.flushSync();
       this.theme = next;
+      this.refreshNativeTheme();
       return true;
     } catch (_) {
       hilog.warn(0, 'TiebaVisualTheme', 'visual theme save failed');

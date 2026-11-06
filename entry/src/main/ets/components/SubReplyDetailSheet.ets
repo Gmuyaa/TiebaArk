@@ -5,7 +5,7 @@ import { PageState, ListFooter as PagingFooter } from './PageState';
 import { display } from '@kit.ArkUI';
 import { MaterialTabs } from './MaterialTabs';
 import { PostItem, SubPostItem, UserBrief } from '../model/ThreadDetail';
-import { AgreeState } from '../viewmodel/ThreadDetailVM';
+import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { DetailTheme } from '../theme/Theme';
 import { AnchorReplyCard } from './AnchorReplyCard';
@@ -28,6 +28,11 @@ const LIST_BOTTOM_PAD: number = PILL_HEIGHT + 8;
 export struct SubReplyDetailSheet {
   @Param tid: number = 0;
   @Param threadTitle: string = '';
+  @Param canDeleteAnchor: boolean = false;
+  @Param canDeleteSub: (sub: SubPostItem) => boolean = (_sub: SubPostItem): boolean => false;
+  @Param deletePending: boolean = false;
+  @Event onDeleteAnchor: () => void = (): void => {};
+  @Event onDeleteSub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   @Event onOpenUser: (user: UserBrief) => void = (): void => {};
   /** 被展开的一级回复（页面按 pid 从已加载楼层里找） */
   @Require @Param anchor: PostItem;
@@ -224,6 +229,9 @@ export struct SubReplyDetailSheet {
               threadTitle: this.threadTitle,
               onOpenAuthor: (): void => { this.onOpenUser(this.anchor.author); },
               item: this.anchor,
+              canDelete: this.canDeleteAnchor,
+              deletePending: this.deletePending,
+              onDelete: this.onDeleteAnchor,
               isThreadAuthor: this.anchorIsThreadAuthor,
               agreeState: this.anchorAgreeState,
               bodyBuilder: this.anchorBody,
@@ -245,6 +253,9 @@ export struct SubReplyDetailSheet {
                   threadTitle: this.threadTitle,
                   onOpenAuthor: (): void => { this.onOpenUser(sub.author); },
                   sub: sub,
+                  canDelete: this.canDeleteSub(sub),
+                  deletePending: this.deletePending,
+                  onDelete: (): void => { this.onDeleteSub(sub); },
                   agreeState: this.subAgreeState(sub),
                   isFloorAuthor: this.anchor.author.id > 0 && sub.author.id === this.anchor.author.id,
                   bodyBuilder: (): void => {

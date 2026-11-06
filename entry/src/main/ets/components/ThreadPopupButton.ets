@@ -9,7 +9,7 @@ import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReac
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import {
   clampFloating, dockFloatingX, holdingSide, HoldingSession, HoldingSource, positionRatio,
-  threadActionBounds, threadFanPoints, ThreadFanPoint, THREAD_ACTION_BUTTON_SIZE, THREAD_ACTION_HIT_INSET
+  threadActionBounds, threadFanPoints, ThreadFanPoint, THREAD_ACTION_BUTTON_SIZE, floatingButtonHitRegion
 } from '../model/SmartReach';
 
 class ThreadHoldingSource implements HoldingSource {
@@ -176,12 +176,10 @@ export struct ThreadPopupButton {
 
   /** 展开层仅命中六个按钮的内侧，空隙直接交给下方帖子列表。 */
   private hitRegions(): Rectangle[] {
-    const inset: number = THREAD_ACTION_HIT_INSET;
-    const size: number = THREAD_ACTION_BUTTON_SIZE - 2 * inset;
-    const regions: Rectangle[] = [{ x: this.x + inset, y: this.y + inset, width: size, height: size }];
+    const regions: Rectangle[] = [floatingButtonHitRegion(THREAD_ACTION_BUTTON_SIZE, this.x, this.y)];
     if (this.open && this.ready && this.active) {
       for (const point of threadFanPoints(this.x, this.y, this.viewportWidth, this.viewportHeight, this.topInset)) {
-        regions.push({ x: point.x + inset, y: point.y + inset, width: size, height: size });
+        regions.push(floatingButtonHitRegion(THREAD_ACTION_BUTTON_SIZE, point.x, point.y));
       }
     }
     return regions;
@@ -192,15 +190,12 @@ export struct ThreadPopupButton {
     Stack() {
       GlassCircleButton({ symbol: $r('sys.symbol.more'), diameter: THREAD_ACTION_BUTTON_SIZE,
         iconSize: 24, slot: MaterialSlot.BOTTOM_BAR })
-        .hitTestBehavior(HitTestMode.None)
+        .hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
     }
     .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
     .opacity(this.ready ? 1 : 0)
     .position({ x: this.x, y: this.y })
-    .responseRegion({ x: THREAD_ACTION_HIT_INSET, y: THREAD_ACTION_HIT_INSET,
-      width: THREAD_ACTION_BUTTON_SIZE - 2 * THREAD_ACTION_HIT_INSET,
-      height: THREAD_ACTION_BUTTON_SIZE - 2 * THREAD_ACTION_HIT_INSET })
-    .hitTestBehavior(HitTestMode.Block)
+    .responseRegion(floatingButtonHitRegion(THREAD_ACTION_BUTTON_SIZE))
     .id('thread-popup-action-button')
     .accessibilityText('帖子操作，可拖拽移动')
     .onClick((): void => {
@@ -226,6 +221,7 @@ export struct ThreadPopupButton {
         ForEach([0, 1, 2, 3, 4], (index: number) => {
           Stack() { this.action(index); }
           .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
+          .hitTestBehavior(HitTestMode.Transparent)
           .position(this.fanPoint(index))
           .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE).combine(motionTransition(TransitionEffect.translate({
             x: this.x - this.fanPoint(index).x, y: this.y - this.fanPoint(index).y

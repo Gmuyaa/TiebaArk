@@ -6,6 +6,7 @@ import { authSession } from '../auth/AuthSession';
 @ObservedV2
 export class ForegroundRefresh {
   @Trace revision: number = 0;
+  @Trace isForeground: boolean = true;
   private backgrounded: boolean = false;
   private epoch: number = 0;
   private avatarRequest: Promise<void> | undefined = undefined;
@@ -13,11 +14,13 @@ export class ForegroundRefresh {
   private avatarOwner: string = '';
 
   onBackground(): void {
+    this.isForeground = false;
     if (!this.backgrounded) { this.epoch++; }
     this.backgrounded = true;
   }
 
   onForeground(): void {
+    this.isForeground = true;
     if (!this.backgrounded) { return; }
     this.backgrounded = false;
     this.revision++;

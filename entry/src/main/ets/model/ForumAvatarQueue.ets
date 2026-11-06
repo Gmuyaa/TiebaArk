@@ -59,7 +59,8 @@ export class ForumAvatarQueue {
       return;
     }
     this.pending.add(name);
-    if (force) {
+    // force 只表示绕过旧缓存；首次无地址仍是缺图，不能排到已有头像的刷新后面。
+    if (force && getForumAvatar(name).length > 0) {
       this.refreshQueue.push(name);
     } else {
       this.queue.push(name);

@@ -6,32 +6,22 @@ import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { PageState, ListFooter } from '../components/PageState';
 import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { TiebaApi } from '../api/TiebaApi';
 import { SearchPostItem, searchEmptyHint, searchNoResultText, searchPlaceholder, searchScopeForum,
   searchScopeLabel } from '../model/SearchPost';
 import { ForumSearchItem } from '../model/ForumSearch';
 import { UserSearchItem } from '../model/UserSearch';
-import { SearchUsersVM } from '../viewmodel/SearchUsersVM';
-import { SearchPostAvatarsVM } from '../viewmodel/SearchPostAvatarsVM';
-import { getForumAvatar, isForumAvatarFetched, markForumAvatarFetched, putForumAvatar } from '../model/ForumAvatarStore';
+import { SearchResultVM } from '../viewmodel/SearchResultVM';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { TopLabelItem } from '../components/TopLabelItem';
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { formatPostTime } from '../model/HomeFeedPresentation';
-import { TiebaDevice } from '../net/TiebaParams';
-import { DeviceIdentity } from '../utils/DeviceIdentity';
-import { authSession } from '../auth/AuthSession';
 import { AppTheme } from '../theme/Theme';
 import { SearchPageHeader } from '../components/SearchPageHeader';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
-import { addSearchHistory } from '../utils/SearchHistory';
 import { NavigationService, SearchResultParams } from '../navigation/AppNavigation';
-
-/** 每页条数。搜索结果信息密度低，30 条一页滚动观感比 10 条好 */
-const SEARCH_PAGE_SIZE: number = 30;
 
 /** 全站结果分类；吧内搜索固定为帖子。 */
 const TAB_FORUM: number = 0;
@@ -43,24 +33,10 @@ export struct SearchResultPage {
   @Local cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   /** PageMap 注入的路由参数，唯一定义见 navigation/AppNavigation.ets 的 SearchResultParams */
   @Param routeParams: SearchResultParams | undefined = undefined;
-  /** 当前搜索词（可被改词重搜） */
-  @Local word: string = '';
-  /** 帖子结果（append 会整体触发 @Trace） */
-  @Local items: SearchPostItem[] = [];
-  /** 请求进行中（首屏与翻页共用，翻页由分页状态位区分） */
-  @Local loading: boolean = false;
-  @Local loadingMore: boolean = false;
-  @Local hasMore: boolean = false;
-  /** 首屏失败原因；翻页失败用 toast，不打断已有列表 */
-  @Local errorText: string = '';
-  @Local pagingError: string = '';
-  /** 已加载到的页码 */
-  private page: number = 0;
+  @Local vm: SearchResultVM = new SearchResultVM();
   /** 状态栏高度（vp），见 SafeArea.ets */
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local headerHeight: number = STATUS_BAR_FALLBACK_VP + 96;
-  @Local users: SearchUsersVM = new SearchUsersVM();
-  @Local postAvatars: SearchPostAvatarsVM = new SearchPostAvatarsVM();
 
   private cardScroller: ListScroller = new ListScroller();
   /** 搜索框内容与 word 分开存，避免打字过程触发刷新 */
@@ -73,14 +49,7 @@ export struct SearchResultPage {
    */
   @Local scopeForum: string = '';
 
-  @Local forumItems: ForumSearchItem[] = [];
-  @Local forumLoading: boolean = false;
-  @Local forumErrorText: string = '';
-
-  private requestEpoch: number = 0;
-  aboutToDisappear(): void { this.requestEpoch++; this.users.dispose(); this.postAvatars.reset(); }
-
-  private api: TiebaApi = new TiebaApi();
+  aboutToDisappear(): void { this.vm.dispose(); }
 
   aboutToAppear(): void {
 
@@ -94,8 +63,8 @@ export struct SearchResultPage {
     if (this.scopeForum.length > 0) {
       this.resultTab = TAB_POST;
     }
-    this.word = keyword;
-    this.input = this.word;
+    this.vm.word = keyword;
+    this.input = this.vm.word;
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
     readStatusBarVp(context).then((vp: number) => {
@@ -103,7 +72,7 @@ export struct SearchResultPage {
     }).catch(() => {
       // 拿不到就保持兜底值
     });
-    if (this.word.length > 0) {
+    if (this.vm.word.length > 0) {
       this.reload();
     }
   }
@@ -114,123 +83,12 @@ export struct SearchResultPage {
 
   /** 首屏加载（改词重搜与进入页面共用） */
   private async reload(): Promise<void> {
-    const word: string = this.input.trim();
-    if (word.length === 0) {
-      return;
-    }
-    const epoch: number = ++this.requestEpoch;
-    const owner: string = authSession.sessionKey();
-    // 每次改词独立补图；旧查询与旧账号的结果不能回填当前卡片。
-    this.postAvatars.reset(async (name: string, forum: boolean, tid: number, pid: number): Promise<string> => {
-      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return ''; }
-      const avatarApi: TiebaApi = new TiebaApi();
-      const device: TiebaDevice = await DeviceIdentity.ensure(this.hostContext());
-      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return ''; }
-      if (!forum) {
-        const url: string = await avatarApi.fetchSearchPostAuthorAvatar(device, authSession.session(), tid, pid);
-        return epoch === this.requestEpoch && owner === authSession.sessionKey() ? url : '';
-      }
-      if (isForumAvatarFetched(name)) {
-        const cached: string = getForumAvatar(name);
-        if (cached.length > 0) { return cached; }
-      }
-      const response = await avatarApi.fetchThreadList(device, authSession.session(), name, 1, 1);
-      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey() || !response.ok) { return ''; }
-      const url: string = response.data.forum.avatar;
-      if (url.length > 0) { putForumAvatar(name, url); markForumAvatarFetched(name); }
-      return url;
-    });
-    this.loadingMore = false;
-    this.forumItems = [];
-    this.word = word;
-    this.loading = true;
-    this.errorText = ''; this.pagingError = '';
-    this.page = 0;
-    this.items = [];
-    this.hasMore = false;
-    this.users.reset(word);
-    // 改词重搜也是一次搜索，历史规则与搜索页一致（去重置顶）
-    await addSearchHistory(this.hostContext(), word).catch(() => {
-      // 落库失败不影响搜索
-    });
-    if (epoch !== this.requestEpoch) { return; }
-    // 吧搜索与帖子搜索并行发，互不阻塞（各自的加载/错误状态独立）；
-    // 吧内搜索不发吧搜索（在某个吧里搜"相关的吧"没有意义，见 scopeForum 注释）
-    if (this.scopeForum.length === 0) {
-      this.fetchForums(word, epoch);
-      if (this.resultTab === TAB_USER) { void this.users.load(); }
-    }
-    await this.fetchPage(word, epoch);
-    if (epoch === this.requestEpoch) { this.loading = false; }
+    await this.vm.reload(this.hostContext(), this.input, this.scopeForum, this.resultTab === TAB_USER);
   }
 
   /** 是否处于吧内搜索形态（只看帖子、请求带 kw） */
   private scoped(): boolean {
     return this.scopeForum.length > 0;
-  }
-
-  /** 搜吧 tab：web 端 `/mo/q/search/forum`，精确在前模糊随后。失败只影响本 tab */
-  private async fetchForums(word: string, epoch: number = this.requestEpoch): Promise<void> {
-    this.forumLoading = true;
-    this.forumErrorText = '';
-    try {
-      const response = await this.api.searchForums(word, 1, 20);
-      if (epoch !== this.requestEpoch) { return; }
-      if (!response.ok) {
-        this.forumErrorText = response.describeFailure();
-        return;
-      }
-      this.forumItems = response.data.items;
-    } catch (err) {
-      const e: Error = err as Error;
-      if (epoch === this.requestEpoch) { this.forumErrorText = `加载失败：${e.message}`; }
-    } finally {
-      if (epoch === this.requestEpoch) { this.forumLoading = false; }
-    }
-  }
-
-  /** 触底加载下一页 */
-  private async loadMore(retry: boolean = false): Promise<void> {
-    if (this.loading || this.loadingMore || !this.hasMore || (this.pagingError.length > 0 && !retry)) {
-      return;
-    }
-    this.loadingMore = true; this.pagingError = '';
-    const epoch: number = this.requestEpoch;
-    await this.fetchPage(this.word, epoch);
-    if (epoch === this.requestEpoch) { this.loadingMore = false; }
-  }
-
-  private async fetchPage(word: string, epoch: number): Promise<void> {
-    const requested: number = this.page + 1;
-    const owner: string = authSession.sessionKey();
-    try {
-      const device: TiebaDevice = await DeviceIdentity.ensure(this.hostContext());
-      if (epoch !== this.requestEpoch || owner !== authSession.sessionKey()) { return; }
-      const response = await this.api.searchPosts(
-        device, authSession.session(), word, requested, SEARCH_PAGE_SIZE, this.scopeForum);
-      if (epoch !== this.requestEpoch) { return; }
-      if (owner !== authSession.sessionKey()) { return; }
-      if (!response.ok) { this.setPageError(requested, response.describeFailure()); return; }
-      if (response.data.page !== requested) { this.setPageError(requested, '返回页码不一致，请重试'); return; }
-      const seen: Set<string> = new Set<string>();
-      const next: SearchPostItem[] = requested === 1 ? [] : this.items.slice();
-      for (const item of next) { seen.add(`${item.tid}:${item.pid}`); }
-      const before: number = next.length;
-      for (const item of response.data.items) {
-        const key: string = `${item.tid}:${item.pid}`;
-        if (!seen.has(key)) { seen.add(key); next.push(item); }
-      }
-      this.items = next;
-      this.page = requested;
-      this.hasMore = response.data.hasMore && next.length > before;
-    } catch (err) {
-      const e: Error = err as Error;
-      if (epoch === this.requestEpoch && owner === authSession.sessionKey()) { this.setPageError(requested, `加载失败：${e.message}`); }
-    }
-  }
-
-  private setPageError(requested: number, message: string): void {
-    if (requested === 1) { this.errorText = message; } else { this.pagingError = message; }
   }
 
   private resultTimeText(item: SearchPostItem): string {
@@ -261,56 +119,56 @@ export struct SearchResultPage {
 
   private selectResultTab(tab: number): void {
     this.resultTab = tab;
-    if (tab === TAB_USER) { void this.users.load(); }
+    if (tab === TAB_USER) { void this.vm.users.load(); }
   }
 
   /** 列表自己含顶部透明占位；状态页则在顶栏以下占满剩余空间。 */
   private showingList(): boolean {
-    if (this.word.length === 0) { return false; }
+    if (this.vm.word.length === 0) { return false; }
     if (!this.scoped() && this.resultTab === TAB_USER) {
-      return !this.users.loading && this.users.error.length === 0 && this.users.items.length > 0;
+      return !this.vm.users.loading && this.vm.users.error.length === 0 && this.vm.users.items.length > 0;
     }
     if (!this.scoped() && this.resultTab === TAB_FORUM) {
-      return !this.forumLoading && this.forumErrorText.length === 0 && this.forumItems.length > 0;
+      return !this.vm.forumLoading && this.vm.forumErrorText.length === 0 && this.vm.forumItems.length > 0;
     }
-    return !this.loading && this.errorText.length === 0 && this.items.length > 0;
+    return !this.vm.loading && this.vm.errorText.length === 0 && this.vm.items.length > 0;
   }
 
   build() {
     HdsNavDestination() {
       Stack({ alignContent: Alignment.Top }) {
         Column() {
-          if (this.word.length === 0 && this.scoped()) {
+          if (this.vm.word.length === 0 && this.scoped()) {
             // 从吧页搜索入口进来时还没输入关键词：给一句明确的提示，不发必然为空的请求
             this.StatusView(searchEmptyHint(this.scopeForum))
           } else if (!this.scoped() && this.resultTab === TAB_USER) {
-            if (this.users.loading) {
+            if (this.vm.users.loading) {
               PageState({ fillRemaining: true, message: '正在搜索…', loading: true }).layoutWeight(1)
-            } else if (this.users.error.length > 0) {
-              PageState({ fillRemaining: true, title: '搜索失败', message: this.users.error, actionLabel: '重试',
-                onAction: (): void => { void this.users.load(true); } }).layoutWeight(1)
-            } else if (this.users.items.length === 0) {
-              PageState({ fillRemaining: true, message: `没有找到与「${this.word}」相关的用户` }).layoutWeight(1)
+            } else if (this.vm.users.error.length > 0) {
+              PageState({ fillRemaining: true, title: '搜索失败', message: this.vm.users.error, actionLabel: '重试',
+                onAction: (): void => { void this.vm.users.load(true); } }).layoutWeight(1)
+            } else if (this.vm.users.items.length === 0) {
+              PageState({ fillRemaining: true, message: `没有找到与「${this.vm.word}」相关的用户` }).layoutWeight(1)
             } else {
               this.UserListTab()
             }
           } else if (!this.scoped() && this.resultTab === TAB_FORUM) {
             // 搜吧 tab：关键词相关的吧列表（模糊搜索，精确匹配排最前）
-            if (this.forumLoading) {
+            if (this.vm.forumLoading) {
               this.StatusView('正在搜索…')
-            } else if (this.forumErrorText.length > 0) {
+            } else if (this.vm.forumErrorText.length > 0) {
               this.ForumErrorView()
-            } else if (this.forumItems.length === 0) {
-              this.StatusView(`没有找到与「${this.word}」相关的吧`)
+            } else if (this.vm.forumItems.length === 0) {
+              this.StatusView(`没有找到与「${this.vm.word}」相关的吧`)
             } else {
               this.ForumListTab()
             }
-          } else if (this.loading) {
+          } else if (this.vm.loading) {
             this.StatusView('正在搜索…')
-          } else if (this.errorText.length > 0) {
+          } else if (this.vm.errorText.length > 0) {
             this.ErrorView()
-          } else if (this.items.length === 0) {
-            this.StatusView(searchNoResultText(this.scopeForum, this.word))
+          } else if (this.vm.items.length === 0) {
+            this.StatusView(searchNoResultText(this.scopeForum, this.vm.word))
           } else {
             this.ResultList()
           }
@@ -388,7 +246,7 @@ export struct SearchResultPage {
     List({ space: 10 }) {
       // List 自带10vp项间距；其余占位保证材质下沿之外还有统一内容间距。
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
-      ForEach(this.forumItems, (item: ForumSearchItem) => {
+      ForEach(this.vm.forumItems, (item: ForumSearchItem) => {
         ListItem() {
           Row({ space: 12 }) {
 
@@ -457,8 +315,8 @@ export struct SearchResultPage {
   /** 搜吧 tab 的失败视图：与帖子 tab 的 ErrorView 同构，重试只重发吧搜索 */
   @Builder
   ForumErrorView() {
-    PageState({ fillRemaining: true, title: '搜索失败', message: this.forumErrorText, actionLabel: '重试',
-      onAction: (): void => { this.fetchForums(this.word); } }).layoutWeight(1)
+    PageState({ fillRemaining: true, title: '搜索失败', message: this.vm.forumErrorText, actionLabel: '重试',
+      onAction: (): void => { void this.vm.retryForums(); } }).layoutWeight(1)
   }
 
   /** 顶部：返回 + 搜索框（可改词重搜） */
@@ -487,7 +345,7 @@ export struct SearchResultPage {
   UserListTab() {
     List({ space: 10 }) {
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
-      ForEach(this.users.items, (item: UserSearchItem) => {
+      ForEach(this.vm.users.items, (item: UserSearchItem) => {
         ListItem() {
           Row({ space: 12 }) {
             AvatarComponent({ url: item.avatar, avatarSize: 44, fallbackName: item.name })
@@ -508,26 +366,26 @@ export struct SearchResultPage {
         }
       }, (item: UserSearchItem) => item.key())
       ListItem() {
-        ListFooter({ loading: this.users.loadingMore, error: this.users.pagingError.length > 0 ? '加载失败' : '',
-          hasMore: this.users.hasMore, onRetry: (): void => { void this.users.loadMore(true); } })
+        ListFooter({ loading: this.vm.users.loadingMore, error: this.vm.users.pagingError.length > 0 ? '加载失败' : '',
+          hasMore: this.vm.users.hasMore, onRetry: (): void => { void this.vm.users.loadMore(true); } })
       }
     }
     .width('100%').layoutWeight(1).scrollBar(BarState.Off)
     .id('search-user-list')
-    .onReachEnd(() => { void this.users.loadMore(); })
+    .onReachEnd(() => { void this.vm.users.loadMore(); })
   }
 
   @Builder
   ResultList() {
     List({ space: 10 }) {
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
-      ForEach(this.items, (item: SearchPostItem) => {
+      ForEach(this.vm.items, (item: SearchPostItem) => {
         ListItem() {
           ThreadPreviewCard({
             authorName: item.authorName,
-            authorAvatar: this.postAvatars.urls.get(`author:${item.tid}:${item.pid}`) ?? '',
+            authorAvatar: this.vm.postAvatars.urls.get(`author:${item.tid}:${item.pid}`) ?? '',
             forumName: item.forumName,
-            forumAvatar: this.postAvatars.urls.get(`forum:${item.forumName}`) ?? '',
+            forumAvatar: this.vm.postAvatars.urls.get(`forum:${item.forumName}`) ?? '',
             postedTime: this.resultTimeText(item),
             title: item.displayTitle(),
             summary: item.snippet === item.displayTitle() ? '' : item.snippet,
@@ -552,7 +410,9 @@ export struct SearchResultPage {
             onOpenThread: (): void => { this.openThread(item); }
           })
         }
-        .onAppear(() => { this.postAvatars.request(item.tid, item.pid, item.forumName); })
+        .onAppear(() => {
+          this.vm.requestAvatar(item);
+        })
       }, (item: SearchPostItem) => `${item.tid}-${item.pid}`)
 
       ListItem() {
@@ -563,24 +423,24 @@ export struct SearchResultPage {
     .layoutWeight(1)
     .scrollBar(BarState.Off)
     .onReachEnd(() => {
-      this.loadMore();
+      void this.vm.loadMore(this.hostContext());
     })
   }
 
   @Builder
   PageFooter() {
-    ListFooter({ loading: this.loadingMore, error: this.pagingError.length > 0 ? '加载失败' : '',
-      hasMore: this.hasMore, onRetry: (): void => { void this.loadMore(true); } })
+    ListFooter({ loading: this.vm.loadingMore, error: this.vm.pagingError.length > 0 ? '加载失败' : '',
+      hasMore: this.vm.hasMore, onRetry: (): void => { void this.vm.loadMore(this.hostContext(), true); } })
   }
 
   @Builder
   StatusView(text: string) {
-    PageState({ fillRemaining: true, message: text, loading: this.loading || this.forumLoading }).layoutWeight(1)
+    PageState({ fillRemaining: true, message: text, loading: this.vm.loading || this.vm.forumLoading }).layoutWeight(1)
   }
 
   @Builder
   ErrorView() {
-    PageState({ fillRemaining: true, title: '搜索失败', message: this.errorText, actionLabel: '重试',
+    PageState({ fillRemaining: true, title: '搜索失败', message: this.vm.errorText, actionLabel: '重试',
       onAction: (): void => { this.reload(); } }).layoutWeight(1)
   }
 }

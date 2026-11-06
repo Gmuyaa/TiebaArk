@@ -1,15 +1,20 @@
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
-import { AgreeObjType } from '../net/TiebaParams';
+import { AgreeObjType, TiebaDevice } from '../net/TiebaParams';
+import { TiebaApi } from '../api/TiebaApi';
+import { ThreadDetail, ReplySortType } from '../model/ThreadDetail';
+import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { shareWebPage } from '../utils/SystemShare';
-import { AgreeState, ThreadDetailVM } from './ThreadDetailVM';
+import { AgreeActionVM, AgreeState, AgreeTarget } from './AgreeActionVM';
 
 export const CARD_ACTION_DETAIL_LIMIT: number = 16;
 
 /** 列表不猜主帖 pid 或已赞状态，首次操作先读取详情，再走详情页同一写入状态机。 */
 @ObservedV2
 export class ThreadCardActionState {
-  private detail: ThreadDetailVM | undefined = undefined;
+  private target: AgreeTarget | undefined = undefined;
+  private api: TiebaApi = new TiebaApi();
+  private actions: AgreeActionVM = new AgreeActionVM();
   @Trace private agreement: AgreeState | undefined = undefined;
   @Trace private owner: string = '';
   @Trace private preparing: boolean = false;
@@ -27,10 +32,10 @@ export class ThreadCardActionState {
     return this.owner === authSession.sessionKey() && this.preparing;
   }
 
-  /** 只释放完整详情；已显示的轻量点赞态仍可接收在途读回，不能丢弃写入。 */
+  /** 释放可复用的目标身份；轻量赞态仍可接收在途读回，不能丢弃写入。 */
   release(): boolean {
     if (this.preparing || this.agreement?.pending) { return false; }
-    this.detail = undefined;
+    this.target = undefined;
     return true;
   }
 
@@ -41,25 +46,25 @@ export class ThreadCardActionState {
     if (this.owner !== owner) {
       this.generation++;
       this.owner = owner;
-      this.detail = undefined;
+      this.target = undefined;
       this.agreement = undefined;
       this.preparing = false;
     }
     if (this.preparing) { return ''; }
-    if (this.detail === undefined) {
+    if (this.target === undefined) {
       const generation: number = ++this.generation;
       this.preparing = true;
-      const candidate: ThreadDetailVM = new ThreadDetailVM();
-      candidate.setForumNameHint(forumName);
       try {
-        await candidate.load(context, tid);
-        if (owner !== authSession.sessionKey() || generation !== this.generation) {
-          return '账号已变化，未继续点赞';
-        }
-        if (candidate.errorText.length > 0) { return candidate.errorText; }
-        if (candidate.mainPost() === undefined) { return '暂未取得主帖，无法点赞'; }
-        this.detail = candidate;
-        this.agreement = candidate.agreeState(candidate.mainPost()!.pid);
+        const device: TiebaDevice = await DeviceIdentity.ensure(context);
+        if (owner !== authSession.sessionKey() || generation !== this.generation) { return '账号已变化，未继续点赞'; }
+        const response = await this.api.fetchThreadDetail(device, authSession.session(), tid, 1, 30, ReplySortType.ASC);
+        if (owner !== authSession.sessionKey() || generation !== this.generation) { return '账号已变化，未继续点赞'; }
+        if (!response.ok) { return response.describeFailure(); }
+        const main = ThreadDetail.locateMainPost(response.data);
+        if (main === undefined) { return '暂未取得主帖，无法点赞'; }
+        this.target = { tid: tid, pid: main.pid, forumId: response.data.forumId,
+          objType: AgreeObjType.THREAD, parentPid: 0, generation: generation };
+        this.agreement = new AgreeState(main.isAgreed, main.agreeCount);
       } catch (err) {
         return '读取点赞状态失败，请稍后重试';
       } finally {
@@ -67,10 +72,22 @@ export class ThreadCardActionState {
       }
     }
     if (owner !== authSession.sessionKey()) { return '账号已变化，未继续点赞'; }
-    const vm: ThreadDetailVM | undefined = this.detail;
-    const main = vm?.mainPost();
-    if (vm === undefined || main === undefined) { return '暂未取得主帖，无法点赞'; }
-    return vm.toggleAgree(context, main, AgreeObjType.THREAD);
+    const target: AgreeTarget | undefined = this.target;
+    const state: AgreeState | undefined = this.agreement;
+    if (target === undefined || state === undefined) { return '暂未取得主帖，无法点赞'; }
+    const generation: number = this.generation;
+    return this.actions.toggle(context, target, state, (): boolean => generation === this.generation,
+      async (current: () => boolean): Promise<void> => {
+        const device: TiebaDevice = await DeviceIdentity.ensure(context);
+        if (!current()) { return; }
+        const response = await this.api.fetchThreadDetail(device, authSession.session(), target.tid, 1, 30, ReplySortType.ASC);
+        if (!current() || !response.ok) { return; }
+        const main = ThreadDetail.locateMainPost(response.data);
+        if (main === undefined || main.pid !== target.pid) { return; }
+        state.isAgreed = response.data.mainPostId === target.pid ? response.data.isAgreed : main.isAgreed;
+        state.count = response.data.mainPostId === target.pid ? response.data.agreeCount : main.agreeCount;
+        state.toggled = false;
+      });
   }
 }
 

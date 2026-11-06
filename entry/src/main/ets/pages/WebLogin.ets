@@ -12,6 +12,8 @@ import { sha256Hex } from '../net/RequestOptionsTrace';
 import { AppTheme } from '../theme/Theme';
 import { PageHeader } from '../components/PageHeader';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 
 const PAGE_TAG: string = 'WebLogin';
 const POLL_INTERVAL_MS: number = 1500;
@@ -83,7 +85,9 @@ struct WebLoginPage {
       // 落点页（tbwise/mine）+ baidu.com 主域都取一遍合并解析。
       // WebCookieManager.fetchCookie 是静态方法。
       const mineCookie: string = await webview.WebCookieManager.fetchCookie(MINE_URL);
+      if (this.pollStopped) { return; }
       const baiduCookie: string = await webview.WebCookieManager.fetchCookie('https://www.baidu.com/');
+      if (this.pollStopped) { return; }
       const cookieText: string = `${mineCookie}; ${baiduCookie}`;
       const bduss: string = extractBdussFromCookie(cookieText);
       const stoken: string = extractStokenFromCookie(cookieText);
@@ -101,6 +105,7 @@ struct WebLoginPage {
           : '等待登录…（在上方网页中登录百度账号）';
       }
     } catch (err) {
+      if (this.pollStopped) { return; }
       const e: Error = err as Error;
       hilog.warn(0x0000, PAGE_TAG, 'cookie fetch failed: %{public}s', e.message);
       this.statusText = '读取登录状态失败，重试中…';
@@ -123,12 +128,13 @@ struct WebLoginPage {
   }
 
   private finishLogin(bduss: string, stoken: string): void {
-    if (this.loggingIn) {
+    if (this.loggingIn || this.pollStopped) {
       return;
     }
     this.loggingIn = true;
-    authSession.loginFromWebCookies(bduss, stoken)
+    authSession.loginFromWebCookies(bduss, stoken, (): boolean => !this.pollStopped)
       .then((result) => {
+        if (this.pollStopped) { return; }
         this.loggingIn = false;
         if (result.ok) {
           hilog.info(0x0000, PAGE_TAG, 'web login ok: authSource=web_login');
@@ -143,12 +149,20 @@ struct WebLoginPage {
         this.scheduleNext();
       })
       .catch((err: object) => {
+        if (this.pollStopped) { return; }
         const e: Error = err as Error;
         this.loggingIn = false;
         hilog.warn(0x0000, PAGE_TAG, 'login threw: %{public}s', e.message);
         this.statusText = '登录流程异常，重试中…';
         this.scheduleNext();
       });
+  }
+
+  pageTransition() {
+    if (!motionStore.isOn(MotionEffect.MOVE)) {
+      PageTransitionEnter({ duration: 0, curve: Curve.Linear })
+      PageTransitionExit({ duration: 0, curve: Curve.Linear })
+    }
   }
 
   build() {

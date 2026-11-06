@@ -120,6 +120,15 @@ export struct ProfileView {
     return `Lv.${snapshot.levelId}`;
   }
 
+  // 在子节点的更新回调内读取 @Trace，不能把首帧格式化字符串传进 Builder 后固定下来。
+  private statValue(label: string): string {
+    const snapshot: AuthSnapshot = authSession.snapshot;
+    if (label === '等级') { return this.levelText(snapshot); }
+    const value: number = label === '关注' ? snapshot.concernNum :
+      (label === '粉丝' ? snapshot.fansNum : snapshot.likeForumNum);
+    return this.countText(snapshot, value);
+  }
+
   /**
    * 外观切换按钮的图标：当前档位对应的原生图标（太阳 / 月亮 / 左右半实心圆）。
    *
@@ -198,7 +207,7 @@ export struct ProfileView {
               .constraintSize({ minWidth: 64, minHeight: 48 })
               .borderRadius(AppTheme.PILL_RADIUS)
               .backgroundColor(AppTheme.ACCENT)
-              .fontColor(Color.White)
+              .fontColor(AppTheme.ON_ACCENT)
               .onClick(() => { router.pushUrl({ url: 'pages/Login' }); })
           } else {
             SymbolGlyph($r('sys.symbol.chevron_right'))
@@ -221,13 +230,13 @@ export struct ProfileView {
 
         if (authSession.snapshot.isLoggedIn()) {
           Row() {
-            this.StatCell('关注', this.countText(authSession.snapshot, authSession.snapshot.concernNum))
+            this.StatCell('关注')
             Divider().vertical(true).height(30).color(AppTheme.DIVIDER)
-            this.StatCell('粉丝', this.countText(authSession.snapshot, authSession.snapshot.fansNum))
+            this.StatCell('粉丝')
             Divider().vertical(true).height(30).color(AppTheme.DIVIDER)
-            this.StatCell('等级', this.levelText(authSession.snapshot))
+            this.StatCell('等级')
             Divider().vertical(true).height(30).color(AppTheme.DIVIDER)
-            this.StatCell('关注吧', this.countText(authSession.snapshot, authSession.snapshot.likeForumNum))
+            this.StatCell('关注吧')
           }
           .width('100%')
           .constraintSize({ minHeight: SettingsLayout.ROW_MIN_H })
@@ -274,9 +283,9 @@ export struct ProfileView {
 
   /** 四格数据中的缺失值仍用 `—`，避免把取数失败误报为零。 */
   @Builder
-  StatCell(label: string, value: string) {
+  StatCell(label: string) {
     Column({ space: 4 }) {
-      Text(value)
+      Text(this.statValue(label))
         .fontSize(19)
         .fontWeight(FontWeight.Medium)
         .fontColor(visualThemeStore.isPaper ? AppTheme.GOLD : AppTheme.TEXT_MAIN)
@@ -291,7 +300,7 @@ export struct ProfileView {
     .justifyContent(FlexAlign.Center)
     .borderRadius(12)
     .accessibilityGroup(true)
-    .accessibilityText(label + '，' + value)
+    .accessibilityText(label + '，' + this.statValue(label))
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
       const uid: number = authSession.snapshot.uid;

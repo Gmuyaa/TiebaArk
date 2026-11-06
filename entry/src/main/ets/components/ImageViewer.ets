@@ -6,7 +6,7 @@ import { MaterialTabs } from './MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { SavedEmojiManagerVM } from '../viewmodel/SavedEmojiManagerVM';
 import { ImageUploadInput } from '../model/ImageUpload';
-import { ImageTransitionSeed, takeImageTransition, animateImageTransition } from './ImageTransition';
+import { ImageTransitionSeed, takeImageTransition, animateImageTransition, imageFadeTransition } from './ImageTransition';
 /** 全屏图片查看器，支持缩放、滑动切换、导出与当前图片超分。 */
 
 import { promptAction, window } from '@kit.ArkUI';
@@ -430,7 +430,7 @@ struct ZoomableImagePage {
           .fontColor(Color.White)
         Text('点击重试')
           .fontSize(14)
-          .fontColor('#B8D8FF')
+          .fontColor(AppTheme.MEDIA_ACCENT)
           .onClick(() => {
             this.retry();
           })
@@ -996,6 +996,10 @@ export struct ImageViewer {
     .width('100%')
     .height('100%')
     .id('image-bottom-menu')
+    .transition(motionTransition(TransitionEffect.translate({ y: 24 }), MotionEffect.MOVE)
+      .combine(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE))
+      .animation({ duration: Math.max(motionDuration(180, MotionEffect.MOVE), motionDuration(180, MotionEffect.FADE)),
+        curve: Curve.EaseOut }))
   }
 
   @Builder
@@ -1129,7 +1133,7 @@ export struct ImageViewer {
       this.viewerWidth = Number(area.width); this.viewerHeight = Number(area.height);
     })
     .backgroundColor(Color.Black)
-    .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE))
+    .transition(imageFadeTransition())
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onKeyEvent((event: KeyEvent): boolean => {
       // 保留但**不生效**：这个 `Stack` 不持有焦点，收不到按键。真正拦返回键的是

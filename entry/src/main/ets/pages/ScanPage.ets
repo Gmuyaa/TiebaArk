@@ -43,7 +43,7 @@ export struct ScanPage {
           Text('支持相机扫码，也可从系统扫码界面选择相册图片。其他二维码不会打开。')
             .fontSize(14).fontColor(AppTheme.TEXT_SUB).lineHeight(22).textAlign(TextAlign.Center)
           Button(this.vm.scanning ? '正在扫码…' : '开始扫码')
-            .fontSize(16).fontColor(Color.White).backgroundColor(AppTheme.ACCENT)
+            .fontSize(16).fontColor(AppTheme.ON_ACCENT).backgroundColor(AppTheme.ACCENT)
             .enabled(!this.vm.scanning).onClick(() => { void this.startScan(); })
           if (this.vm.message.length > 0) {
             Text(this.vm.message).fontSize(14).fontColor(AppTheme.TEXT_SUB).textAlign(TextAlign.Center)

@@ -9,6 +9,8 @@ export function forumAvatarRadius(size: number): number {
 export struct ForumAvatarImage {
   /** 服务端给的完整吧头像地址；空串走文字兜底 */
   @Param url: string = '';
+  /** 元数据补取完成后只重试失败图片，成功的同地址图片继续复用。 */
+  @Param retryRevision: number = 0;
   /** 兜底文字取它的首字；空串时兜底为「吧」 */
   @Param forumName: string = '';
   @Param avatarSize: number = 18;
@@ -26,9 +28,15 @@ export struct ForumAvatarImage {
   @Local failed: boolean = false;
 
   /** URL 变化 = 换了一次地址（反查回填 / 刷新），重试标记必须复位 */
-  @Monitor('url')
+  @Monitor('url', 'retryRevision')
   onUrlChanged(): void {
     this.failed = false;
+  }
+
+  private errorHandler(url: string, revision: number): () => void {
+    return (): void => {
+      if (url === this.url && revision === this.retryRevision) { this.failed = true; }
+    };
   }
 
   private glyph(): string {
@@ -50,9 +58,7 @@ export struct ForumAvatarImage {
           .borderRadius(this.radius)
           .objectFit(ImageFit.Cover)
           .backgroundColor(this.bgColor)
-          .onError((): void => {
-            this.failed = true;
-          })
+          .onError(this.errorHandler(this.url, this.retryRevision))
       } else {
         Text(this.glyph())
           .fontSize(this.glyphFontSize()).maxFontScale(1)

@@ -188,7 +188,7 @@ export struct AvatarCropPage {
           this.areaHeight > CROP_DONE_HEIGHT + CROP_DONE_BOTTOM) {
           Button('完成')
             .fontSize(16)
-            .fontColor(Color.White)
+            .fontColor(AppTheme.ON_ACCENT)
             .backgroundColor(AppTheme.ACCENT)
             .borderRadius(8)
             .width(CROP_DONE_WIDTH)
