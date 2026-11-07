@@ -6,10 +6,12 @@ import { MaterialTabs } from './MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { SavedEmojiManagerVM } from '../viewmodel/SavedEmojiManagerVM';
 import { ImageUploadInput } from '../model/ImageUpload';
-import { ImageTransitionSeed, takeImageTransition, animateImageTransition, imageFadeTransition } from './ImageTransition';
+import { ImageTransitionSeed, ImageTransitionTarget, bindImageTransitionReturn, takeImageTransition,
+  closeImageTransition, imageFadeTransition, imageSharedDuration, imageLayerRetentionTransition } from './ImageTransition';
+import { ImageTransitionCrop } from '../model/ImageTransitionCrop';
 /** 全屏图片查看器，支持缩放、滑动切换、导出与当前图片超分。 */
 
-import { promptAction, window } from '@kit.ArkUI';
+import { display, promptAction, UIUtils, window } from '@kit.ArkUI';
 import { AppTheme } from '../theme/Theme';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -37,6 +39,8 @@ const MIN_SCALE: number = 1;
 const MAX_SCALE: number = 4;
 const DOUBLE_TAP_SCALE: number = 2;
 const ANIMATION_DURATION: number = 180;
+/** 解码尺寸可能有取整误差；明显不同的预览/原图比例不能错误共享返回。 */
+const SHARED_ASPECT_TOLERANCE: number = 0.01;
 /** 导出菜单日志（C-06／H-07 真机取证用；只记状态与地址前 60 字符，不含凭据） */
 const EXPORT_DOMAIN: number = 0x0;
 const EXPORT_TAG: string = 'ImageViewerExport';
@@ -44,6 +48,13 @@ const EXPORT_TAG: string = 'ImageViewerExport';
 class ImageSize {
   width: number = 0;
   height: number = 0;
+}
+
+/** 返回前同步读取实际当前页；不依赖上一次异步上报，也不更换图片源。 */
+class ImageReturnPageState {
+  atRest: boolean = false;
+  ready: boolean = false;
+  aspectRatio: number = 0;
 }
 
 interface ImageCompleteInfo {
@@ -73,7 +84,20 @@ enum ImageLoadState {
 struct ZoomableImagePage {
   imageUrl: string = '';
   @Prop transitionId: string = '';
+  @Prop returnId: string = '';
+  @Prop returnCropUsable: boolean = false;
+  @Prop returnCropScale: number = 1;
+  @Prop returnCropCenterX: string = '50%';
+  @Prop returnCropCenterY: string = '50%';
+  @Prop returnContentAspectRatio: number = 0;
+  canUpdateSession: () => boolean = (): boolean => true;
+  onRegisterReturnState: (index: number, read: () => ImageReturnPageState) => () => void =
+    (_index: number, _read: () => ImageReturnPageState): (() => void) => (): void => {};
+  private stopReturnState: () => void = (): void => {};
   transitionPreview: string = '';
+  transitionCrop: ImageTransitionCrop | undefined = undefined;
+  @Prop @Watch('onPreviewHoldChanged') holdTransitionPreview: boolean = false;
+  onReturnEligibility: (index: number, eligible: boolean) => void = (_index: number, _eligible: boolean): void => {};
 
   onLongPressImage: () => void = (): void => {};
   onTapImage: () => void = (): void => {};
@@ -105,12 +129,45 @@ struct ZoomableImagePage {
 
 
   private pinchBase: number = MIN_SCALE;
+  @State private zoomAnimating: boolean = false;
+  private zoomAnimationEpoch: number = 0;
+  private pageActive: boolean = false;
+  private imageLoadEpoch: number = 0;
   private panBaseX: number = 0;
   private panBaseY: number = 0;
 
   aboutToAppear(): void {
+    this.pageActive = true;
+    ++this.imageLoadEpoch;
+    ++this.zoomAnimationEpoch;
+    this.zoomAnimating = false;
     this.resetImageState();
     this.readWindowSize();
+    this.stopReturnState = this.onRegisterReturnState(this.index, (): ImageReturnPageState => this.readReturnState());
+  }
+
+  aboutToDisappear(): void {
+    this.pageActive = false;
+    this.stopReturnState();
+    ++this.imageLoadEpoch;
+    ++this.zoomAnimationEpoch;
+  }
+
+  private canUpdatePage(): boolean {
+    return this.pageActive && this.canUpdateSession();
+  }
+
+  private readReturnState(): ImageReturnPageState {
+    const state: ImageReturnPageState = new ImageReturnPageState();
+    state.atRest = this.pageActive && !this.zoomAnimating && this.zoomScale === MIN_SCALE &&
+      this.contentAspectMatchesSource();
+    state.ready = this.loadState === ImageLoadState.SUCCESS && this.primaryImageVisible();
+    const width: number = this.displayedSourceWidth();
+    const height: number = this.displayedSourceHeight();
+    const ratio: number = width / height;
+    state.aspectRatio = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 &&
+      Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+    return state;
   }
 
   private resetImageState(): void {
@@ -124,13 +181,24 @@ struct ZoomableImagePage {
   }
 
   private readWindowSize(): void {
+    // 共享目标首帧就有可用宽高；真实窗口和全屏外层 onAreaChange 随后校正。
+    try {
+      const screen: display.Display = display.getDefaultDisplaySync();
+      if (screen.width > 0 && screen.height > 0) {
+        this.containerWidth = px2vp(screen.width);
+        this.containerHeight = px2vp(screen.height);
+      }
+    } catch (_) { /* 无同步显示信息时仍可由窗口/布局回调提供尺寸。 */ }
+    const epoch: number = this.imageLoadEpoch;
     try {
       const context = this.getUIContext().getHostContext();
       window.getLastWindow(context).then((win: window.Window) => {
+        if (!this.canUpdatePage() || epoch !== this.imageLoadEpoch) { return; }
         const rect = win.getWindowProperties().windowRect;
         this.containerWidth = rect.width > 0 ? px2vp(rect.width) : this.containerWidth;
         this.containerHeight = rect.height > 0 ? px2vp(rect.height) : this.containerHeight;
         this.topSafeVp = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height);
+        this.clampOffsets();
       }).catch(() => {
         // onAreaChange 会提供更精确的组件尺寸；这里仅作为早期兜底。
       });
@@ -176,6 +244,97 @@ struct ZoomableImagePage {
       return this.sr.resultHeight;
     }
     return this.sourceHeight;
+  }
+
+  /** 同一 URI 只使用主 Image；异源预览节点保留到本页销毁，用透明度交接。 */
+  private hasSeparateTransitionPreview(): boolean {
+    return this.transitionPreview.length > 0 &&
+      (this.transitionPreview !== this.sourceForLoad() || this.showingEnhanced());
+  }
+
+  private primaryImageVisible(): boolean {
+    return !this.hasSeparateTransitionPreview() ||
+      (!this.holdTransitionPreview && this.loadState === ImageLoadState.SUCCESS);
+  }
+
+  private transitionPreviewVisible(): boolean {
+    return this.hasSeparateTransitionPreview() && !this.primaryImageVisible();
+  }
+
+  /** 大于零的比例只由正文完整图片提供；首页和旧图集仍使用原来的全屏共享框。 */
+  private sourceContentAspectRatio(): number {
+    const ratio: number = this.returnId.length > 0 ? this.returnContentAspectRatio :
+      (this.transitionCrop?.contentAspectRatio ?? 0);
+    return Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+  }
+
+  private contentAspectRatio(): number {
+    const sourceRatio: number = this.sourceContentAspectRatio();
+    if (sourceRatio === 0 || this.holdTransitionPreview || this.loadState !== ImageLoadState.SUCCESS) {
+      return sourceRatio;
+    }
+    const width: number = this.displayedSourceWidth();
+    const height: number = this.displayedSourceHeight();
+    const ratio: number = width / height;
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 &&
+      Number.isFinite(ratio) && ratio > 0 ? ratio : sourceRatio;
+  }
+
+  private contentAspectMatchesSource(): boolean {
+    const sourceRatio: number = this.sourceContentAspectRatio();
+    if (sourceRatio === 0) { return true; }
+    const ratio: number = this.contentAspectRatio();
+    return Math.abs(ratio - sourceRatio) / Math.max(ratio, sourceRatio) <= SHARED_ASPECT_TOLERANCE;
+  }
+
+  private imageFrameSize(): ImageSize {
+    const result: ImageSize = new ImageSize();
+    const width: number = this.containerWidth;
+    const height: number = this.containerHeight;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) { return result; }
+    result.width = width;
+    result.height = height;
+    const ratio: number = this.contentAspectRatio();
+    if (ratio > 0) {
+      if (width / height > ratio) {
+        result.width = height * ratio;
+      } else {
+        result.height = width / ratio;
+      }
+    }
+    return result;
+  }
+
+  private imageFrameWidth(): number | string {
+    const size: ImageSize = this.imageFrameSize();
+    return this.sourceContentAspectRatio() > 0 && size.width > 0 ? size.width : '100%';
+  }
+
+  private imageFrameHeight(): number | string {
+    const size: ImageSize = this.imageFrameSize();
+    return this.sourceContentAspectRatio() > 0 && size.height > 0 ? size.height : '100%';
+  }
+
+  private sharedGeometryId(): string {
+    if (this.zoomScale !== MIN_SCALE || this.zoomAnimating || !this.contentAspectMatchesSource()) { return ''; }
+    return motionGeometryId(this.returnId.length > 0 ? this.returnId : this.transitionId);
+  }
+
+  private imageContentTransition(): TransitionEffect {
+    // 共享图片需要真实退场动画才能继续绘制；回退图片仍尊重淡化设置。
+    return this.sharedGeometryId().length > 0 ? imageLayerRetentionTransition() : imageFadeTransition();
+  }
+
+  private imageFrameClipped(): boolean {
+    // 放大图可以越过正文的窄拟合框，但始终受外层全屏区域裁切。
+    return this.sourceContentAspectRatio() === 0 ||
+      (this.zoomScale === MIN_SCALE && !this.zoomAnimating);
+  }
+
+  private onPreviewHoldChanged(_propertyName: string): void {
+    if (!this.canUpdatePage()) { return; }
+    this.clampOffsets();
+    this.reportReturnEligibility();
   }
 
   /** 手势护栏：刚碰过超分按钮的一小段时间内，不认"单击关闭 / 双击放大 / 长按导出" */
@@ -271,25 +430,27 @@ struct ZoomableImagePage {
       this.srGuardUntil = Date.now() + 400;
       this.onSuperResolutionToggle(this.index);
     })
+    .transition(imageFadeTransition())
   }
 
   private sourceImageSize(): ImageSize {
     const result: ImageSize = new ImageSize();
+    const frame: ImageSize = this.imageFrameSize();
     const widthPx: number = this.displayedSourceWidth();
     const heightPx: number = this.displayedSourceHeight();
     if (widthPx <= 0 || heightPx <= 0) {
-      result.width = this.containerWidth;
-      result.height = this.containerHeight;
+      result.width = frame.width;
+      result.height = frame.height;
       return result;
     }
     const imageWidth: number = px2vp(widthPx);
     const imageHeight: number = px2vp(heightPx);
-    if (this.containerWidth <= 0 || this.containerHeight <= 0) {
+    if (frame.width <= 0 || frame.height <= 0) {
       result.width = imageWidth;
       result.height = imageHeight;
       return result;
     }
-    const fitScale: number = Math.min(this.containerWidth / imageWidth, this.containerHeight / imageHeight);
+    const fitScale: number = Math.min(frame.width / imageWidth, frame.height / imageHeight);
     result.width = imageWidth * fitScale;
     result.height = imageHeight * fitScale;
     return result;
@@ -313,6 +474,7 @@ struct ZoomableImagePage {
   }
 
   private setScale(value: number): void {
+    if (!this.canUpdatePage()) { return; }
     const next: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
     this.zoomScale = next;
     if (next === MIN_SCALE) {
@@ -321,11 +483,32 @@ struct ZoomableImagePage {
     } else {
       this.clampOffsets();
     }
+    this.reportReturnEligibility();
+  }
+
+  private reportReturnEligibility(): void {
+    if (this.canUpdatePage()) {
+      this.onReturnEligibility(this.index, !this.zoomAnimating && this.zoomScale === MIN_SCALE &&
+        this.contentAspectMatchesSource());
+    }
+  }
+
+  private animateZoom(action: () => void): void {
+    if (!this.canUpdatePage()) { return; }
+    const epoch: number = ++this.zoomAnimationEpoch;
+    this.zoomAnimating = true;
+    this.reportReturnEligibility();
+    this.getUIContext().animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE),
+      onFinish: (): void => {
+        if (!this.canUpdatePage() || epoch !== this.zoomAnimationEpoch) { return; }
+        this.zoomAnimating = false;
+        this.reportReturnEligibility();
+      } }, action);
   }
 
   private settleScale(): void {
     const target: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.zoomScale));
-    animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE)}, () => {
+    this.animateZoom(() => {
       this.setScale(target);
       if (target === MIN_SCALE) {
         this.panX = 0;
@@ -335,7 +518,7 @@ struct ZoomableImagePage {
   }
 
   private toggleDoubleTapZoom(): void {
-    animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE)}, () => {
+    this.animateZoom(() => {
       if (this.zoomScale > MIN_SCALE) {
         this.setScale(MIN_SCALE);
       } else {
@@ -345,10 +528,57 @@ struct ZoomableImagePage {
   }
 
   private retry(): void {
+    if (!this.canUpdatePage()) { return; }
+    ++this.imageLoadEpoch;
     this.retryCount += 1;
     this.loadState = ImageLoadState.LOADING;
     this.sourceWidth = 0;
     this.sourceHeight = 0;
+    this.clampOffsets();
+    this.reportReturnEligibility();
+  }
+
+  private acceptsImageCallback(source: image.PixelMap | string, epoch: number): boolean {
+    return this.canUpdatePage() && epoch === this.imageLoadEpoch && source === this.displaySource();
+  }
+
+  private completeHandler(source: image.PixelMap | string, epoch: number): (event?: ImageCompleteInfo) => void {
+    return (event?: ImageCompleteInfo): void => {
+      if (!this.acceptsImageCallback(source, epoch) || event === undefined || event.loadingStatus !== 1 ||
+        !Number.isFinite(event.width) || !Number.isFinite(event.height) || event.width <= 0 || event.height <= 0) { return; }
+      const width: number = event.width;
+      const height: number = event.height;
+      // 缓存命中也可能同步回调；离开构建栈，再以 URI/PixelMap 身份和代次确认交接。
+      void Promise.resolve().then((): void => {
+        if (!this.acceptsImageCallback(source, epoch)) { return; }
+        this.getUIContext().runScopedTask((): void => {
+          if (!this.acceptsImageCallback(source, epoch)) { return; }
+          // 增强图的尺寸不能写进原图口径。
+          if (typeof source === 'string') {
+            this.sourceWidth = width;
+            this.sourceHeight = height;
+            this.onImageDecoded(this.index, width, height);
+          }
+          this.loadState = ImageLoadState.SUCCESS;
+          this.clampOffsets();
+          this.reportReturnEligibility();
+        });
+      });
+    };
+  }
+
+  private errorHandler(source: image.PixelMap | string, epoch: number): () => void {
+    return (): void => {
+      void Promise.resolve().then((): void => {
+        if (!this.acceptsImageCallback(source, epoch)) { return; }
+        this.getUIContext().runScopedTask((): void => {
+          if (!this.acceptsImageCallback(source, epoch)) { return; }
+          this.loadState = ImageLoadState.ERROR;
+          this.clampOffsets();
+          this.reportReturnEligibility();
+        });
+      });
+    };
   }
 
   @Builder
@@ -361,25 +591,10 @@ struct ZoomableImagePage {
       .height('100%')
       .scale({ x: this.zoomScale, y: this.zoomScale })
       .translate({ x: this.panX, y: this.panY })
-      .onComplete((event?: ImageCompleteInfo) => {
-        // 0 仅表示数据已加载，1 才表示解码完成、图片可以显示。
-        if (event === undefined || event.loadingStatus !== 1) { return; }
-        /*
-         * 增强图的尺寸**不写进原图口径**：原图始终保留自己的身份，
-         * 于是关掉开关时能立刻回到原来那张，且下次开着超分时基准尺寸不被污染。
-         * 图片解码尺寸同时上报查看器，用于"尺寸不合规就提前灰显"。
-         */
-        if (!this.showingEnhanced()) {
-          this.sourceWidth = event.width;
-          this.sourceHeight = event.height;
-          this.onImageDecoded(this.index, event.width, event.height);
-        }
-        this.loadState = ImageLoadState.SUCCESS;
-        this.clampOffsets();
-      })
-      .onError(() => {
-        this.loadState = ImageLoadState.ERROR;
-      })
+      // 同 URI 始终显示唯一图片；异 URI 等开场结束且原图成功后才交接。
+      .opacity(this.primaryImageVisible() ? 1 : 0)
+      .onComplete(this.completeHandler(this.displaySource(), this.imageLoadEpoch))
+      .onError(this.errorHandler(this.displaySource(), this.imageLoadEpoch))
   }
 
   @Builder
@@ -390,30 +605,30 @@ struct ZoomableImagePage {
     }
     .width('100%')
     .height('100%')
-      .gesture(
-        PanGesture({ fingers: 1, distance: 5 })
-          .tag('image-zoom-pan')
-          .onActionStart(() => {
-            this.panBaseX = this.panX;
-            this.panBaseY = this.panY;
-          })
-          .onActionUpdate((event: GestureEvent) => {
-            if (this.zoomScale <= MIN_SCALE) { return; }
-            this.panX = this.panBaseX + event.offsetX;
-            this.panY = this.panBaseY + event.offsetY;
-            this.clampOffsets();
-          })
-          .onActionEnd(() => {
-            this.clampOffsets();
-          })
-      )
-      .parallelGesture(LongPressGesture({ duration: 450 })
-        .onAction((): void => { if (!this.srBlocked()) { this.onLongPressImage(); } }))
-      .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
-        // 1倍时拒绝本层拖动识别，把横滑交给Swiper；手势门控不改变图片节点。
-        return info.tag === 'image-zoom-pan' && this.zoomScale <= MIN_SCALE
-          ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
-      })
+  }
+
+  private sharedCropEffect(): TransitionEffect {
+    if (this.sharedGeometryId().length === 0) { return TransitionEffect.IDENTITY; }
+    if (this.returnId.length > 0) {
+      if (!this.returnCropUsable) { return TransitionEffect.IDENTITY; }
+      return TransitionEffect.scale({ x: this.returnCropScale, y: this.returnCropScale,
+        centerX: this.returnCropCenterX, centerY: this.returnCropCenterY })
+        .animation({ duration: imageSharedDuration(), curve: Curve.Friction });
+    }
+    const crop: ImageTransitionCrop | undefined = this.transitionCrop;
+    if (crop === undefined || !crop.usable) { return TransitionEffect.IDENTITY; }
+    // 与源图片的属性动画共用倍率、锚点、时长和曲线；不缩放加载提示或操作按钮。
+    return TransitionEffect.scale({ x: crop.scale, y: crop.scale, centerX: crop.centerX, centerY: crop.centerY })
+      .animation({ duration: imageSharedDuration(), curve: Curve.Friction });
+  }
+
+  @Builder
+  private PictureContent() {
+    if (this.hasSeparateTransitionPreview()) {
+      Image(this.transitionPreview).width('100%').height('100%').objectFit(ImageFit.Contain)
+        .opacity(this.transitionPreviewVisible() ? 1 : 0)
+    }
+    this.InteractiveImage()
   }
 
   @Builder
@@ -423,6 +638,7 @@ struct ZoomableImagePage {
         .width(34)
         .height(34)
         .color(Color.White)
+        .transition(imageFadeTransition())
     } else if (this.loadState === ImageLoadState.ERROR) {
       Column({ space: 10 }) {
         Text('图片加载失败')
@@ -438,46 +654,81 @@ struct ZoomableImagePage {
       .padding({ left: 18, right: 18, top: 14, bottom: 14 })
       .borderRadius(10)
       .backgroundColor('#99000000')
+      .transition(imageFadeTransition())
     }
   }
 
   build() {
     Stack() {
-      // 图片手势层；菜单触摸由查看器顶层承接。
+      // 全屏负责手势、提示和视口裁切；共享节点只包图片本身。
       Stack() {
-        // 原图还在请求/解码时承接已显示的缩略图，避免展开成一块空白。
-        if (this.loadState === ImageLoadState.LOADING && this.transitionPreview.length > 0) {
-          Image(this.transitionPreview).width('100%').height('100%').objectFit(ImageFit.Contain)
+        Stack() {
+          Stack() {
+            // 开场和重绑定返回共用稳定子树，切换 crop 只更新参数，不重新解码图片。
+            Stack() { this.PictureContent() }
+              .width('100%').height('100%')
+              .transition(this.sharedCropEffect())
+          }
+          .width(this.imageFrameWidth())
+          .height(this.imageFrameHeight())
+          .geometryTransition(this.sharedGeometryId())
+          .renderFit(RenderFit.RESIZE_FILL)
+          .clip(this.imageFrameClipped())
+          .transition(this.imageContentTransition())
         }
-        this.InteractiveImage()
+        .width('100%').height('100%')
+        // 保留原来的子层 Pan 与父层 Pinch/Tap 仲裁，触摸区不随窄图片缩小。
+        .gesture(
+          PanGesture({ fingers: 1, distance: 5 })
+            .tag('image-zoom-pan')
+            .onActionStart(() => {
+              if (!this.canUpdatePage()) { return; }
+              this.panBaseX = this.panX;
+              this.panBaseY = this.panY;
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              if (!this.canUpdatePage() || this.zoomScale <= MIN_SCALE) { return; }
+              this.panX = this.panBaseX + event.offsetX;
+              this.panY = this.panBaseY + event.offsetY;
+              this.clampOffsets();
+            })
+            .onActionEnd(() => { if (this.canUpdatePage()) { this.clampOffsets(); } })
+        )
+        .parallelGesture(LongPressGesture({ duration: 450 })
+          .onAction((): void => { if (!this.srBlocked()) { this.onLongPressImage(); } }))
+        .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
+          return info.tag === 'image-zoom-pan' && this.zoomScale <= MIN_SCALE
+            ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
+        })
         this.LoadOverlay()
       }
-      .width('100%')
-      .height('100%')
-      .geometryTransition(motionGeometryId(this.transitionId))
-      .renderFit(RenderFit.RESIZE_FILL)
-      // 放大/拖动后的图像不能越过正在收缩的共享元素边界，否则白色图片会留下大框。
+      .width('100%').height('100%')
       .clip(true)
-      .onAreaChange((oldValue: Area, newValue: Area) => {
-        this.containerWidth = newValue.width as number;
-        this.containerHeight = newValue.height as number;
+      .onAreaChange((_old: Area, area: Area): void => {
+        if (!this.canUpdatePage()) { return; }
+        this.containerWidth = Number(area.width);
+        this.containerHeight = Number(area.height);
         this.clampOffsets();
       })
       .gesture(
         GestureGroup(GestureMode.Exclusive,
           PinchGesture({ fingers: 2 })
             .onActionStart(() => {
+              if (!this.canUpdatePage() || this.holdTransitionPreview) { return; }
+              ++this.zoomAnimationEpoch;
+              this.zoomAnimating = true;
+              this.reportReturnEligibility();
               this.pinchBase = this.zoomScale;
             })
             .onActionUpdate((event: GestureEvent) => {
-              this.setScale(this.pinchBase * event.scale);
+              if (!this.holdTransitionPreview) { this.setScale(this.pinchBase * event.scale); }
             })
             .onActionEnd(() => {
-              this.settleScale();
+              if (!this.holdTransitionPreview) { this.settleScale(); }
             }),
           TapGesture({ count: 2 })
             .onAction(() => {
-              if (!this.srBlocked()) { this.toggleDoubleTapZoom(); }
+              if (!this.holdTransitionPreview && !this.srBlocked()) { this.toggleDoubleTapZoom(); }
             }),
           TapGesture({ count: 1 })
             .onAction(() => {
@@ -489,8 +740,8 @@ struct ZoomableImagePage {
         this.SuperResolutionButton()
       }
     }
-    .width('100%')
-    .height('100%')
+    .width('100%').height('100%')
+    .transition(TransitionEffect.IDENTITY)
   }
 }
 
@@ -499,11 +750,31 @@ export struct ImageViewer {
   imageUrl: string = '';
   imageUrls: string[] = [];
   initialIndex: number = 0;
+  onBeforeClose: () => void = (): void => {};
   onClose: () => void = (): void => {};
   private imageTransition: ImageTransitionSeed = new ImageTransitionSeed();
+  @State private holdTransitionPreview: boolean = false;
+  @State private cropReturnEligible: boolean = true;
+  @State private transitionAvailable: boolean = false;
+  private transitionAlive: boolean = false;
+  private stopTransitionListener: () => void = (): void => {};
+  private stopTransitionFinishedListener: () => void = (): void => {};
+  private stopReturnPreparation: () => void = (): void => {};
+  private returnStates: Map<number, () => ImageReturnPageState> = new Map<number, () => ImageReturnPageState>();
+  @State private returnTargetId: string = '';
+  @State private returnTargetIndex: number = -1;
+  @State private returnCropUsable: boolean = false;
+  @State private returnCropScale: number = 1;
+  @State private returnCropCenterX: string = '50%';
+  @State private returnCropCenterY: string = '50%';
+  @State private returnContentAspectRatio: number = 0;
 
-  /** 当前页下标：驱动 `Swiper.index` 与底部页码 */
+  /** 当前选中图片：目标页确定后即同步页码、超分和导出，不等待弹簧尾段。 */
   @State private currentIndex: number = 0;
+  /** 仅回写原生已落定的页，避免目标页状态在动画开始时再次驱动 Swiper。 */
+  @State private settledIndex: number = 0;
+  private swiperController: SwiperController = new SwiperController();
+  private swipeDragging: boolean = false;
   /** 底部安全区（系统手势条高度，vp）：页码贴底时用它把文字顶到手势条之上 */
   @State private bottomSafeVp: number = 0;
   @State private menuHidden: boolean = false;
@@ -512,7 +783,7 @@ export struct ImageViewer {
   @State private viewerHeight: number = 0;
   /** 导出是否已初始化 */
   @State private exportOpen: boolean = false;
-  /** 导出准备状态：0 未开始｜1 下载中｜2 就绪｜3 失败 */
+  /** 导出准备状态：0 未开始｜1 下载中｜2 图片数据就绪｜3 失败 */
   @State private exportState: number = 0;
   /** 准备失败原因（原话展示，不吞） */
   @State private exportError: string = '';
@@ -521,9 +792,8 @@ export struct ImageViewer {
   /** 推动菜单重读当前图片的超分状态。 */
   @State private srTick: number = 0;
 
-  /** 已下载的图片字节与沙箱文件 URI（非状态，避免深观察大数组） */
+  /** 已下载的图片字节（非状态）；只有保存、分享时才创建导出临时文件。 */
   private exportBytes: Uint8Array | null = null;
-  private exportUri: string = '';
   /** 操作完成后一小段时间内忽略单击关闭 */
   private suppressCloseUntil: number = 0;
   private exportEpoch: number = 0;
@@ -537,7 +807,31 @@ export struct ImageViewer {
   aboutToAppear(): void {
     const urls: string[] = this.effectiveImageUrls();
     this.currentIndex = this.clampedIndex(this.initialIndex, urls.length);
+    this.settledIndex = this.currentIndex;
     this.imageTransition = takeImageTransition(urls[this.currentIndex] || '');
+    this.transitionAlive = true;
+    this.cropReturnEligible = true;
+    this.transitionAvailable = this.imageTransition.id.length > 0 && !this.imageTransition.hasFinished();
+    this.holdTransitionPreview = this.imageTransition.isOpening();
+    const seed: ImageTransitionSeed = this.imageTransition;
+    this.stopReturnPreparation = bindImageTransitionReturn(seed, (): ImageTransitionSeed | undefined =>
+      this.prepareSharedReturn(), (ready: () => void): void => this.settleBeforeReturn(ready));
+    this.stopTransitionListener = seed.bindOpeningFinished((): void => {
+      if (!this.canUpdateViewer() || seed !== this.imageTransition) { return; }
+      this.getUIContext().runScopedTask((): void => {
+        if (this.canUpdateViewer() && seed === this.imageTransition) { this.holdTransitionPreview = false; }
+      });
+    });
+    this.stopTransitionFinishedListener = seed.bindFinished((): void => {
+      if (!this.canUpdateViewer() || seed !== this.imageTransition) { return; }
+      this.getUIContext().runScopedTask((): void => {
+        if (this.canUpdateViewer() && seed === this.imageTransition) {
+          // 源更换/失效后立即撤销旧配对，退场恢复普通淡化；正常关闭先撤监听。
+          this.transitionAvailable = false;
+          this.holdTransitionPreview = false;
+        }
+      });
+    });
     this.buildSrStates(urls);
     this.readSafeArea();
     this.hideSystemStatusBar();
@@ -546,6 +840,12 @@ export struct ImageViewer {
   }
 
   aboutToDisappear(): void {
+    this.transitionAlive = false;
+    this.stopTransitionListener();
+    this.stopTransitionFinishedListener();
+    this.stopReturnPreparation();
+    this.returnStates.clear();
+    this.imageTransition.release();
     // 会话结束：使在飞任务失效、清空增强图缓存、在安全时机释放分析器
     this.srSession.close();
     ++this.exportEpoch;
@@ -610,6 +910,111 @@ export struct ImageViewer {
       return this.srStates[index];
     }
     return this.srSession.stateFor(url);
+  }
+
+  /** 源图失效后仍可翻页；只有查看器离树或开始退场才冻结当前图片状态。 */
+  private canUpdateViewer(): boolean {
+    return this.transitionAlive && !this.imageTransition.isClosing();
+  }
+
+  private setCurrentPage(index: number): void {
+    if (!this.canUpdateViewer() || !Number.isInteger(index) || index < 0 ||
+      index >= this.effectiveImageUrls().length || index === this.currentIndex) { return; }
+    this.currentIndex = index;
+    this.imageTransition.setReturnEnabled(index === this.initialIndex && this.cropReturnEligible);
+    this.syncSrCurrent(index);
+    this.openExport();
+  }
+
+  /** 动画结束或被打断时按实际页校准；重复通知不重复预取图片。 */
+  private settleCurrentPage(index: number): void {
+    if (!this.canUpdateViewer() || !Number.isInteger(index) || index < 0 ||
+      index >= this.effectiveImageUrls().length) { return; }
+    if (index !== this.currentIndex) { this.detachSharedReturn(); }
+    this.swipeDragging = false;
+    this.settledIndex = index;
+    this.setCurrentPage(index);
+  }
+
+  private registerReturnState(index: number, read: () => ImageReturnPageState): () => void {
+    this.returnStates.set(index, read);
+    return (): void => {
+      if (this.returnStates.get(index) === read) { this.returnStates.delete(index); }
+    };
+  }
+
+  private settleBeforeReturn(ready: () => void): void {
+    if (this.swipeDragging) { ready(); return; }
+    // 已选定目标页时收完真实翻页动画，再开始回缩；回调可能同步，协调器已先冻结/去重。
+    this.swiperController.finishAnimation(ready);
+  }
+
+  /** 关闭协调器已冻结页码；在退出动画之前重新配对，不能在动画闭包内临时换 ID。 */
+  private prepareSharedReturn(): ImageTransitionSeed | undefined {
+    if (!this.transitionAlive) { return undefined; }
+    const read: (() => ImageReturnPageState) | undefined = this.returnStates.get(this.currentIndex);
+    const state: ImageReturnPageState | undefined = read === undefined ? undefined : read();
+    const opening: ImageTransitionSeed = this.imageTransition;
+    if (!this.swipeDragging && this.transitionAvailable && this.currentIndex === this.initialIndex && this.cropReturnEligible &&
+      !opening.isReturnDetached() && !opening.hasFinished() && state !== undefined && state.atRest) {
+      // 未切图沿用原始配对；原图仍在加载时，已显示的开场预览也能正常缩回。
+      return opening;
+    }
+    const prepared: ImageTransitionSeed[] = [];
+    try {
+      this.getUIContext().runScopedTask((): void => {
+        // 先注册源。原生按树深度构建，不保证一次 applySync 内源比 Viewer 先登记。
+        UIUtils.applySync((): void => {
+          this.transitionAvailable = false;
+          this.returnTargetId = '';
+          if (this.swipeDragging || state === undefined || !state.atRest || !state.ready ||
+            opening.gallery === undefined) { return; }
+          const target: ImageTransitionTarget | undefined = opening.gallery.prepare(this.currentIndex, this.currentUrl());
+          if (target === undefined) { return; }
+          const ratio: number = target.crop?.contentAspectRatio ?? 0;
+          if (ratio > 0 && (state.aspectRatio <= 0 ||
+            Math.abs(state.aspectRatio - ratio) / Math.max(state.aspectRatio, ratio) > SHARED_ASPECT_TOLERANCE)) {
+            target.onReleased?.();
+            return;
+          }
+          const seed: ImageTransitionSeed = target.source.prepareReturn(target);
+          if (seed.id.length === 0 || seed.hasFinished()) { seed.cancel(); return; }
+          prepared.push(seed);
+          seed.expandSource();
+        });
+        if (prepared.length === 0) { return; }
+        const seed: ImageTransitionSeed = prepared[0];
+        // 空的零时长事务只提供同步 build/layout 边界，不等待帧、不做可见动画。
+        // 先让源成为已登记端，确保后续 follow holder 留在缩略图父节点。
+        this.getUIContext().animateTo({ duration: 0 }, (): void => {});
+        if (seed.hasFinished()) { prepared.pop(); return; }
+        UIUtils.applySync((): void => {
+          this.returnTargetIndex = this.currentIndex;
+          this.returnCropUsable = seed.crop?.usable ?? false;
+          this.returnCropScale = seed.crop?.scale ?? 1;
+          this.returnCropCenterX = seed.crop?.centerX ?? '50%';
+          this.returnCropCenterY = seed.crop?.centerY ?? '50%';
+          this.returnContentAspectRatio = seed.crop?.contentAspectRatio ?? 0;
+          this.returnTargetId = seed.id;
+        });
+      });
+    } catch (error) {
+      for (const seed of prepared) { seed.cancel(); }
+      throw new Error(String(error));
+    }
+    return prepared.length > 0 ? prepared[0] : undefined;
+  }
+
+  /** 浏览期间解除初始配对；关闭时再按当前页注册信息建立自己的返回配对。 */
+  private detachSharedReturn(): void {
+    if (!this.canUpdateViewer() || !this.transitionAvailable || this.effectiveImageUrls().length < 2) { return; }
+    this.getUIContext().runScopedTask((): void => {
+      // 源端是 V2 @Local；同步提交解绑，避免快速返回把旧配对带入关闭动画。
+      UIUtils.applySync((): void => {
+        this.transitionAvailable = false;
+        this.imageTransition.detachSharedReturn();
+      });
+    });
   }
 
   /** 翻页时同步"当前图"：切走会让在飞任务的**结果作废**（底层仍会跑完） */
@@ -696,6 +1101,7 @@ export struct ImageViewer {
       .borderRadius(12)
       .backgroundColor('#66000000')
       .margin({ bottom: this.bottomSafeVp + 12 })
+      .transition(imageFadeTransition())
     }
   }
 
@@ -715,7 +1121,7 @@ export struct ImageViewer {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
-  /** 打开查看器或切图后预先准备当前原图，下载失败可点图标重试 */
+  /** 打开或切图只预取原图字节，普通浏览不占用导出文件的保留额度。 */
   private openExport(): void {
     hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'openExport index=%{public}d url=%{public}s',
       this.currentIndex, this.currentUrl().slice(0, 60));
@@ -723,28 +1129,25 @@ export struct ImageViewer {
     this.exportOpen = true;
     this.exportError = '';
     this.exportBytes = null;
-    this.exportUri = '';
     this.exportState = 1;
     this.prepareExport();
   }
 
-  private async prepareExport(): Promise<void> {
+  private async prepareExport(notifyFailure: boolean = false): Promise<void> {
     const url: string = this.currentUrl();
     const mine: number = ++this.exportEpoch;
     try {
       const bytes: Uint8Array = await fetchImageBytes(url);
       if (mine !== this.exportEpoch || !this.exportOpen) { return; }
-      const name: string = imageFileName(url, this.currentIndex);
-      const uri: string = writeImageToCache(this.hostContext(), bytes, name);
       this.exportBytes = bytes;
-      this.exportUri = uri;
       this.exportState = 2;
       hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'prepare ok bytes=%{public}d', bytes.length);
     } catch (err) {
       if (mine !== this.exportEpoch || !this.exportOpen) { return; }
       this.exportState = 3;
       this.exportError = err instanceof Error ? err.message : String(err);
-      this.toast('图片准备失败，点击分享或表情图标重试');
+      // 自动预取失败留在菜单中，只有主动重试失败才弹出原因。
+      if (notifyFailure) { this.toast(`图片准备失败：${this.exportError}`); }
       hilog.error(EXPORT_DOMAIN, EXPORT_TAG, 'prepare failed: %{public}s', this.exportError);
     }
   }
@@ -761,15 +1164,19 @@ export struct ImageViewer {
 
   /** 保存到相册：安全控件授权成功后直接保存到相册 */
   private async saveToGallery(): Promise<void> {
-    if (this.exportState !== 2 || this.exportUri.length === 0) {
-      hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'save skipped state=%{public}d uri=%{public}d',
-        this.exportState, this.exportUri.length);
+    if (this.exportBusy.length > 0) { return; }
+    const bytes: Uint8Array | null = this.exportBytes;
+    if (this.exportState !== 2 || bytes === null) {
+      hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'save skipped state=%{public}d', this.exportState);
       this.toast('图片还没准备好');
       return;
     }
     this.exportBusy = 'save';
     try {
-      await saveImageToGallery(this.hostContext(), this.exportUri);
+      // 字节已预取；在 SaveButton 授权回调内写文件后立即提交，不等待网络。
+      const context: common.UIAbilityContext = this.hostContext();
+      const uri: string = writeImageToCache(context, bytes, imageFileName(this.currentUrl(), this.currentIndex));
+      await saveImageToGallery(context, uri);
       hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'save ok');
       this.toast('已保存到相册');
       this.closeExport();
@@ -783,15 +1190,18 @@ export struct ImageViewer {
   }
 
   private async shareImage(): Promise<void> {
-    if (this.exportState !== 2 || this.exportUri.length === 0) {
-      hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'share skipped state=%{public}d uri=%{public}d',
-        this.exportState, this.exportUri.length);
+    if (this.exportBusy.length > 0) { return; }
+    const bytes: Uint8Array | null = this.exportBytes;
+    if (this.exportState !== 2 || bytes === null) {
+      hilog.warn(EXPORT_DOMAIN, EXPORT_TAG, 'share skipped state=%{public}d', this.exportState);
       this.toast('图片还没准备好');
       return;
     }
     this.exportBusy = 'share';
     try {
-      await shareImageFile(this.hostContext(), this.exportUri, '贴吧图片');
+      const context: common.UIAbilityContext = this.hostContext();
+      const uri: string = writeImageToCache(context, bytes, imageFileName(this.currentUrl(), this.currentIndex));
+      await shareImageFile(context, uri, '贴吧图片');
       hilog.info(EXPORT_DOMAIN, EXPORT_TAG, 'share panel shown');
       this.closeExport();
     } catch (err) {
@@ -830,8 +1240,9 @@ export struct ImageViewer {
   private retryExport(): void {
     if (this.exportState === 3 && this.exportBusy.length === 0) {
       this.exportState = 1;
+      this.exportError = '';
       this.toast('正在重新准备图片');
-      this.prepareExport();
+      this.prepareExport(true);
     }
   }
 
@@ -926,7 +1337,7 @@ export struct ImageViewer {
     } else if (kind === 2) {
       this.exportState = 1;
       this.exportError = '';
-      this.prepareExport();
+      this.prepareExport(true);
     } else {
       this.closeExport();
     }
@@ -1061,24 +1472,47 @@ export struct ImageViewer {
   build() {
     // `Bottom` 对齐：页码提示贴底。`Swiper` 自身 100%×100%，不受对齐方式影响。
     Stack({ alignContent: Alignment.Bottom }) {
+      // 只淡化独立黑底；共享图片不再继承整个 Viewer 的 opacity 动画。
+      Stack() {}
+        .width('100%').height('100%')
+        .backgroundColor(Color.Black)
+        .hitTestBehavior(HitTestMode.None)
+        .transition(imageFadeTransition())
       if (this.effectiveImageUrls().length > 0) {
-        Swiper() {
+        Swiper(this.swiperController) {
           ForEach(this.effectiveImageUrls(), (url: string, index: number) => {
             ZoomableImagePage({
               imageUrl: url,
-              transitionId: index === this.initialIndex && this.currentIndex === this.initialIndex
+              transitionId: this.transitionAvailable && index === this.initialIndex &&
+                this.currentIndex === this.initialIndex && this.cropReturnEligible
                 ? this.imageTransition.id : '',
               transitionPreview: index === this.initialIndex ? this.imageTransition.preview : '',
+              returnId: index === this.returnTargetIndex ? this.returnTargetId : '',
+              returnCropUsable: this.returnCropUsable,
+              returnCropScale: this.returnCropScale,
+              returnCropCenterX: this.returnCropCenterX,
+              returnCropCenterY: this.returnCropCenterY,
+              returnContentAspectRatio: this.returnContentAspectRatio,
+              canUpdateSession: (): boolean => this.canUpdateViewer(),
+              onRegisterReturnState: (pageIndex: number, read: () => ImageReturnPageState): (() => void) =>
+                this.registerReturnState(pageIndex, read),
+              transitionCrop: index === this.initialIndex ? this.imageTransition.crop : undefined,
+              holdTransitionPreview: index === this.initialIndex && this.holdTransitionPreview,
+              onReturnEligibility: (pageIndex: number, eligible: boolean): void => {
+                if (!this.canUpdateViewer() || pageIndex !== this.initialIndex || this.imageTransition.crop === undefined) { return; }
+                this.cropReturnEligible = eligible;
+                this.imageTransition.setReturnEnabled(eligible && this.currentIndex === this.initialIndex);
+              },
               index: index,
               sr: this.srStateAt(index, url),
               onSuperResolutionToggle: (index: number): void => {
-                if (this.exportBusy.length === 0) { this.toggleSuperResolution(index); }
+                if (this.canUpdateViewer() && this.exportBusy.length === 0) { this.toggleSuperResolution(index); }
               },
               onImageDecoded: (decoded: number, width: number, height: number): void => {
-                this.noteDecoded(decoded, width, height);
+                if (this.canUpdateViewer()) { this.noteDecoded(decoded, width, height); }
               },
               onLongPressImage: (): void => {
-                if (smartReachStore.imageMenuLongPress && this.exportBusy.length === 0) {
+                if (this.canUpdateViewer() && smartReachStore.imageMenuLongPress && this.exportBusy.length === 0) {
                   this.menuRevealed = true; this.suppressCloseUntil = Date.now() + 700;
                 }
               },
@@ -1090,7 +1524,8 @@ export struct ImageViewer {
                 if (smartReachStore.imageMenuLongPress && this.menuRevealed) {
                   this.menuRevealed = false; return;
                 }
-                animateImageTransition(this.getUIContext(), (): void => { this.onClose(); });
+                closeImageTransition(this.getUIContext(), (): void => { this.onClose(); },
+                  (): void => { this.onBeforeClose(); });
               }
             })
           },
@@ -1100,19 +1535,33 @@ export struct ImageViewer {
           // 去掉后翻页只 mount 1 次，且那次是预建屏幕外的下一页。
           (url: string, index: number) => `${index}:${url}`)
         }
-        .index(this.currentIndex)
+        .index(this.settledIndex)
         .indicator(false)
-        .disableSwipe(this.exportBusy.length > 0)
+        .disableSwipe(this.exportBusy.length > 0 || this.holdTransitionPreview)
         .loop(false)
         .duration(motionDuration(400)).curve(motionSwiperCurve())
+        .onGestureSwipe((_index: number, _event: SwiperAnimationEvent): void => {
+          if (!this.canUpdateViewer()) { return; }
+          this.swipeDragging = true;
+          this.detachSharedReturn();
+        })
+        .onAnimationStart((index: number, targetIndex: number, _event: SwiperAnimationEvent): void => {
+          if (!this.canUpdateViewer() || !Number.isInteger(targetIndex) || targetIndex < 0 ||
+            targetIndex >= this.effectiveImageUrls().length) { return; }
+          this.swipeDragging = false;
+          if (index !== targetIndex) { this.detachSharedReturn(); }
+          this.setCurrentPage(targetIndex);
+        })
+        .onAnimationEnd((index: number, _event: SwiperAnimationEvent): void => {
+          this.settleCurrentPage(index);
+        })
         .onChange((index: number) => {
-          this.currentIndex = index;
-          // 切图使**在飞任务**失效（结果作废、底层照跑完）；已缓存的开关状态保留
-          this.syncSrCurrent(index);
-          this.openExport();
+          // 无动画切页也走同一入口；关闭时的迟到回调不再改退场画面。
+          this.settleCurrentPage(index);
         })
         .width('100%')
         .height('100%')
+        .transition(TransitionEffect.IDENTITY)
       }
       if (!smartReachStore.imageMenuLongPress || !this.menuRevealed) {
         this.PageBadge(this.effectiveImageUrls().length)
@@ -1122,6 +1571,7 @@ export struct ImageViewer {
         ImageMenuPosition({ viewportWidth: this.viewerWidth, viewportHeight: this.viewerHeight,
           capsuleHeight: superResolutionStore.enabled ? 200 : 162, bottomInset: this.bottomSafeVp,
           busy: this.exportBusy.length > 0, content: (): void => { this.ExportSheet() } })
+          .transition(imageFadeTransition())
       }
       if (smartReachStore.imageMenuLongPress && this.menuRevealed) {
         this.BottomExportSheet()
@@ -1130,16 +1580,18 @@ export struct ImageViewer {
     .width('100%')
     .height('100%')
     .onAreaChange((_old: Area, area: Area): void => {
+      if (!this.canUpdateViewer()) { return; }
       this.viewerWidth = Number(area.width); this.viewerHeight = Number(area.height);
     })
-    .backgroundColor(Color.Black)
-    .transition(imageFadeTransition())
+    // 留住整棵退场子树直到共享几何与黑底淡化结束，避免只剩下列表内的源图在缩回。
+    .transition(imageLayerRetentionTransition())
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onKeyEvent((event: KeyEvent): boolean => {
       // 保留但**不生效**：这个 `Stack` 不持有焦点，收不到按键。真正拦返回键的是
       // 宿主 Index / ThreadDetailPage 的 onBackPress（查看器是页面上的浮层）。
       if (event.keyCode === KeyCode.KEYCODE_BACK) {
-        animateImageTransition(this.getUIContext(), (): void => { this.onClose(); });
+        closeImageTransition(this.getUIContext(), (): void => { this.onClose(); },
+          (): void => { this.onBeforeClose(); });
         return true;
       }
       return false;

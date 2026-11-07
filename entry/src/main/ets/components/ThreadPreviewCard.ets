@@ -33,6 +33,8 @@ export struct ThreadPreviewCard {
   @Event onActivateContent: (piece: ContentPiece) => void = (_piece: ContentPiece): void => {};
   @Param images: string[] = [];
   @Param originImages: string[] = [];
+  /** 图片排布偏好仅由指定的信息流入口启用。 */
+  @Param useImageLayoutPreference: boolean = false;
   @Param isTop: boolean = false;
   @Param isGood: boolean = false;
   @Param isHelp: boolean = false;
@@ -257,6 +259,7 @@ export struct ThreadPreviewCard {
       }
       if (this.images.length > 0) {
         ThreadPreviewImages({ images: this.images, originImages: this.originImages, scroller: this.imageScroller,
+          useImageLayoutPreference: this.useImageLayoutPreference,
           onOpenImage: (index: number): void => { this.onOpenImage(index); } })
       }
 

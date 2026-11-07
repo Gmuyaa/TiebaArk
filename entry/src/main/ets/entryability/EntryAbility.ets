@@ -14,6 +14,7 @@ import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHide
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
@@ -44,6 +45,7 @@ export default class EntryAbility extends UIAbility {
     fontScaleStore.load(this.context);
 
     lowFlowStore.load(this.context).catch(() => {});
+    imageLayoutStore.load(this.context).catch(() => {});
     forumDefaultTabStore.load(this.context).catch(() => {});
 
     superResolutionStore.load(this.context).catch(() => {});

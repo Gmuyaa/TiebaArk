@@ -176,6 +176,8 @@ export struct ForumRefreshButton {
       .id('forumRefreshButton')
       .position({ x: this.x, y: this.y })
       .opacity(this.busy ? 0.6 : 1)
+      .hitTestBehavior(this.active ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+      .accessibilityLevel(this.active ? 'auto' : 'no-hide-descendants')
       .accessibilityText('刷新当前分类，可拖拽移动')
       .onClick((): void => {
         if (!this.dragging && Date.now() >= this.suppressClickUntil && !this.busy) { this.onRefresh(); }

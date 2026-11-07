@@ -470,7 +470,7 @@ export struct FloatingForumTabs {
     Stack() {
       MaterialTabs({ slot: MaterialSlot.BOTTOM_BAR, barHeight: AppTheme.BAR_CONTENT_H, barWidth: this.controlWidth(),
         barContent: (): void => { this.GlassContent(); } })
-        .width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).borderRadius(AppTheme.BAR_CONTENT_H / 2).clip(false).hitTestBehavior(HitTestMode.None)
+        .width(this.controlWidth()).height(AppTheme.BAR_CONTENT_H).borderRadius(AppTheme.BAR_CONTENT_H / 2).clip(false).hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
       if (this.expanded) {
         Stack({ alignContent: Alignment.TopStart }) {
           Scroll(this.scroller) {
@@ -479,7 +479,7 @@ export struct FloatingForumTabs {
               MaterialTabs({ slot: MaterialSlot.FORUM_TAB_SELECTION, barHeight: AppTheme.BAR_CONTENT_H - 8, barWidth: this.selectionSurfaceWidth(),
         barContent: (): void => { this.GlassContent(); } })
                 .width(this.selectionSurfaceWidth()).height(AppTheme.BAR_CONTENT_H - 8)
-                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.None)
+                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
 
                 .position({ x: 0, y: 4 })
                 .scale({ x: this.selectionW / Math.max(1, this.selectionSurfaceWidth()), y: this.selectionScaleY,
@@ -490,7 +490,7 @@ export struct FloatingForumTabs {
               MaterialTabs({ slot: MaterialSlot.FORUM_TAB_SELECTION, barHeight: AppTheme.BAR_CONTENT_H - 8, barWidth: this.selectedWidth(),
         barContent: (): void => { this.GlassContent(); } })
                 .width(this.selectedWidth()).height(AppTheme.BAR_CONTENT_H - 8)
-                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.None)
+                .borderRadius((AppTheme.BAR_CONTENT_H - 8) / 2).clip(false).hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
 
                 // 材质布局位置固定；普通切换与流动面一样只改变渲染变换。
                 .position({ x: 0, y: 4 })
@@ -550,7 +550,8 @@ export struct FloatingForumTabs {
       .clip(false)
       .position({ x: this.displayX(), y: this.y }).id('floating-forum-tabs')
       .zIndex(20)
-      .hitTestBehavior(HitTestMode.Block)
+      .hitTestBehavior(this.active ? HitTestMode.Block : HitTestMode.BLOCK_DESCENDANTS)
+      .accessibilityLevel(this.active ? 'auto' : 'no-hide-descendants')
       .onTouch((event: TouchEvent): void => {
         if (event.type === TouchType.Down) { this.pressed = true; this.cancelHolding(); }
         else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.pressed = false; this.cancelHolding(); }

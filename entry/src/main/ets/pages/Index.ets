@@ -51,7 +51,7 @@ import {
   HomeTopNavStyle, homeTopNavRowHeight
 } from '../common/appearance/HomeTopNavStyle';
 import { ImageViewer } from '../components/ImageViewer';
-import { animateImageTransition } from '../components/ImageTransition';
+import { closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { FollowView } from '../components/FollowView';
 
 import { MessageView } from '../components/MessageView';
@@ -197,7 +197,7 @@ struct Index {
   /** 首页查看器独占系统返回；普通内容页仍由共享导航栈处理。 */
   onBackPress(): boolean {
     if (this.viewerUrls.length === 0) { return false; }
-    animateImageTransition(this.getUIContext(), (): void => {
+    closeImageTransition(this.getUIContext(), (): void => {
       this.viewerUrls = [];
       this.viewerIndex = 0;
     });
@@ -434,10 +434,11 @@ struct Index {
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
       [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(AppTheme.BG)
-      if (this.currentIndex === 0 && this.homeNavVisible && this.viewerUrls.length === 0) {
+      // 看图时保留材质按钮，由上层 Viewer 覆盖；关图不重新创建阴影承载层。
+      if (this.currentIndex === 0 && this.homeNavVisible) {
         HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
           topInset: this.homeStatusBarH + this.homeTopNavRowH,
-          active: this.pageVisible,
+          active: this.pageVisible && this.viewerUrls.length === 0,
           onCompose: (): void => { NavigationService.openCompose(); } })
       }
       } // Stack
@@ -495,6 +496,7 @@ struct Index {
         ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
           onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
           .zIndex(100)
+          .transition(imageLayerRetentionTransition())
       }
     }
     .width('100%').height('100%')

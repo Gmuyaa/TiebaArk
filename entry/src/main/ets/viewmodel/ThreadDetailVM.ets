@@ -1451,13 +1451,17 @@ export class ThreadDetailVM {
       state.hasMore = response.data.hasMore;
       state.loadedOnce = true;
       // floor 返回的总数同时更新主列表预览及主帖的楼中楼入口，不凭发送回执自增。
-      this.posts = this.posts.map((post: PostItem): PostItem => {
-        if (post.pid !== pid || post.subPostCount === response.data.totalCount) { return post; }
-        const updated: PostItem = copyPostItem(post);
-        updated.subPostCount = response.data.totalCount;
-        return updated;
-      });
-      this.syncVisiblePosts();
+      // 计数未变时保留主列表引用，避免滑动补拉预览反复触发整个主列表更新。
+      const parent: PostItem | undefined = this.postByPid(pid);
+      if (parent !== undefined && parent.subPostCount !== response.data.totalCount) {
+        this.posts = this.posts.map((post: PostItem): PostItem => {
+          if (post.pid !== pid) { return post; }
+          const updated: PostItem = copyPostItem(post);
+          updated.subPostCount = response.data.totalCount;
+          return updated;
+        });
+        this.syncVisiblePosts();
+      }
     } catch (err) {
       const e: Error = err as Error;
       const state: SubPostThreadState | undefined = this.findSubState(pid);

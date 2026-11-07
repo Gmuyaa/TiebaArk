@@ -6,8 +6,8 @@ import { ContentImage, galleryAspectRatio } from '../model/ThreadDetail';
 import {
   BODY_RADIUS, FeedImageBox, FeedImageInfo, bodySingleImageBox, feedImageInfo, rememberMeasuredImage
 } from '../model/HomeFeedPresentation';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
-import { ImageTransitionSource } from './ImageTransition';
+import { LowFlowStore, lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
 
 /** 详情页内容区左右各留 16vp */
 const PAGE_SIDE_PADDING: number = 32;
@@ -47,15 +47,30 @@ function estimateGalleryWidth(): number {
 
 @ComponentV2
 export struct PostImageGallery {
-  private imageTransition: ImageTransitionSource = new ImageTransitionSource();
+  @Local private sharedBindingEnabled: boolean = true;
+  private imageTransition: ImageTransitionSource = new ImageTransitionSource((enabled: boolean): void => {
+    this.sharedBindingEnabled = enabled;
+  });
+  private transitionIdentity: string = '';
+  private alive: boolean = false;
+  private visible: boolean = false;
+  private visiblePages: Set<number> = new Set<number>();
+  private unregisterReturns: (() => void)[] = [];
+  private requestEpoch: number = 0;
+  @Local flow: LowFlowStore = lowFlowStore;
   /** 本图集的图片，至少 1 张 */
   @Require @Param images: ContentImage[];
   /** 本图集第一张图在整篇内容图片序列里的下标，用来换算全屏查看器的初始页 */
   @Param startIndex: number = 0;
+  @Param viewerIndices: number[] = [];
+  @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
+  /** 懒加载组件重建时恢复的图集页码，仅初次布局使用。 */
+  @Param initialPage: number = 0;
+  @Event onPageChange: (page: number) => void = (): void => {};
   /** 点击某张图：回传它在整篇内容图片序列里的下标 */
   @Event onOpenImage: (globalIndex: number) => void = (): void => {};
 
-  /** 当前页。多个图集之间必须各自独立，所以放在组件内部而不是页面级 */
+  /** 当前显示页；父页面仅保存离屏重建所需的页码，不参与逐帧滚动。 */
   @Local page: number = 0;
   /**
    * 本图集实测宽度（vp）。宽度来自 `onAreaChange`，用来把高度算成 `宽 ÷ 比例`。
@@ -81,11 +96,90 @@ export struct PostImageGallery {
   private density: number = 1;
 
   aboutToAppear(): void {
+    this.alive = true;
+    this.invalidateRequest();
+    this.transitionIdentity = this.currentTransitionIdentity();
+    this.page = this.boundedInitialPage();
     try {
       this.density = display.getDefaultDisplaySync().densityPixels;
     } catch (err) {
       // 拿不到密度就用 1：小图限制放宽，但不会让容器算不出来
     }
+    this.registerReturnSources();
+  }
+
+  aboutToDisappear(): void {
+    this.clearReturnSources();
+    this.alive = false;
+    this.visible = false;
+    this.visiblePages.clear();
+    this.invalidateRequest();
+  }
+
+  private invalidateRequest(): void {
+    ++this.requestEpoch;
+    this.states = [];
+    this.stateUrls = [];
+    this.imageTransition.invalidate();
+  }
+
+  @Monitor('flow.enabled')
+  onLowFlowChanged(): void { this.invalidateRequest(); }
+
+  private currentTransitionIdentity(): string {
+    const urls: string[] = [];
+    for (const img of this.images) { urls.push(img.imageUrl, img.originImageUrl); }
+    return `${this.startIndex}:${JSON.stringify(urls)}:${JSON.stringify(this.viewerIndices)}`;
+  }
+
+  @Monitor('images', 'startIndex', 'viewerIndices')
+  onTransitionIdentityChanged(): void {
+    const identity: string = this.currentTransitionIdentity();
+    if (identity === this.transitionIdentity) { return; }
+    this.transitionIdentity = identity;
+    this.imageTransition.invalidate();
+    this.registerReturnSources();
+  }
+
+  @Monitor('transitionGallery')
+  onReturnGalleryChanged(): void {
+    this.imageTransition.invalidate();
+    this.registerReturnSources();
+  }
+
+  private clearReturnSources(): void {
+    for (const unregister of this.unregisterReturns) { unregister(); }
+    this.unregisterReturns = [];
+  }
+
+  private registerReturnSources(): void {
+    this.clearReturnSources();
+    if (!this.alive || this.transitionGallery === undefined) { return; }
+    const identity: string = this.currentTransitionIdentity();
+    for (let index: number = 0; index < this.images.length; index++) {
+      const viewerIndex: number = this.viewerIndices[index] ?? -1;
+      if (viewerIndex < 0) { continue; }
+      const preview: string = this.images[index].imageUrl;
+      const origin: string = this.images[index].originImageUrl || preview;
+      this.unregisterReturns.push(this.transitionGallery.register(viewerIndex, origin,
+        (): ImageTransitionTarget | undefined => {
+          if (!this.alive || !this.visible || this.flow.enabled ||
+            identity !== this.currentTransitionIdentity() || this.stateOf(index) !== IMAGE_LOADED ||
+            (this.images.length > 1 && !this.visiblePages.has(index)) || !this.imageTransition.canOpenShared()) {
+            return undefined;
+          }
+          return new ImageTransitionTarget(this.imageTransition, preview, origin, index);
+        }));
+    }
+  }
+
+  private pageVisibilityChanged(index: number, visible: boolean): void {
+    if (visible) { this.visiblePages.add(index); } else { this.visiblePages.delete(index); }
+  }
+
+  private boundedInitialPage(): number {
+    if (!Number.isFinite(this.initialPage)) { return 0; }
+    return Math.max(0, Math.min(this.images.length - 1, Math.floor(this.initialPage)));
   }
 
   private urlOf(index: number): string {
@@ -157,8 +251,10 @@ export struct PostImageGallery {
    * 列表项复用后旧图的迟到回调不能把尺寸/成功态写到新图上。
    */
   private completeHandler(index: number, url: string): (event?: GalleryImageComplete) => void {
+    const request: number = this.requestEpoch;
     return (event?: GalleryImageComplete): void => {
-      if (url.length === 0 || url !== this.urlOf(index)) { return; }
+      if (!this.alive || this.flow.enabled || request !== this.requestEpoch ||
+        url.length === 0 || url !== this.urlOf(index)) { return; }
       if (event === undefined || event.loadingStatus !== 1) { return; }
       if (!(event.width > 0) || !(event.height > 0)) { return; }
       const origin: string = this.sourceInfo().origin;
@@ -177,6 +273,14 @@ export struct PostImageGallery {
     };
   }
 
+  private errorHandler(index: number, url: string): () => void {
+    const request: number = this.requestEpoch;
+    return (): void => {
+      if (!this.alive || this.flow.enabled || request !== this.requestEpoch || url !== this.urlOf(index)) { return; }
+      this.markState(index, IMAGE_FAILED);
+    };
+  }
+
   /**
    * 正文单图：容器贴合图片最终显示尺寸，不用模糊背景撑满一个偏大的框。
    * 长图不裁切，靠 `bodySingleImageBox` 的高度上限等比收缩。
@@ -184,7 +288,7 @@ export struct PostImageGallery {
   @Builder
   SingleImage(img: ContentImage) {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (lowFlowStore.enabled) {
+      if (this.flow.enabled) {
         // 低流量模式：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
         // 占位仍可点，点开查看器照常加载原图。
         Text('低流量模式 · 点按查看')
@@ -203,7 +307,7 @@ export struct PostImageGallery {
           .objectRepeat(ImageRepeat.NoRepeat)
           .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
           .onComplete(this.completeHandler(0, img.imageUrl))
-          .onError(() => { this.markState(0, IMAGE_FAILED); })
+          .onError(this.errorHandler(0, img.imageUrl))
       }
     }
     // 外框与内部图片取同一份布局结果：图片多高，容器就多高，不留失效的占位高度
@@ -212,12 +316,13 @@ export struct PostImageGallery {
     .backgroundColor(this.stateOf(0) === IMAGE_LOADED ? Color.Transparent : AppTheme.SURFACE_MUTED)
     .borderRadius(BODY_RADIUS)
     .clip(true)
-    .geometryTransition(this.imageTransition.id(img.imageUrl), { follow: true })
+    .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(img.imageUrl) : '', { follow: true })
     .renderFit(RenderFit.RESIZE_FILL)
     .onClick(() => {
       this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
         (): void => { this.onOpenImage(this.startIndex); }, 0,
-        !lowFlowStore.enabled && this.stateOf(0) === IMAGE_LOADED);
+        !this.flow.enabled && this.stateOf(0) === IMAGE_LOADED, undefined, undefined, undefined,
+        this.transitionGallery, this.viewerIndices[0] ?? -1);
     })
   }
 
@@ -233,7 +338,7 @@ export struct PostImageGallery {
   @Builder
   GalleryPage(img: ContentImage, index: number) {
     Stack() {
-      if (lowFlowStore.enabled) {
+      if (this.flow.enabled) {
         Text('低流量模式 · 点按查看')
           .fontSize(12).fontColor(AppTheme.TEXT_SUB)
           .width('100%').height('100%').textAlign(TextAlign.Center)
@@ -250,7 +355,7 @@ export struct PostImageGallery {
           .height('100%')
           .objectFit(ImageFit.Contain)
           .onComplete(this.completeHandler(index, img.imageUrl))
-          .onError(() => { this.markState(index, IMAGE_FAILED); })
+          .onError(this.errorHandler(index, img.imageUrl))
         if (this.stateOf(index) === IMAGE_FAILED) {
           Text('图片加载失败')
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
@@ -265,12 +370,13 @@ export struct PostImageGallery {
       .borderRadius(BODY_RADIUS)
       .clip(true)
       .flexShrink(0)
-      .geometryTransition(this.imageTransition.id(img.imageUrl, index), { follow: true })
+      .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(img.imageUrl, index) : '', { follow: true })
       .renderFit(RenderFit.RESIZE_FILL)
       .onClick(() => {
         this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
           (): void => { this.onOpenImage(this.startIndex + index); }, index,
-          !lowFlowStore.enabled && this.stateOf(index) === IMAGE_LOADED);
+          !this.flow.enabled && this.stateOf(index) === IMAGE_LOADED, undefined, undefined, undefined,
+          this.transitionGallery, this.viewerIndices[index] ?? -1);
       })
   }
 
@@ -304,11 +410,15 @@ export struct PostImageGallery {
           // 加 `flexShrink(0)` 能修，但 `Scroll.onScroll(xOffset)` 在此结构下拿不到真实偏移
           // （整段滑动过程中实测上限只有 2），页码无法同步。
           // `List.onScrollIndex` 直接回传**首个可见项下标**，无单位换算、无歧义。
-          List({ space: PAGE_GAP }) {
+          List({ space: PAGE_GAP, initialIndex: this.boundedInitialPage() }) {
             ForEach(this.images, (img: ContentImage, index: number) => {
               ListItem() {
                 this.GalleryPage(img, index)
               }
+              // ListItem 留在原列表中；共享图片自身可能被 follow 临时搬走。
+              .onVisibleAreaChange([0], (visible: boolean): void => {
+                this.pageVisibilityChanged(index, visible);
+              })
             }, (img: ContentImage, index: number) => `${index}:${img.imageUrl}`)
           }
           .listDirection(Axis.Horizontal)
@@ -320,6 +430,7 @@ export struct PostImageGallery {
           .onScrollIndex((first: number) => {
             if (first >= 0 && first < this.images.length && first !== this.page) {
               this.page = first;
+              this.onPageChange(first);
             }
           })
         } else if (this.images.length === 1) {
@@ -340,6 +451,7 @@ export struct PostImageGallery {
     .clip(true)
     .width('100%')
     .height(this.issuedHeight())
+    .onVisibleAreaChange([0], (visible: boolean): void => { this.visible = visible; })
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       const width: number = Number(newArea.width);
       // 只在宽度真的变了才写回，避免"改高度 → 再触发 onAreaChange"的自激

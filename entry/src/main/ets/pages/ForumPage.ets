@@ -30,7 +30,7 @@ import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
 import { ThreadListVM } from '../viewmodel/ThreadListVM';
 import { AppTheme } from '../theme/Theme';
 import { ImageViewer } from '../components/ImageViewer';
-import { animateImageTransition } from '../components/ImageTransition';
+import { closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { TaggedThreadText } from '../components/TaggedThreadText';
 import { HelpThreadCard } from '../components/HelpThreadCard';
@@ -440,7 +440,8 @@ export struct ForumPage {
         .clip(false)
         .backgroundColor(AppTheme.BG)
 
-        if (this.forumName.length > 0 && this.vm.loadedOnce && this.viewerUrls.length === 0) {
+        // Viewer 覆盖已有控件，避免关图重建材质与重播刷新按钮入场动画。
+        if (this.forumName.length > 0 && this.vm.loadedOnce) {
           if (this.categoryPrefs.forumTabsFloating) {
           FloatingForumTabs({ tabs: this.vm.tabs, selectedId: this.vm.targetTabId(),
             viewportWidth: this.viewportWidth, viewportHeight: this.viewportHeight,
@@ -450,7 +451,7 @@ export struct ForumPage {
             scrollRevision: this.categoryScrollRevision, atTop: this.categoriesAtTop,
             busy: this.vm.loading || this.vm.switchingTab || this.vm.isLoadingMore,
             selectionEnabled: !this.vm.loading || this.vm.switchingTab,
-            active: this.pageVisible,
+            active: this.pageVisible && this.viewerUrls.length === 0,
             refreshOwnsCollision: this.refreshOwnsCollision,
             refreshX: this.refreshButtonX, refreshY: this.refreshButtonY,
             onMoveStart: (): void => { this.refreshOwnsCollision = false; },
@@ -460,7 +461,8 @@ export struct ForumPage {
             onSelect: (tab: ForumTab, index: number): void => { void this.selectForumTab(tab, index); } })
           }
           ForumRefreshButton({ viewportWidth: this.viewportWidth, viewportHeight: this.viewportHeight,
-            topInset: this.statusBarH + FORUM_TOOLBAR_HEIGHT, active: this.pageVisible,
+            topInset: this.statusBarH + FORUM_TOOLBAR_HEIGHT,
+            active: this.pageVisible && this.viewerUrls.length === 0,
             busy: this.refreshing || this.vm.loading || this.vm.isLoadingMore || this.vm.switchingTab,
             obstacleX: this.categoryX, obstacleY: this.categoryY,
             obstacleWidth: this.categoryPrefs.forumTabsFloating ? this.categoryWidth : 0,
@@ -478,6 +480,7 @@ export struct ForumPage {
           ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
             onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
             .zIndex(100)
+            .transition(imageLayerRetentionTransition())
         }
       }
       .width('100%')
@@ -497,7 +500,7 @@ export struct ForumPage {
     .onHidden((): void => { this.pageVisible = false; this.finishCoverLift(); this.resetTabTransition(); })
     .onBackPressed((): boolean => {
       if (this.viewerUrls.length > 0) {
-        animateImageTransition(this.getUIContext(), (): void => {
+        closeImageTransition(this.getUIContext(), (): void => {
           this.viewerUrls = [];
           this.viewerIndex = 0;
         });
@@ -1246,6 +1249,7 @@ export struct ForumPage {
   @Builder
   ThreadCard(item: ThreadBrief) {
     ThreadPreviewCard({
+      useImageLayoutPreference: true,
       authorName: item.authorName, authorAvatar: item.authorAvatar,
       postedTime: formatPostTime(item.postedMs, Date.now()), title: item.title, summary: item.summary,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),

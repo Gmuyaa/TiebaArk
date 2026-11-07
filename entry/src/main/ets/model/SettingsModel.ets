@@ -56,7 +56,8 @@ export enum SettingsPane {
   INTERACTION = 36,
   POSTING = 37,
   NAVIGATION_LAYOUT = 38,
-  MATERIAL_EFFECTS = 39
+  MATERIAL_EFFECTS = 39,
+  IMAGE_LAYOUT = 40
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -126,6 +127,8 @@ export interface SettingsState {
   fontLabel: string;
   /** 新进入吧页默认显示的分区 */
   forumDefaultTabLabel: string;
+  /** 内容图片排布（新版或旧版），本机偏好。 */
+  imageLayoutLabel?: string;
   hideStatusBar: boolean;
   hideTopNavigation: boolean;
   hideBottomNavigation: boolean;
@@ -150,8 +153,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.203';
-export const SETTINGS_VERSION_CODE: string = '2611055';
+export const SETTINGS_APP_VERSION: string = '1.0.206';
+export const SETTINGS_VERSION_CODE: string = '2611058';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -230,6 +233,7 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
       return [
         paneEntry('forum_default_tab', '进吧默认分区', state.forumDefaultTabLabel,
           SettingsPane.FORUM_DEFAULT_TAB),
+        paneEntry('image_layout', '图片排布', state.imageLayoutLabel ?? '新版', SettingsPane.IMAGE_LAYOUT),
         switchEntry('low_flow', '低流量模式', state.lowFlow, true, '列表与正文不自动加载图片'),
         paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
         switchEntry('super_resolution', '显示超分按钮', state.superResolution)
@@ -338,6 +342,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '首页顶栏样式';
     case SettingsPane.IMAGE_MENU:
       return '看图菜单显示方式';
+    case SettingsPane.IMAGE_LAYOUT:
+      return '图片排布';
     case SettingsPane.FORUM_DEFAULT_TAB:
       return '进吧默认分区';
     case SettingsPane.DARK_MODE:
@@ -417,6 +423,7 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
       return SettingsPane.MATERIAL_EFFECTS;
     case SettingsPane.FORUM_DEFAULT_TAB:
     case SettingsPane.IMAGE_MENU:
+    case SettingsPane.IMAGE_LAYOUT:
       return SettingsPane.BROWSING;
     case SettingsPane.MOTION:
       return SettingsPane.INTERACTION;
@@ -470,6 +477,7 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.FORUM_LEVEL:
     case SettingsPane.IMAGE_MENU:
     case SettingsPane.FORUM_DEFAULT_TAB:
+    case SettingsPane.IMAGE_LAYOUT:
       return SettingsPanePresentation.POPUP;
     case SettingsPane.ABOUT:
     case SettingsPane.NONE:

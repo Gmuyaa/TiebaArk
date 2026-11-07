@@ -1,3 +1,4 @@
+import { AnimatorResult } from '@kit.ArkUI';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { AppTheme } from '../theme/Theme';
@@ -11,6 +12,8 @@ import { TopLabelItem } from './TopLabelItem';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { MotionStore, motionStore } from '../common/appearance/MotionStore';
 
 export const DUAL_SEARCH_ROW_H: number = 40;
 
@@ -42,6 +45,57 @@ export struct HomeDualRowTopBar {
   @Event onAvatar: () => void = (): void => {};
   /** 宿主实测可见宽度（vp） */
   @Local visW: number = 0;
+  @Local revealProgress: number = 1;
+  @Local motionPreferences: MotionStore = motionStore;
+  private revealAnimator: AnimatorResult | undefined = undefined;
+  private revealVersion: number = 0;
+
+  aboutToAppear(): void { this.revealProgress = this.collapsed ? 0 : 1; }
+
+  aboutToDisappear(): void {
+    this.revealVersion++;
+    this.revealAnimator?.cancel();
+    this.revealAnimator = undefined;
+  }
+
+  @Monitor('collapsed', 'motionPreferences.enabled', 'motionPreferences.arkuiEnabled',
+    'motionPreferences.selected', 'motionPreferences.systemReducedMotion')
+  private syncReveal(): void {
+    const version: number = ++this.revealVersion;
+    this.revealAnimator?.cancel();
+    this.revealAnimator = undefined;
+    const target: number = this.collapsed ? 0 : 1;
+    if (!motionStore.isOn(MotionEffect.MOVE) || Math.abs(target - this.revealProgress) < 0.001) {
+      this.revealProgress = target;
+      return;
+    }
+    // 同一个进度驱动原生材质尺寸、频道位置与搜索显隐；反向从当前帧续接，不压扁搜索控件。
+    const animator: AnimatorResult = this.getUIContext().createAnimator({
+      duration: Math.max(100, (this.collapsed ? 240 : 300) * Math.abs(target - this.revealProgress)),
+      easing: 'cubic-bezier(0.2, 0, 0.2, 1)', delay: 0, fill: 'forwards',
+      direction: 'normal', iterations: 1, begin: this.revealProgress, end: target
+    });
+    this.revealAnimator = animator;
+    animator.onFrame = (progress: number): void => {
+      if (version === this.revealVersion) { this.revealProgress = Math.max(0, Math.min(1, progress)); }
+    };
+    animator.onFinish = (): void => {
+      if (version !== this.revealVersion) { return; }
+      this.revealProgress = target;
+      this.revealAnimator = undefined;
+    };
+    animator.play();
+  }
+
+  private searchRowH(): number {
+    return Math.max(DUAL_SEARCH_ROW_H, searchFieldHeight(this.scaleValue()) + 8);
+  }
+
+  private searchAlpha(): number {
+    // 收起时先淡出，展开有足够空间后再显现，避免与上移中的频道文字叠在一起。
+    return motionStore.isOn(MotionEffect.FADE) ? this.revealProgress * this.revealProgress
+      : (!this.collapsed && this.revealProgress >= 0.95 ? 1 : 0);
+  }
 
   // 标签配色及字号由 TopLabelItem 同源维护。
   private channelLabels(): string[] {
@@ -50,9 +104,10 @@ export struct HomeDualRowTopBar {
 
   private panelH(): number {
     // 收起态高度 = 状态栏 + 频道行 + 上下内距（搜索行整段消失，不留白）
-    const content: number = this.collapsed ? homeChannelHeight(this.scaleValue()) : homeDualRowHeight(this.scaleValue());
+    const channel: number = homeChannelHeight(this.scaleValue());
+    const content: number = channel + (homeDualRowHeight(this.scaleValue()) - channel) * this.revealProgress;
     return this.statusBarHeight + content + DUAL_BOX_INSET * 2 +
-      (visualThemeStore.isPaper && !this.collapsed ? PaperLayout.BRAND_HEIGHT : 0);
+      (visualThemeStore.isPaper ? PaperLayout.BRAND_HEIGHT * this.revealProgress : 0);
   }
 
   private visibleW(): number {
@@ -109,24 +164,33 @@ export struct HomeDualRowTopBar {
 
   @Builder
   PaperHeader() {
-    Column({ space: 2 }) {
-      if (!this.collapsed) {
-        Row({ space: 8 }) {
-          Column() {
-            Row().width(4).height(7).backgroundColor(AppTheme.EMPHASIS)
-            Row().width(4).height(6).backgroundColor(AppTheme.GOLD)
-            Row().width(4).height(7).backgroundColor(AppTheme.JADE)
-          }.borderRadius(2).clip(true).accessibilityLevel('no')
-          Text('TiebaArk').fontSize(22).fontWeight(FontWeight.Bold).fontColor(AppTheme.ACCENT_DARK)
-            .layoutWeight(1).maxLines(1)
-          AvatarComponent({ url: this.avatarUrl, avatarSize: AVATAR_D, fallbackName: '我' })
-            .width(44).height(PaperLayout.BRAND_HEIGHT).accessibilityText('个人主页')
-            .onClick((): void => { this.onAvatar(); })
-        }.height(PaperLayout.BRAND_HEIGHT).width('100%')
-        SearchField({ editable: false, placeholder: '搜索吧、帖子或用户',
-          onTap: (): void => { this.onSearch(); } })
-          .height(Math.max(DUAL_SEARCH_ROW_H, searchFieldHeight(this.scaleValue()) + 8))
+    Column() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Column() {
+          Row({ space: 8 }) {
+            Column() {
+              Row().width(4).height(7).backgroundColor(AppTheme.EMPHASIS)
+              Row().width(4).height(6).backgroundColor(AppTheme.GOLD)
+              Row().width(4).height(7).backgroundColor(AppTheme.JADE)
+            }.borderRadius(2).clip(true).accessibilityLevel('no')
+            Text('TiebaArk').fontSize(22).fontWeight(FontWeight.Bold).fontColor(AppTheme.ACCENT_DARK)
+              .layoutWeight(1).maxLines(1)
+            AvatarComponent({ url: this.avatarUrl, avatarSize: AVATAR_D, fallbackName: '我' })
+              .width(44).height(PaperLayout.BRAND_HEIGHT).accessibilityText('个人主页')
+              .onClick((): void => { this.onAvatar(); })
+          }.height(PaperLayout.BRAND_HEIGHT).width('100%')
+          SearchField({ editable: false, placeholder: '搜索吧、帖子或用户',
+            onTap: (): void => { this.onSearch(); } })
+            .height(this.searchRowH())
+        }
+        .width('100%').height(PaperLayout.BRAND_HEIGHT + this.searchRowH())
+        .position({ x: 0, y: -6 * (1 - this.revealProgress) })
       }
+      .width('100%').height((PaperLayout.BRAND_HEIGHT + this.searchRowH()) * this.revealProgress)
+      .opacity(this.searchAlpha()).clip(false)
+      .hitTestBehavior(this.collapsed || this.revealProgress < 0.95 ? HitTestMode.None : HitTestMode.Default)
+      .accessibilityLevel(this.collapsed ? 'no-hide-descendants' : 'auto')
+      Blank().height(DUAL_ROW_GAP * this.revealProgress)
       this.ChannelRow()
     }
     .width('100%').height(this.panelH())
@@ -142,7 +206,7 @@ export struct HomeDualRowTopBar {
       // 状态栏让位：内容盒顶部先扣掉系统内距，搜索行才落在状态栏下沿
       Blank().height(Math.max(0, this.statusBarHeight - DUAL_BOX_INSET))
       this.SearchRow()
-      Blank().height(this.collapsed ? 0 : DUAL_ROW_GAP)
+      Blank().height(DUAL_ROW_GAP * this.revealProgress)
       this.ChannelRow()
     }
     .width(this.visibleW())
@@ -152,29 +216,30 @@ export struct HomeDualRowTopBar {
 
   @Builder
   SearchRow() {
-    Row() {
-      // 头像：登录显示本人头像，未登录显示占位图标；点击进**个人主页**
-      AvatarComponent({ url: this.avatarUrl, avatarSize: AVATAR_D, fallbackName: '我' })
-        .accessibilityText('个人主页').onClick((): void => { this.onAvatar(); })
-      SearchField({
-        editable: false,
-        onTap: (): void => { this.onSearch(); }
-      })
-      .layoutWeight(1)
-      .margin({ left: 12 })
+    Stack({ alignContent: Alignment.TopStart }) {
+      Row() {
+        // 头像：登录显示本人头像，未登录显示占位图标；点击进**个人主页**
+        AvatarComponent({ url: this.avatarUrl, avatarSize: AVATAR_D, fallbackName: '我' })
+          .accessibilityText('个人主页').onClick((): void => { this.onAvatar(); })
+        SearchField({
+          editable: false,
+          onTap: (): void => { this.onSearch(); }
+        })
+        .layoutWeight(1)
+        .margin({ left: 12 })
+      }
+      .width('100%')
+      .height(this.searchRowH())
+      .padding({ left: 16, right: 16 })
+      .alignItems(VerticalAlign.Center)
+      .position({ x: 0, y: -6 * (1 - this.revealProgress) })
     }
-    .width('100%')
-    /*
-     * 高度随收起态在 `DUAL_SEARCH_ROW_H ↔ 0` 之间变化（不是条件渲染，见 PanelContent 注释）：
-     * 内容垂直居中，收起时搜索框上下对称地被"压扁"，
-     * 与面板高度的收缩同步 —— 展开时同样长回来，不会突然跳出。
-     * ⚠️ 过渡同样**不挂 `.animation()`**（会拖慢频道选中态），由宿主 `animateTo` 驱动。
-     */
-    .height(this.collapsed ? 0 : Math.max(DUAL_SEARCH_ROW_H, searchFieldHeight(this.scaleValue()) + 8))
-    // 展开时让官方 Search 材质自由形变；仅收起时裁掉被压缩的搜索行。
-    .clip(this.collapsed)
-    .padding({ left: 16, right: 16 })
-    .alignItems(VerticalAlign.Center)
+    .width('100%').height(this.searchRowH() * this.revealProgress)
+    .opacity(this.searchAlpha())
+    // 搜索本体不参与高度压缩，也不裁剪官方材质阴影。
+    .clip(false)
+    .hitTestBehavior(this.collapsed || this.revealProgress < 0.95 ? HitTestMode.None : HitTestMode.Default)
+    .accessibilityLevel(this.collapsed ? 'no-hide-descendants' : 'auto')
   }
 
   /** 频道行：三个槽位等宽展开，透明背景（玻璃由整片悬浮面承载） */

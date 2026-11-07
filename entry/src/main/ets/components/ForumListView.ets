@@ -1079,6 +1079,7 @@ export struct ForumListView {
   @Builder
   ThreadCard(item: ThreadBrief) {
     ThreadPreviewCard({
+      useImageLayoutPreference: true,
       authorName: item.authorName, authorAvatar: item.authorAvatar,
       forumName: this.forumOf(item), forumAvatar: this.cardForumAvatar(item, this.avatarEpoch),
       forumAvatarRevision: this.cardForumAvatarRevision(item, this.avatarEpoch),

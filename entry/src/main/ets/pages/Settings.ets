@@ -61,6 +61,8 @@ import { HomeTopNav } from '../components/HomeTopNav';
 import { HomeDualRowTopBar } from '../components/HomeDualRowTopBar';
 import { HomeNavigationPart, homeNavigationHideStore } from '../common/appearance/HomeNavigationHideStore';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
+import { ImageLayoutMode, imageLayoutLabel } from '../model/ImageLayout';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
@@ -248,6 +250,7 @@ struct SettingsPage {
       darkModeLabel: themeModeLabel(themeModeStore.pref),
       fontLabel: fontSizeLabel(fontScaleStore.pref),
       forumDefaultTabLabel: forumDefaultTabLabel(forumDefaultTabStore.value),
+      imageLayoutLabel: imageLayoutLabel(imageLayoutStore.mode),
       hideStatusBar: homeNavigationHideStore.hideStatusBar,
       hideTopNavigation: homeNavigationHideStore.hideTopNavigation,
       hideBottomNavigation: homeNavigationHideStore.hideBottomNavigation,
@@ -542,6 +545,10 @@ struct SettingsPage {
     if (pane === SettingsPane.FORUM_DEFAULT_TAB) {
       return buildOptions(['热门', '最新'], forumDefaultTabStore.value, 'forum_default_tab');
     }
+    if (pane === SettingsPane.IMAGE_LAYOUT) {
+      return buildOptions([imageLayoutLabel(ImageLayoutMode.MODERN), imageLayoutLabel(ImageLayoutMode.CLASSIC)],
+        imageLayoutStore.mode, 'image_layout');
+    }
     if (pane === SettingsPane.MATERIAL) {
       return buildOptions(
         ALL_MODES.map((mode: MaterialMode): string => modeLabel(mode)),
@@ -579,6 +586,12 @@ struct SettingsPage {
 
   /** 选中弹层里的第 `index` 项：按组分发到对应的单例，然后关掉弹层。 */
   private pickOption(pane: SettingsPane, index: number): void {
+    if (pane === SettingsPane.IMAGE_LAYOUT) {
+      if (index !== ImageLayoutMode.MODERN && index !== ImageLayoutMode.CLASSIC) { return; }
+      void imageLayoutStore.setMode(index as ImageLayoutMode,
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      this.closePopup(); return;
+    }
     if (pane === SettingsPane.SIGN_SETTINGS) {
       if (index !== 0 && index !== 1 && index !== 2) { return; }
       void signStrategyStore.setStrategy(index, this.getUIContext().getHostContext() as common.UIAbilityContext)
@@ -1281,6 +1294,20 @@ struct SettingsPage {
           } })
       }
     } else if (this.pane === SettingsPane.BROWSING) {
+      if (imageLayoutStore.loadError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: imageLayoutStore.loadError, retryLabel: '重新读取',
+          onRetry: (): void => {
+            void imageLayoutStore.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
+      if (imageLayoutStore.saveError.length > 0) {
+        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
+          message: imageLayoutStore.saveError, retryLabel: '重试保存',
+          onRetry: (): void => {
+            void imageLayoutStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
+          } })
+      }
       if (lowFlowStore.saveError.length > 0) {
         SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
           message: lowFlowStore.saveError, retryLabel: '重试保存',
@@ -1741,7 +1768,7 @@ struct SettingsPage {
     SettingsGroupTitle({ title: '内容浏览' })
     SettingsCard({
       content: (): void => {
-        this.CategoryRows(SettingsPane.BROWSING, ['forum_default_tab', 'low_flow'])
+        this.CategoryRows(SettingsPane.BROWSING, ['forum_default_tab', 'image_layout', 'low_flow'])
       }
     })
     SettingsGroupTitle({ title: '看图' })

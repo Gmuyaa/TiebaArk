@@ -7,7 +7,7 @@ import { AppTheme } from '../theme/Theme';
 export struct VoicePlayer {
   @Param voice: VoiceClip = new VoiceClip();
   @Local vm: VoicePlaybackVM = voicePlayback;
-  aboutToDisappear(): void { void this.vm.stopFor(this.voice.id); }
+  // 播放生命周期由帖子页管理；回复离开懒加载视口不应中断语音。
   private active(): boolean { return this.vm.currentId === this.voice.id; }
   private action(): string {
     if (!this.active()) { return '播放'; }

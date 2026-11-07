@@ -140,6 +140,8 @@ export struct HomeComposeButton {
       .id('home-compose-button')
       .position({ x: this.x, y: this.y })
       .visibility(this.ready ? Visibility.Visible : Visibility.Hidden)
+      .hitTestBehavior(this.active ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+      .accessibilityLevel(this.active ? 'auto' : 'no-hide-descendants')
       .accessibilityText('发帖，可自由拖拽移动')
       .onClick((): void => {
         if (!this.dragging && Date.now() >= this.suppressClickUntil) { this.onCompose(); }

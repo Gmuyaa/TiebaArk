@@ -21,7 +21,7 @@ import { TopLabelItem } from '../components/TopLabelItem';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { buildThreadCardMenu } from '../components/ThreadCardMenu';
 import { ImageViewer } from '../components/ImageViewer';
-import { animateImageTransition } from '../components/ImageTransition';
+import { closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { ThreadBrief } from '../model/ThreadList';
 import { visibleThreads } from '../model/ThreadBlock';
 import { ContentPiece } from '../model/ThreadDetail';
@@ -256,6 +256,7 @@ export struct HotTopicPage {
   @Builder
   ThreadCard(item: ThreadBrief) {
     ThreadPreviewCard({
+      useImageLayoutPreference: true,
       authorName: this.cardInfo(item, this.cards.revision).authorName,
       authorAvatar: this.cardInfo(item, this.cards.revision).authorAvatar,
       forumName: item.sourceForum, forumAvatar: this.cardInfo(item, this.cards.revision).sourceForumAvatar,
@@ -357,12 +358,13 @@ export struct HotTopicPage {
         if (this.viewerImages.length > 0) {
           ImageViewer({ imageUrls: this.viewerImages, initialIndex: this.viewerIndex,
             onClose: (): void => { this.viewerImages = []; } })
+            .zIndex(100).transition(imageLayerRetentionTransition())
         }
       }.width('100%').height('100%')
     }.hideTitleBar(true)
       .onBackPressed((): boolean => {
         if (this.viewerImages.length === 0) { return false; }
-        animateImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
+        closeImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
         return true;
       })
   }

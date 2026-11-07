@@ -12,7 +12,7 @@ import { PageHeader } from '../components/PageHeader';
 import { PostContentInline } from '../components/PostContentInline';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ImageViewer } from '../components/ImageViewer';
-import { ImageTransitionSource, animateImageTransition } from '../components/ImageTransition';
+import { ImageTransitionSource, closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { formatPostTime } from '../model/HomeFeedPresentation';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
@@ -215,12 +215,13 @@ export struct UserPage {
       if (this.viewerImages.length > 0) {
         ImageViewer({ imageUrl: this.viewerImages[this.viewerIndex], imageUrls: this.viewerImages,
           initialIndex: this.viewerIndex, onClose: (): void => { this.viewerImages = []; } })
+          .zIndex(100).transition(imageLayerRetentionTransition())
       }
       }.width('100%').height('100%')
     }.hideTitleBar(true)
     .onBackPressed((): boolean => {
       if (this.viewerImages.length === 0) { return false; }
-      animateImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
+      closeImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
       return true;
     })
     .onShown(() => {
@@ -291,6 +292,7 @@ export struct UserPage {
   @Builder
   ThreadCard(item: UserPostItem) {
     ThreadPreviewCard({
+      useImageLayoutPreference: true,
       authorName: item.authorName || this.name(),
       authorAvatar: item.authorPortrait.length > 0 ? portraitUrl(item.authorPortrait) : this.avatarUrl(),
       forumName: item.forumName, forumAvatar: this.vm.postForumAvatars.get(item.forumId) || '',

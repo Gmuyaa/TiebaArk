@@ -33,7 +33,7 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-import { FrameCallback, LengthMetrics, promptAction, window } from '@kit.ArkUI';
+import { FrameCallback, LengthMetrics, promptAction, UIUtils, window } from '@kit.ArkUI';
 
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
@@ -56,13 +56,18 @@ import { readEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEdito
 import { ERRNO_THREAD_DELETED } from '../api/TiebaApi';
 import { AgreeObjType } from '../net/TiebaParams';
 import { ImageViewer } from '../components/ImageViewer';
-import { animateImageTransition } from '../components/ImageTransition';
+import { ImageTransitionGallery, closeImageTransition } from '../components/ImageTransition';
+import { ImageTransitionGalleryScope } from '../components/ImageTransitionGalleryScope';
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassMoreButton } from '../components/GlassMoreButton';
 import { ThreadPopupButton } from '../components/ThreadPopupButton';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { THREAD_ACTION_BUTTON_SIZE, floatingButtonHitRegion } from '../model/SmartReach';
 import { PostImageGallery } from '../components/PostImageGallery';
+import { PostImageFlow } from '../components/PostImageFlow';
+import { readingViewerIndex } from '../model/PostImageLayout';
+import { ImageLayoutMode } from '../model/ImageLayout';
+import { ImageLayoutStore, imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { ReplyItem } from '../components/ReplyItem';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
@@ -183,6 +188,8 @@ export struct ThreadDetailPage {
   /** 正在预览的同一楼层图片集合与初始位置 */
   @Local viewerUrls: string[] = [];
   @Local viewerIndex: number = 0;
+  // 标题栏单独控制：恢复材质必须先于图片关闭动画同步落地。
+  @Local viewerHidesTitleBar: boolean = false;
   /** 下拉刷新状态 */
   @Local refreshing: boolean = false;
   /** 非零表示正在展开该一级回复的全屏回复详情面板 */
@@ -290,6 +297,9 @@ export struct ThreadDetailPage {
   @Local navScrollOffset: number = 0;
   /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移 */
   private scroller: ListScroller = new ListScroller();
+  @Local imageLayout: ImageLayoutStore = imageLayoutStore;
+  /** 仅记当前内容的横向图集页码；弱键不延长已移除正文的生命周期。 */
+  private galleryPages: WeakMap<ContentPiece[], Map<number, number>> = new WeakMap<ContentPiece[], Map<number, number>>();
 
   private goBack(): void {
     NavigationService.back();
@@ -355,15 +365,25 @@ export struct ThreadDetailPage {
     } finally { this.deleteConfirming = false; }
   }
 
+  private prepareImageClose(): void {
+    // V2 状态普通赋值可能与随后的 animateTo 合批，用同步刷新隔离标题栏恢复。
+    UIUtils.applySync((): void => { this.viewerHidesTitleBar = false; });
+  }
+
+  private clearImagePreview(): void {
+    this.viewerUrl = '';
+    this.viewerUrls = [];
+    this.viewerIndex = 0;
+    this.viewerHidesTitleBar = false;
+  }
+
   private handleSystemBack(): boolean {
     if (this.popupMenuShow) { this.popupMenuShow = false; return true; }
     if (this.showJump) { this.showJump = false; return true; }
     if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
-      animateImageTransition(this.getUIContext(), (): void => {
-        this.viewerUrl = '';
-        this.viewerUrls = [];
-        this.viewerIndex = 0;
-      });
+      closeImageTransition(this.getUIContext(), (): void => {
+        this.clearImagePreview();
+      }, (): void => { this.prepareImageClose(); });
       return true;
     }
     if (this.videoMode && this.videoComments) { this.videoComments = false; return true; }
@@ -461,7 +481,9 @@ export struct ThreadDetailPage {
   aboutToDisappear(): void {
     ++this.keyboardWatchSeq;
     this.commentsActive = false;
+    this.galleryPages = new WeakMap<ContentPiece[], Map<number, number>>();
     this.vm.dispose();
+    void voicePlayback.stop();
     this.videoFullscreen = false;
 
     this.closeReplyBox();
@@ -677,6 +699,7 @@ export struct ThreadDetailPage {
     if (url.length === 0) {
       return;
     }
+    this.viewerHidesTitleBar = true;
     this.viewerUrls = [url];
     this.viewerIndex = 0;
     this.viewerUrl = url;
@@ -1377,8 +1400,9 @@ export struct ThreadDetailPage {
           })
           }
 
+          // 查看图片时保留底栏原生材质，仅暂停交互，避免关闭动画里重新创建悬浮面。
           // 底部操作栏 / 菜单 / 弹层 / 查看器：悬浮层语义不变（Stack 后声明者在上）
-          if (!this.videoMode && this.vm.posts.length > 0 && this.viewerUrl.length === 0 && !this.showJump
+          if (!this.videoMode && this.vm.posts.length > 0 && !this.showJump
             && !this.showReply && this.subDetailPid === 0) {
             this.BottomActionBar();
           }
@@ -1418,9 +1442,7 @@ export struct ThreadDetailPage {
           onDisappear: (): void => {
             this.showSubSheet = false;
             this.subDetailPid = 0;
-            this.viewerUrl = '';
-            this.viewerUrls = [];
-            this.viewerIndex = 0;
+            this.clearImagePreview();
             const user: UserBrief | undefined = this.pendingUser;
             this.pendingUser = undefined;
             if (user !== undefined) {
@@ -1453,7 +1475,7 @@ export struct ThreadDetailPage {
 
       .hideBackButton(true)
 
-      .hideTitleBar(this.videoMode || this.viewerUrl.length > 0 || this.viewerUrls.length > 0)
+      .hideTitleBar(this.videoMode || this.viewerHidesTitleBar)
       .systemBarStyle(
         { statusBarContentColor: this.lightStatusBar() ? '#F2F3F4' : '#1B1B1B' },
         { statusBarContentColor: this.lightStatusBar() ? '#F2F3F4' : '#1B1B1B' }
@@ -1498,11 +1520,8 @@ export struct ThreadDetailPage {
       imageUrl: this.viewerUrl,
       imageUrls: this.viewerUrls,
       initialIndex: this.viewerIndex,
-      onClose: (): void => {
-        this.viewerUrl = '';
-        this.viewerUrls = [];
-        this.viewerIndex = 0;
-      }
+      onBeforeClose: (): void => { this.prepareImageClose(); },
+      onClose: (): void => { this.clearImagePreview(); }
     });
   }
 
@@ -1582,13 +1601,13 @@ export struct ThreadDetailPage {
   /** 面板顶部锚点回复的正文：与主列表同一套富文本渲染 */
   @Builder
   SheetAnchorBody() {
-    this.RichBody(this.anchorPost(this.subDetailPid));
+    this.RichBody(this.anchorPost(this.subDetailPid), true);
   }
 
   /** 面板里一条回复的正文 */
   @Builder
   SheetSubBody(sub: SubPostItem) {
-    this.RichPieces(this.subReplyPieces(sub), COMMENT_BODY_SIZE, 24, AppTheme.SUB_REPLY_BODY);
+    this.RichPieces(this.subReplyPieces(sub), COMMENT_BODY_SIZE, 24, AppTheme.SUB_REPLY_BODY, 9, true, true);
   }
 
   /** 将服务端已有的回复对象前缀放回正文首行，沿用正文的图文混排。 */
@@ -1620,6 +1639,7 @@ export struct ThreadDetailPage {
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Start)
+    .transition(TransitionEffect.IDENTITY)
   }
 
   @Builder
@@ -2242,45 +2262,46 @@ export struct ThreadDetailPage {
         .backgroundColor(Color.Transparent)
 
         ListItemGroup() {
-          ForEach(this.vm.visiblePosts, (item: PostItem, index: number) => {
-            if (index > 0) {
+          // 只创建视口与预加载区内的回复；主帖仍在组外，保持跳层的组内下标。
+          Repeat<PostItem>(this.vm.visiblePosts.slice(1))
+            .each((row: RepeatItem<PostItem>) => {
               ListItem() {
                 // 楼中楼预览按需拉取：楼层进入视口才发请求，一层只拉一次
                 Column() {
                   ReplyItem({
                     tid: this.vm.tid,
                     threadTitle: this.vm.detail.title,
-                    item: this.vm.postByPid(item.pid) ?? item,
-                    isThreadAuthor: item.author.id === this.vm.detail.author.id,
-                    agreeState: this.vm.agreeState(item.pid),
-                    canDelete: this.vm.canDeletePost(this.vm.postByPid(item.pid) ?? item),
-                    canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(item.pid, sub),
+                    item: this.vm.postByPid(row.item.pid) ?? row.item,
+                    isThreadAuthor: row.item.author.id === this.vm.detail.author.id,
+                    agreeState: this.vm.agreeState(row.item.pid),
+                    canDelete: this.vm.canDeletePost(this.vm.postByPid(row.item.pid) ?? row.item),
+                    canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(row.item.pid, sub),
                     deletePending: this.vm.deletePending,
                     onDelete: (): void => {
-                      void this.confirmDeleteComment(this.vm.postByPid(item.pid) ?? item);
+                      void this.confirmDeleteComment(this.vm.postByPid(row.item.pid) ?? row.item);
                     },
                     onDeleteSub: (sub: SubPostItem): void => {
-                      void this.confirmDeleteComment(this.vm.postByPid(item.pid) ?? item, sub);
+                      void this.confirmDeleteComment(this.vm.postByPid(row.item.pid) ?? row.item, sub);
                     },
-                    subPosts: this.previewSubPosts(item),
-                    subTotalCount: this.subPreviewCount(item),
-                    subLoading: this.vm.subState(item.pid).loading,
-                    subErrorText: this.vm.subState(item.pid).errorText,
-                    hasAuthorReply: this.hasAuthorReply(item),
+                    subPosts: this.previewSubPosts(row.item),
+                    subTotalCount: this.subPreviewCount(row.item),
+                    subLoading: this.vm.subState(row.item.pid).loading,
+                    subErrorText: this.vm.subState(row.item.pid).errorText,
+                    hasAuthorReply: this.hasAuthorReply(row.item),
                     bodyBuilder: (): void => {
-                      this.RichBody(item);
+                      this.RichBody(row.item, true);
                     },
                     onToggleLike: (): void => {
-                      this.toggleLike(item);
+                      this.toggleLike(row.item);
                     },
                     onReply: (): void => {
-                      this.openReplyBox(item.pid);
+                      this.openReplyBox(row.item.pid);
                     },
                     onOpenSubDetail: (): void => {
-                      this.openSubDetailByPid(item.pid);
+                      this.openSubDetailByPid(row.item.pid);
                     },
                     onRetrySubPosts: (): void => {
-                      this.vm.retrySubPosts(this.hostContext(), item.pid, this.vm.detail.author.id);
+                      this.vm.retrySubPosts(this.hostContext(), row.item.pid, this.vm.detail.author.id);
                     },
                     onViewImage: (url: string): void => {
                       this.openPreviewImage(url);
@@ -2289,14 +2310,15 @@ export struct ThreadDetailPage {
                 }
                 .onVisibleAreaChange([0.1, 1.0], (isVisible: boolean) => {
                   if (isVisible) {
-                    this.vm.ensureSubPostPreview(this.hostContext(), item.pid,
+                    this.vm.ensureSubPostPreview(this.hostContext(), row.item.pid,
                       this.vm.detail.author.id);
                   }
                 })
               }
               .backgroundColor(Color.Transparent)
-            }
-          }, (item: PostItem) => `${item.pid}`)
+            })
+            .key((item: PostItem): string => `${item.pid}`)
+            .virtualScroll({ reusable: false })
 
           if (this.vm.visiblePosts.length <= 1 && !this.vm.loading && !this.vm.isSwitchingSort) {
             ListItem() {
@@ -2314,8 +2336,8 @@ export struct ThreadDetailPage {
       }
       .width('100%')
       .layoutWeight(1)
-
-      .padding({ top: this.videoMode ? 0 : this.titleBarH, bottom: this.videoMode ? 0 : 8 })
+      .padding({ top: this.videoMode ? 0 : this.titleBarH })
+      .cachedCount(2)
       .clip(false)
       .backgroundColor(Color.Transparent)
       .divider({ strokeWidth: 0 })
@@ -2377,7 +2399,7 @@ export struct ThreadDetailPage {
         this.RichPieces(this.videoMode ? item.contents.filter((piece: ContentPiece): boolean =>
           !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents, visualThemeStore.isPaper ? PaperLayout.READING_BODY : POST_BODY_SIZE,
           visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24, AppTheme.TEXT_MAIN,
-          visualThemeStore.isPaper ? PaperLayout.READING_BLOCK_GAP : 9)
+          visualThemeStore.isPaper ? PaperLayout.READING_BLOCK_GAP : 9, true)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -2452,29 +2474,36 @@ export struct ThreadDetailPage {
       })
   }
 
-  /** 正文。主楼与楼中楼共用同一套富文本渲染 */
+  /** 评论及面板锚点正文，图片使用紧凑预览；主帖正文由 ThreadIntro 单独传入。 */
   @Builder
-  RichBody(item: PostItem) {
-    this.RichPieces(item.contents, COMMENT_BODY_SIZE, 24, AppTheme.COMMENT_BODY)
+  RichBody(item: PostItem, mainList: boolean = false) {
+    this.RichPieces(item.contents, COMMENT_BODY_SIZE, 24, AppTheme.COMMENT_BODY, 9, mainList, true)
   }
 
   /** 富文本片段渲染：文本块流式排布，图片块独占一行 */
   @Builder
   RichPieces(pieces: ContentPiece[], fontSize: number = POST_BODY_SIZE, lineHeight: number = 24,
-    textColor: ResourceColor = AppTheme.TEXT_MAIN, blockGap: number = 9) {
-    Column({ space: blockGap }) {
-      ForEach(groupContentBlocks(pieces), (block: ContentBlock, index: number) => {
-        if (block.isVoice && block.voice !== undefined) {
-          VoicePlayer({ voice: block.voice })
-        } else if (block.isImage) {
-          this.ImageBlock(block, collectPreviewImageUrls(pieces))
-        } else {
-          this.TextBlock(block, fontSize, lineHeight, textColor)
-        }
-      }, (block: ContentBlock, index: number) => `${index}`)
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    textColor: ResourceColor = AppTheme.TEXT_MAIN, blockGap: number = 9, mainList: boolean = false,
+    commentPreview: boolean = false) {
+    ImageTransitionGalleryScope({ blockGap: blockGap,
+      content: (gallery: ImageTransitionGallery): void => {
+        this.RichPiecesBlocks(pieces, fontSize, lineHeight, textColor, mainList, commentPreview, gallery);
+      } })
+  }
+
+  /** 图片被文字拆成不同区段时，仍共享当前渲染实例的完整图库。 */
+  @Builder
+  RichPiecesBlocks(pieces: ContentPiece[], fontSize: number, lineHeight: number, textColor: ResourceColor,
+    mainList: boolean, commentPreview: boolean, gallery: ImageTransitionGallery) {
+    ForEach(groupContentBlocks(pieces), (block: ContentBlock, index: number) => {
+      if (block.isVoice && block.voice !== undefined) {
+        VoicePlayer({ voice: block.voice })
+      } else if (block.isImage) {
+        this.ImageBlock(block, collectPreviewImageUrls(pieces), pieces, mainList, commentPreview, gallery)
+      } else {
+        this.TextBlock(block, fontSize, lineHeight, textColor)
+      }
+    }, (block: ContentBlock, index: number) => `${index}`)
   }
 
   @Builder
@@ -2494,16 +2523,64 @@ export struct ThreadDetailPage {
     .width('100%')
   }
 
-  /** 图片块由 PostImageGallery 渲染为横向图集，点击按全篇图片下标打开查看器。 */
+  /** 主帖、评论及楼中楼按图片排布偏好切换，旧版保留原有图集。 */
   @Builder
-  ImageBlock(block: ContentBlock, imageUrls: string[]) {
-    PostImageGallery({
-      images: block.images,
-      startIndex: block.imageStartIndex,
-      onOpenImage: (globalIndex: number): void => {
-        this.openGalleryImage(imageUrls, globalIndex);
+  ImageBlock(block: ContentBlock, imageUrls: string[], pieces: ContentPiece[], mainList: boolean = false,
+    commentPreview: boolean = false, gallery: ImageTransitionGallery | undefined = undefined) {
+    if (mainList && this.imageLayout.mode === ImageLayoutMode.MODERN) {
+      PostImageFlow({
+        images: block.images, startIndex: block.imageStartIndex,
+        viewerIndices: this.blockViewerIndices(pieces, block), transitionGallery: gallery,
+        commentPreview: commentPreview,
+        onOpenImage: (globalIndex: number): void => {
+          const index: number = readingViewerIndex(pieces, globalIndex);
+          if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+        }
+      })
+    } else {
+      PostImageGallery({
+        images: block.images,
+        startIndex: block.imageStartIndex,
+        viewerIndices: this.blockViewerIndices(pieces, block), transitionGallery: gallery,
+        initialPage: this.galleryPage(pieces, block.imageStartIndex),
+        onPageChange: (page: number): void => {
+          this.rememberGalleryPage(pieces, block.imageStartIndex, page);
+        },
+        onOpenImage: (globalIndex: number): void => {
+          const index: number = readingViewerIndex(pieces, globalIndex);
+          if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+        }
+      })
+    }
+  }
+
+  private blockViewerIndices(pieces: ContentPiece[], block: ContentBlock): number[] {
+    const indices: number[] = [];
+    for (let index: number = 0; index < block.images.length; index++) {
+      indices.push(readingViewerIndex(pieces, block.imageStartIndex + index));
+    }
+    return indices;
+  }
+
+  private galleryPage(pieces: ContentPiece[], startIndex: number): number {
+    return this.galleryPages.get(pieces)?.get(startIndex) ?? 0;
+  }
+
+  private rememberGalleryPage(pieces: ContentPiece[], startIndex: number, page: number): void {
+    if (!Number.isInteger(page) || page < 0 || startIndex < 0) { return; }
+    let pages: Map<number, number> | undefined = this.galleryPages.get(pieces);
+    if (page === 0) {
+      if (pages !== undefined) {
+        pages.delete(startIndex);
+        if (pages.size === 0) { this.galleryPages.delete(pieces); }
       }
-    })
+      return;
+    }
+    if (pages === undefined) {
+      pages = new Map<number, number>();
+      this.galleryPages.set(pieces, pages);
+    }
+    pages.set(startIndex, page);
   }
 
   /**
@@ -2518,6 +2595,7 @@ export struct ThreadDetailPage {
       return;
     }
     const index: number = Math.max(0, Math.min(imageUrls.length - 1, globalIndex));
+    this.viewerHidesTitleBar = true;
     this.viewerUrls = imageUrls;
     this.viewerIndex = index;
     this.viewerUrl = imageUrls[index];
@@ -2650,7 +2728,7 @@ export struct ThreadDetailPage {
         .width('100%')
       }
 
-      this.RichPieces(sub.contents, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT, AppTheme.SUB_REPLY_BODY)
+      this.RichPieces(sub.contents, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT, AppTheme.SUB_REPLY_BODY, 9, true, true)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -2813,6 +2891,8 @@ export struct ThreadDetailPage {
     .width(Math.max(240, this.popupViewportWidth - 24)).height(56).borderRadius(28).clip(false)
     .margin({ bottom: BOTTOM_BAR_BOTTOM_MARGIN })
     .id('paper-thread-action-bar')
+    .hitTestBehavior(this.viewerUrl.length === 0 ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+    .accessibilityLevel(this.viewerUrl.length === 0 ? 'auto' : 'no-hide-descendants')
   }
 
   @Builder
@@ -2865,6 +2945,8 @@ export struct ThreadDetailPage {
       right: BOTTOM_BAR_SIDE_MARGIN,
       bottom: BOTTOM_BAR_BOTTOM_MARGIN
     })
+    .hitTestBehavior(this.viewerUrl.length === 0 ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+    .accessibilityLevel(this.viewerUrl.length === 0 ? 'auto' : 'no-hide-descendants')
   }
 
   /** 弹出式按钮的位置、触摸与握姿由独立组件管理。 */
@@ -2874,7 +2956,7 @@ export struct ThreadDetailPage {
       viewportWidth: this.popupViewportWidth,
       viewportHeight: this.popupViewportHeight,
       topInset: this.titleBarH,
-      active: this.pageVisible && !this.showMore,
+      active: this.pageVisible && !this.showMore && this.viewerUrl.length === 0,
       open: this.popupMenuShow,
       onOpenChange: (open: boolean): void => { this.popupMenuShow = open; },
       action: (index: number): void => { this.PopupActionAt(index); }

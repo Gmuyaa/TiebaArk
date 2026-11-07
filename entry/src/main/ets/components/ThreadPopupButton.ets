@@ -234,6 +234,7 @@ export struct ThreadPopupButton {
     .width(this.viewportWidth).height(this.viewportHeight)
     .position({ x: 0, y: 0 })
     .responseRegion(this.hitRegions())
-    .hitTestBehavior(HitTestMode.Default)
+    .hitTestBehavior(this.active ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+    .accessibilityLevel(this.active ? 'auto' : 'no-hide-descendants')
   }
 }

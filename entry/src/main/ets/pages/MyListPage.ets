@@ -23,7 +23,7 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ImageViewer } from '../components/ImageViewer';
-import { animateImageTransition } from '../components/ImageTransition';
+import { closeImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
 
@@ -324,7 +324,7 @@ export struct MyListPage {
     .onHidden((): void => { this.pageVisible = false; this.clearFavoriteResult(); })
     .onBackPressed((): boolean => {
       if (this.viewerImages.length > 0) {
-        animateImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
+        closeImageTransition(this.getUIContext(), (): void => { this.viewerImages = []; });
         return true;
       }
       if (!this.vm.managing) { return false; }
