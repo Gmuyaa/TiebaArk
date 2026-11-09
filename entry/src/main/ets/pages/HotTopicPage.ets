@@ -13,6 +13,7 @@ import { homeChannelHeight } from '../common/appearance/UiLayout';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageHeader } from '../components/PageHeader';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { PageState, ListFooter } from '../components/PageState';
@@ -296,7 +297,7 @@ export struct HotTopicPage {
   @Builder
   TopicList() {
     Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
-      List({ space: 10, scroller: this.listScroller }) {
+      List({ space: ThreadCardLayout.LIST_GAP, scroller: this.listScroller }) {
         ListItem() { this.TopicIntro() }
         ListItem() { this.SortBar() }
         if (this.vm.error.length > 0) {

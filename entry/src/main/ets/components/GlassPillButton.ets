@@ -19,6 +19,7 @@ export struct GlassPillButton {
   @Param slot: MaterialSlot = MaterialSlot.BACK_BUTTON;
   @Event onTap: () => void = (): void => {};
 
+  /** 文字/图标。必须是材质 Button 的内容，不能在外层当覆盖层——覆盖层会挡掉材质中心的指针位置。 */
   @Builder
   LabelContent() {
     Column({ space: this.stacked ? 2 : 0 }) {
@@ -32,14 +33,13 @@ export struct GlassPillButton {
     }.width('100%').height('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
       .opacity(this.active ? 1 : 0.4)
       .accessibilityGroup(true).accessibilityText(this.accessibilityLabel || this.label)
-      .hitTestBehavior(HitTestMode.None).zIndex(1)
   }
 
   @Builder
   Content() {
     if (materialManager.useArkUI) {
       Button({ type: ButtonType.Capsule }) {
-        Row().width('100%').height('100%')
+        this.LabelContent()
       }
       .width(this.pillWidth).height(this.pillHeight).margin(0).padding(0)
       .backgroundColor(Color.Transparent)
@@ -54,7 +54,7 @@ export struct GlassPillButton {
   @Builder
   CompatibilityContent() {
     Button({ type: ButtonType.Normal, stateEffect: false }) {
-      Row().width('100%').height('100%')
+      this.LabelContent()
     }
       .width('100%').height('100%').padding(0).borderRadius(this.pillHeight / 2)
       .backgroundColor(Color.Transparent).visualEffect(pressLight(this.pressed))
@@ -71,7 +71,6 @@ export struct GlassPillButton {
         MaterialMotionLayer({ radius: this.pillHeight / 2, pressed: this.pressed })
           .width(this.pillWidth).height(this.pillHeight)
       }
-      this.LabelContent()
     }.width(this.pillWidth).height(this.pillHeight)
       .onTouch((event: TouchEvent): void => {
         if (event.type === TouchType.Down && this.active) { this.pressed = true; }

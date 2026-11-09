@@ -102,12 +102,10 @@ export struct HomeTopNav {
   /** 滚动隐藏态：隐藏时整行缩到顶部并退出命中测试（不留可点的透明区域） */
   @Param hidden: boolean = false;
   @Param statusBarHeight: number = 0;
-  @Param backdropInset: number = 0;
   @Event onSelectChannel: (label: string) => void = (_label: string): void => {};
   @Event onRowHeightChanged: (height: number) => void = (_height: number): void => {};
   @Local fontSettings: FontSizeScaleStore = fontScaleStore;
   @Local measuredTextH: number = 0;
-  @Local contentGlobalY: number = -1;
   @Event onSearch: () => void = (): void => {};
 
   // 频道文字实测宽度；初值对应 16fp 双汉字 + 两侧各 12vp，文字缩放后按实际测量更新。
@@ -552,15 +550,8 @@ export struct HomeTopNav {
       // 背景置于内部等高 Stack，避免被 HDS 压缩。只遮罩一次，模糊仍来自 HDS。
       Row() {
         Stack({ alignContent: Alignment.TopStart }) {
-          if (this.style === HomeTopNavStyle.LIGHT_LABELS) {
-            HomeTopNavBackdrop({ heightVp: this.statusBarHeight + this.rowHeight() + 28,
-              solidUntil: (this.statusBarHeight + this.rowHeight() + 5) /
-                (this.statusBarHeight + this.rowHeight() + 28) })
-              .width(this.viewportW + HIT_H + this.backdropInset * 2)
-              // 首页按内容层实测屏幕坐标把背景延伸到 y=0；预览从卡片上沿开始。
-              .position({ x: -this.backdropInset, y: this.statusBarHeight > 0
-                ? -(this.contentGlobalY >= 0 ? this.contentGlobalY : this.statusBarHeight + 5.4) : 0 })
-          }
+          // 顶栏不再铺「明度保护层」渐隐：内容滚到顶栏下时直接压在文字底下，
+          // 不再用同色渐变把上沿压暗/压白（持有者 2026-11-09 决定去掉）。
           Row() {
             if (this.style === HomeTopNavStyle.FLOATING_ISLANDS) {
               this.FloatingIslandsContent()
@@ -584,10 +575,6 @@ export struct HomeTopNav {
         }
         .width('100%').height(this.rowHeight())
         .clip(false)
-        .onAreaChange((_old: Area, area: Area) => {
-          const globalY: number = Number(area.globalPosition.y);
-          if (Math.abs(globalY - this.contentGlobalY) > 0.1) { this.contentGlobalY = globalY; }
-        })
       }
       .width('100%')
       .height(this.rowHeight())
@@ -603,21 +590,5 @@ export struct HomeTopNav {
       // 隐藏后不留可点击的透明区域：整行退出命中测试，手势落到下层内容
       .hitTestBehavior(this.hidden ? HitTestMode.None : HitTestMode.Default)
     }
-  }
-}
-
-/** 首页专属明度保护层：无局部模糊、无圆角。同色相透明端点避免深色发灰。 */
-@ComponentV2
-export struct HomeTopNavBackdrop {
-  @Param heightVp: number = 118;
-  @Param solidUntil: number = 0.78;
-  build() {
-    Row()
-      .width('100%').height(this.heightVp)
-      .constraintSize({ minHeight: this.heightVp, maxHeight: this.heightVp })
-      .flexShrink(0)
-      .linearGradient({ angle: 180, colors: [[AppTheme.HOME_TOP_BACKDROP, 0],
-        [AppTheme.HOME_TOP_BACKDROP, this.solidUntil], [AppTheme.HOME_TOP_BACKDROP_CLEAR, 1]] })
-      .hitTestBehavior(HitTestMode.None)
   }
 }

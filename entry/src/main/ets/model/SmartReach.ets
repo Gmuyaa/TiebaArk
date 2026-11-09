@@ -12,10 +12,13 @@ export function floatingBounds(width: number, height: number, top: number): Floa
     maxY: Math.max(8, height - 64) };
 }
 
-/** 首页52vp发帖按钮，松手吸附最近侧边，保留底栏操作空间。 */
+/** 首页发帖按钮直径（vp）。边界与测试共用，避免各处写死后再漂。 */
+export const HOME_COMPOSE_BUTTON_SIZE: number = 48;
+
+/** 首页发帖按钮（直径见 `HOME_COMPOSE_BUTTON_SIZE`），松手吸附最近侧边，保留底栏操作空间。 */
 export function homeComposeBounds(width: number, height: number, top: number): FloatingBounds {
-  const maxX: number = Math.max(0, width - 52 - 20);
-  const maxY: number = Math.max(0, height - 52 - 96);
+  const maxX: number = Math.max(0, width - HOME_COMPOSE_BUTTON_SIZE - 20);
+  const maxY: number = Math.max(0, height - HOME_COMPOSE_BUTTON_SIZE - 96);
   return { minX: Math.min(20, maxX), maxX,
     minY: Math.min(Math.max(8, top + 8), maxY), maxY };
 }

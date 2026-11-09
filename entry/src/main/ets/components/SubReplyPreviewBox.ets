@@ -57,9 +57,15 @@ export struct SubReplyPreviewBox {
     return this.totalCount > 0 ? this.totalCount : this.subPosts.length;
   }
 
-  /** 持有者规定：预览最多五条，超过五条才显示完整列表入口。 */
+  /**
+   * 只要有回复就给出入口。
+   *
+   * 原来只在超过 5 条时显示"查看 X 条回复"；但服务端并非每层都下发内联预览，
+   * 没有预览的层如果连入口都藏起来，整块灰区就是空的。改成只要有条数就亮入口，
+   * 高度固定，不随异步数据变化。
+   */
   private shouldShowEntry(): boolean {
-    return this.totalForEntry() > PREVIEW_LIMIT;
+    return this.totalForEntry() > 0;
   }
 
   @Builder

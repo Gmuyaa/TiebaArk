@@ -66,6 +66,12 @@ export struct PostImageGallery {
   @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
   /** 懒加载组件重建时恢复的图集页码，仅初次布局使用。 */
   @Param initialPage: number = 0;
+  /**
+   * 调用方已知的可用宽度（vp）。>0 时用它作为首帧宽度，不再按屏宽估算——
+   * 评论正文左侧有头像列，按屏宽算会宽出 48vp，首帧撑高、`onAreaChange`
+   * 修正后塌回去，列表就"跳一下"。0 = 调用方不知道，沿用估算。
+   */
+  @Param widthHint: number = 0;
   @Event onPageChange: (page: number) => void = (): void => {};
   /** 点击某张图：回传它在整篇内容图片序列里的下标 */
   @Event onOpenImage: (globalIndex: number) => void = (): void => {};
@@ -97,6 +103,8 @@ export struct PostImageGallery {
 
   aboutToAppear(): void {
     this.alive = true;
+    // 调用方给的宽度比按屏宽估算更准，先落位，避免首帧"先撑高再塌回"
+    if (this.widthHint > 0) { this.boxWidth = this.widthHint; }
     this.invalidateRequest();
     this.transitionIdentity = this.currentTransitionIdentity();
     this.page = this.boundedInitialPage();

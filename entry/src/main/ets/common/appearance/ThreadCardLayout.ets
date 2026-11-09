@@ -23,4 +23,9 @@ export class ThreadCardLayout {
   static readonly METRIC_ITEM_GAP: number = 4 * 1.2;
   /** 卡片外距 8vp + 内距 4vp，与首页频道行的 12vp 边界一致。 */
   static readonly METRIC_SIDE_PADDING: number = 4;
+  /**
+   * 帖子卡片列表的竖向间距（2026-11-09 持有者定：6 处列表统一 12vp）。
+   * 敦煌纸境是紧贴连排，两处信息流由调用方保留 0，不套这个值。
+   */
+  static readonly LIST_GAP: number = 12;
 }

@@ -54,7 +54,9 @@ export enum ThemeColorRole {
   FLOW_BACKGROUND_END,
   MEDIA_ACCENT,
   HOME_TOP_BACKDROP,
-  HOME_TOP_BACKDROP_CLEAR
+  HOME_TOP_BACKDROP_CLEAR,
+  /** 首页发帖按钮的沉浸光感着色：当前强调色不透明，随八套主题各自走；深浅同色。 */
+  COMPOSE_TINT
 }
 
 /** 雾松：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -111,6 +113,7 @@ const PINE_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_pine_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_pine_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 烟紫：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -167,6 +170,7 @@ const LILAC_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_lilac_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_lilac_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 砂陶：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -223,6 +227,7 @@ const CLAY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_clay_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_clay_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 晴空：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -279,6 +284,7 @@ const SKY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_sky_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_sky_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 莓果：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -335,6 +341,7 @@ const BERRY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_berry_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_berry_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 橘光：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
@@ -391,6 +398,7 @@ const ORANGE_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_orange_media_accent'), // MEDIA_ACCENT
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
+  $r('app.color.theme_orange_compose_tint'), // COMPOSE_TINT
 ];
 
 /** 新增六色仅覆盖强调与交互色，页面和内容表面始终沿用调用方的经典资源。 */

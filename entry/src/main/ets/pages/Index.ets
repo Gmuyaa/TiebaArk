@@ -13,6 +13,7 @@ import { common } from '@kit.AbilityKit';
 import { authSession, AuthSession } from '../auth/AuthSession';
 import { NotifyUnreadVM, notifyUnreadVM } from '../viewmodel/NotifyUnreadVM';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hdsEffect } from '@kit.UIDesignKit';
 
 import { HdsNavigation, HdsTabsController, BlurStrategy, ScrollEffectType } from '@kit.UIDesignKit';
 import { ThreadDetailPage } from './ThreadDetail';
@@ -73,14 +74,17 @@ interface TabSlot {
   label: string;
 }
 
-interface BottomBarPose {
-  scale: number;
-  offsetY: number;
-  alpha: number;
-}
-
 /** 底栏首页连续点击的识别窗口；首次点击始终立即回顶。 */
 const HOME_DOUBLE_TAP_MS: number = 350;
+
+/**
+ * 收起终点的缩放比。不收到 0：栏体收成一条小胶囊停在手势条安全区**上方**，
+ * 再靠透明度消失。收到底会压进手势条区域，位置容易跳，也看不到"收起"的落点。
+ */
+const BAR_HIDDEN_SCALE: number = 0.25;
+
+/** 收缩过程中栏体额外下沉的距离（vp）：终点从安全区上沿再往下挪这么多，贴近手势条上方。 */
+const BAR_HIDDEN_DROP: number = 28;
 
 @Entry
 @ComponentV2
@@ -158,7 +162,6 @@ struct Index {
   @Local homeStatusBarH: number = 39;
   /** HDS 会将超高的自定义内容居中；额外补 32vp 后频道行回到安全区下方。 */
   private readonly homeTitleContentOffsetVp: number = 32;
-  @Local bottomMaskVisible: boolean = true;
   /**
    * 首页 NavBar 是否可见（Root 导航压入子页时为 false）。
    * `@Local` 而非普通成员：值 5 的顶栏玻璃浮层要按它即时隐藏（进帖子详情时不能浮在上面）。
@@ -184,7 +187,6 @@ struct Index {
     'motionPreferences.systemReducedMotion')
   private onMotionPreferenceChanged(): void {
     this.appNavStack.disableAnimation(!motionStore.isOn(MotionEffect.MOVE));
-    if (this.bottomAnimator !== undefined) { this.animateBottomBar(this.bottomNavigationHidden()); }
   }
 
   pageTransition() {
@@ -264,74 +266,74 @@ struct Index {
     return materialManager.useArkUI && motionStore.isOn(MotionEffect.SCALE) ? this.homeBottomScale : 1;
   }
 
-  /** 浮面统一以展开时的中心定位；补偿缩小后的半高差，避免底边锚点与控制器平移叠加。 */
+  /**
+   * 收缩时栏体随缩放量同步下沉：展开态仍是安全区上沿（`BAR_SAFE_H`），
+   * 收到 `BAR_HIDDEN_SCALE` 时再往下 `BAR_HIDDEN_DROP`，停在手势条正上方。
+   */
   private bottomBarBottomMargin(): number {
-    if (!materialManager.useArkUI) { return AppTheme.BAR_SAFE_H; }
-    return AppTheme.BAR_SAFE_H + AppTheme.BAR_CONTENT_H * (1 - this.bottomBarScaleFactor()) / 2 -
-      (motionStore.isOn(MotionEffect.MOVE) ? this.bottomOffsetY : 0);
+    const scale: number = this.bottomBarScaleFactor();
+    return AppTheme.BAR_SAFE_H - (1 - scale) * BAR_HIDDEN_DROP;
   }
 
-  /** 宽高、前景与底距共用声明进度；控制器仅调整透明度，不再参与定位。 */
-  private setBottomBarPose(scale: number, offsetY: number, alpha: number): void {
-    this.homeBottomScale = scale;
-    this.bottomOffsetY = offsetY;
-    this.bottomAlpha = alpha;
-    this.tabsController.setTabBarOpacity(motionStore.isOn(MotionEffect.FADE) ? alpha : 1);
+  /** 显示底栏：从底部展开（"吐出来"）。 */
+  private showMainTabBar(): void {
+    this.animateBottomBar(false);
+  }
+
+  /** 隐藏底栏：向底部收缩（"吸进去"）。 */
+  private hideMainTabBar(): void {
+    this.animateBottomBar(true);
   }
 
   private animateBottomBar(hidden: boolean): void {
     if (!materialManager.useArkUI) { return; }
-    if (!hidden && !this.bottomAnimator && this.homeBottomScale === 1 &&
-      this.bottomOffsetY === 0 && this.bottomAlpha === 1) { return; }
-    const interrupted: boolean = this.bottomAnimator !== undefined;
+    // 已在目标终态就直接返回，否则终点上再来一次同向指令会让动画从终点重播一遍。
+    if (!this.bottomAnimator &&
+      ((hidden && this.homeBottomScale === BAR_HIDDEN_SCALE && this.bottomAlpha === 0) ||
+        (!hidden && this.homeBottomScale === 1 && this.bottomAlpha === 1))) {
+      return;
+    }
     const version: number = ++this.bottomMotionVersion;
     this.bottomAnimator?.cancel();
     this.bottomAnimator = undefined;
-    this.bottomBarCollapsed = false;
-    const hiddenY: number = AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H;
     const context: UIContext = this.getUIContext();
-    if (!motionStore.isOn(MotionEffect.MOVE) && !motionStore.isOn(MotionEffect.SCALE) && !motionStore.isOn(MotionEffect.FADE)) {
-      context.animateTo({ duration: 0 }, (): void => {
-        this.setBottomBarPose(hidden ? 0.25 : 1, hidden ? hiddenY : 0, hidden ? 0 : 1);
-        this.tabsController.setTabBarOpacity(hidden ? 0 : 1);
-        this.bottomBarCollapsed = hidden;
-      });
-      return;
-    }
-    // 中途反向直接续接当前姿态，不重新提起/放大到固定关键帧。
-    const spring: boolean = motionStore.isOn(MotionEffect.SPRING) && !interrupted;
-    const start: BottomBarPose = { scale: this.homeBottomScale, offsetY: this.bottomOffsetY, alpha: this.bottomAlpha };
-    const animator: AnimatorResult = context.createAnimator({ duration: spring ? (hidden ? 370 : 500) : 280,
-      easing: 'linear', delay: 0, fill: 'forwards', direction: 'normal', iterations: 1, begin: 0, end: 1 });
-    this.bottomAnimator = animator;
-    animator.onFrame = (progress: number): void => {
-      if (version === this.bottomMotionVersion) { this.renderBottomBarFrame(progress, hidden, spring, start); }
-    };
-    animator.onFinish = (): void => {
+    // 动画一开始就要让前景内容可见：它绑定 `bottomBarCollapsed`，收起态下为 Hidden，
+    // 不先放开的话，展开全过程只有底板在长、图标文字要等 onFinish 才冒出来。
+    this.bottomBarCollapsed = false;
+    /*
+     * 尺寸交给 ArkUI 自带弹簧（`curves.springMotion`），透明度只能走控制器逐帧写。
+     * 两者并行：`animateTo` 管 `homeBottomScale`（barHeight/barWidth/底部偏移都挂在它上面），
+     * `createAnimator` 只管透明度，不再自己算弹簧公式。
+     */
+    context.animateTo({
+      duration: hidden ? 300 : 560,
+      curve: hidden ? curves.springMotion(0.42, 0.9) : curves.springMotion(0.38, 0.45),
+      onFinish: (): void => {
+        if (version !== this.bottomMotionVersion) { return; }
+        this.bottomBarCollapsed = hidden && this.bottomNavigationHidden();
+      }
+    }, (): void => {
+      this.homeBottomScale = hidden ? BAR_HIDDEN_SCALE : 1;
+    });
+    const alphaAnimator: AnimatorResult = context.createAnimator({
+      duration: hidden ? 260 : 560, easing: 'linear',
+      delay: 0, fill: 'forwards', direction: 'normal', iterations: 1, begin: 0, end: 1 });
+    this.bottomAnimator = alphaAnimator;
+    alphaAnimator.onFrame = (progress: number): void => {
       if (version !== this.bottomMotionVersion) { return; }
-      this.setBottomBarPose(hidden ? 0.25 : 1, hidden ? hiddenY : 0, hidden ? 0 : 1);
-      if (hidden && this.bottomNavigationHidden()) { this.tabsController.setTabBarOpacity(0); }
-      // 控制器变换会被后续浮面布局重置；完成后以声明状态同时撤销栏面、布局与前景。
-      this.bottomBarCollapsed = hidden && this.bottomNavigationHidden();
-      if (!hidden && !this.homeScrollHidden) { this.bottomMaskVisible = true; }
+      const p: number = Math.max(0, Math.min(1, progress));
+      // 收起前段就淡掉；展开后段才变实（先长出来再显形）。
+      const a: number = hidden ? 1 - Math.pow(p, 0.67) : 1;
+      this.bottomAlpha = a;
+      this.tabsController.setTabBarOpacity(a);
+    };
+    alphaAnimator.onFinish = (): void => {
+      if (version !== this.bottomMotionVersion) { return; }
+      this.bottomAlpha = hidden ? 0 : 1;
+      this.tabsController.setTabBarOpacity(hidden ? 0 : 1);
       this.bottomAnimator = undefined;
     };
-    animator.play();
-  }
-
-  /** 同机酷安参考：轻提后向下缩淡；展开上提放大后回落。每帧同步原生尺寸与前景，避免跨组件关键帧跳变。 */
-  private renderBottomBarFrame(progress: number, hidden: boolean, spring: boolean, start: BottomBarPose): void {
-    const end: BottomBarPose = { scale: hidden ? 0.25 : 1,
-      offsetY: hidden ? AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H : 0, alpha: hidden ? 0 : 1 };
-    const split: number = hidden ? 190 / 370 : 200 / 500;
-    const lift: BottomBarPose = { scale: hidden ? 0.95 : 1.015, offsetY: hidden ? -16 : -18, alpha: 1 };
-    const first: boolean = !spring || progress <= split;
-    const from: BottomBarPose = first ? start : lift;
-    const to: BottomBarPose = !spring || !first ? end : lift;
-    const raw: number = Math.max(0, Math.min(1, !spring ? progress : (first ? progress / split : (progress - split) / (1 - split))));
-    const blend: number = spring && !first && hidden ? raw * raw : 1 - Math.pow(1 - raw, 3);
-    this.setBottomBarPose(from.scale + (to.scale - from.scale) * blend,
-      from.offsetY + (to.offsetY - from.offsetY) * blend, from.alpha + (to.alpha - from.alpha) * blend);
+    alphaAnimator.play();
   }
 
   /** 首页滚动共用一个方向信号，三处区域分别按设置决定是否隐藏。 */
@@ -341,22 +343,10 @@ struct Index {
       return;
     }
     const version: number = ++this.statusBarRequestVersion;
-    if (target && homeNavigationHideStore.hideBottomNavigation) {
-      // HDS 的 gradientMask 不随栏体的 opacity 消失，收起前先立即撤掉浅色蒙层。
-      animateTo({ duration: 0 }, () => {
-        this.bottomMaskVisible = false;
-      });
-    }
     animateTo({
       duration: motionDuration(target ? 300 : 440),
       curve: target || !motionStore.isOn(MotionEffect.MOVE) || !motionStore.isOn(MotionEffect.SPRING)
-        ? Curve.EaseIn : curves.springMotion(0.38, 0.64),
-      onFinish: () => {
-        if (version !== this.statusBarRequestVersion) { return; }
-        if (!target) {
-          this.bottomMaskVisible = true;
-        }
-      }
+        ? Curve.EaseIn : curves.springMotion(0.38, 0.64)
     }, () => {
       this.homeScrollHidden = target;
       if (target) {
@@ -401,7 +391,6 @@ struct Index {
       hilog.warn(0x0, 'TiebaTop', 'status bar visibility failed: %{public}s', e.message);
       if (version === this.statusBarRequestVersion) {
         this.homeScrollHidden = false;
-        this.animateBottomBar(false);
       }
     });
   }
@@ -418,9 +407,12 @@ struct Index {
       barHeight: AppTheme.BAR_CONTENT_H * this.bottomBarScaleFactor(),
       barWidth: this.barSideMargin * 4 * this.bottomBarScaleFactor(),
       barSideMargin: this.barSideMargin, barBottomMargin: this.bottomBarBottomMargin(),
-      barVisible: materialManager.useArkUI ? !this.bottomBarCollapsed : !this.bottomNavigationHidden(),
-      maskColor: this.bottomMaskVisible ? AppTheme.BOTTOM_BAR_MASK : Color.Transparent,
-      maskHeight: this.bottomMaskVisible ? 92 : 0,
+      // ArkUI 承载分支的显隐完全交给 TabBar 的 translate/opacity，栏面常驻不重建：
+      // 若在这里跟着 collapsed 把 barHeight 归零，translate 失去对象，展开还得重建浮面。
+      barVisible: materialManager.useArkUI ? true : !this.bottomNavigationHidden(),
+      // 底栏不再叠页面底蒙层：去掉玻璃下方的渐隐过渡，内容直接压到玻璃底下。
+      maskColor: Color.Transparent,
+      maskHeight: 0,
       pages: (): void => { this.HomePages(); },
       onChange: (index: number): void => {
         this.currentIndex = index;
@@ -508,6 +500,10 @@ struct Index {
   HomePages() {
       TabContent() {
         ForumListView({
+          // 试验：发帖按钮按压时，用点光源照亮帖子卡片外边缘（受光端挂 illuminatedType，光源在按钮上）。
+          // 用 BORDER（细边）而不是 DEFAULT_FEATHERING_BORDER（羽化）：羽化在近光侧会过曝并大范围外溢，
+          // 远处边被压到看不见；细边只靠亮度随距离衰减，整圈都还在。
+          cardLitType: hdsEffect.PointLightIlluminatedType.BORDER,
           onOpenImages: (urls: string[], index: number): void => {
             this.viewerIndex = index;
             this.viewerUrls = urls;
@@ -608,7 +604,6 @@ struct Index {
         HomeTopNav({
           style: this.homeTopNavStyle,
           statusBarHeight: this.homeStatusBarH,
-          backdropInset: 16,
           selectedChannel: this.homeSelectedChannel,
           hidden: this.topNavigationHidden(),
           onRowHeightChanged: (height: number): void => { this.homeTopNavRowH = height; },

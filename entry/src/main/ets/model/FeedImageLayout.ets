@@ -36,25 +36,47 @@ function nativeScale(density: number): number {
   return 1.5 / safeDensity;
 }
 
-export function modernFeedImageGap(contentWidth: number, total: number): number {
-  const columns: number = modernFeedPreviewIndices(total).length;
-  if (columns < 2) { return 0; }
+/**
+ * 可见张数 → 列数。2 张、4 张排两列（4 张 `2+2` 而不是 `3+1` 的孤儿格），
+ * 其余排三列：贴吧单楼封顶 9 张，`3×3` 正好铺满，不会剩下不满的行。
+ */
+export function modernFeedColumns(visible: number): number {
+  const count: number = Number.isFinite(visible) ? Math.max(0, Math.floor(visible)) : 0;
+  if (count <= 1) { return 1; }
+  return count === 2 || count === 4 ? 2 : 3;
+}
+
+export function modernFeedGapForColumns(contentWidth: number, columns: number): number {
+  if (!Number.isFinite(columns) || columns < 2) { return 0; }
   return Math.min(PREVIEW_GAP, usableWidth(contentWidth) / (columns * 2));
+}
+
+export function modernFeedImageGap(contentWidth: number, total: number): number {
+  return modernFeedGapForColumns(contentWidth, modernFeedColumns(modernFeedPreviewIndices(total).length));
 }
 
 /** 单图（含长图）完整等比适配宽高上限；多图固定为等宽正方形。 */
 export function modernFeedImageBox(info: FeedImageInfo, contentWidth: number,
   total: number, density: number): FeedImageBox {
+  return modernFeedImageBoxForColumns(info, contentWidth,
+    modernFeedColumns(modernFeedPreviewIndices(total).length), density);
+}
+
+/** 显式列数的版本：正文方阵铺开全部图片时，列数不能从「最多 3 张预览」里推。 */
+export function modernFeedImageBoxForColumns(info: FeedImageInfo, contentWidth: number,
+  columns: number, density: number): FeedImageBox {
   const box: FeedImageBox = new FeedImageBox();
   const width: number = usableWidth(contentWidth);
-  const columns: number = modernFeedPreviewIndices(total).length;
-  box.width = columns > 1 ? (width - modernFeedImageGap(width, total) * (columns - 1)) / columns : width;
-  box.height = columns > 1 ? box.width : Math.min(PREVIEW_ROW_H, width / 1.5);
+  const columnCount: number = Number.isFinite(columns) && columns > 0 ? Math.floor(columns) : 1;
+  // 列宽 = (行宽 − 间距 × (列数 − 1)) / 列数；间距与列宽同源，保证整行正好铺满。
+  box.width = columnCount > 1
+    ? (width - modernFeedGapForColumns(width, columnCount) * (columnCount - 1)) / columnCount : width;
+  box.height = columnCount > 1 ? box.width : Math.min(PREVIEW_ROW_H, width / 1.5);
   if (!validInfo(info)) { return box; }
   const ratio: number = info.width / info.height;
   box.known = true;
   box.long = info.long || ratio < PREVIEW_LONG_RATIO;
-  if (columns < 2) {
+  if (columnCount < 2) {
     // 长图标记只描述内容，不再让单图转入顶部裁切；卡片与完整图片保持同一比例。
     box.width = Math.min(width, info.width * nativeScale(density), PREVIEW_SINGLE_MAX_H * ratio);
     box.height = box.width / ratio;

@@ -238,10 +238,10 @@ export class ForumHeaderVM {
     if (this.follow.pending) { return '关注中…'; }
     if ((this.follow.loading && !this.follow.known) || (this.reading && this.membership.signed === undefined)) { return '读取中…'; }
     if (this.follow.verifying && !this.follow.known) { return '核对中…'; }
-    if (!this.follow.known) { return '重试关注状态'; }
+    if (!this.follow.known) { return '重试'; }
     if (!this.follow.following) { return '关注'; }
     if (this.signing) { return '签到中…'; }
-    if (this.readDay !== forumSignDay() || this.membership.signed === undefined) { return '重试签到状态'; }
+    if (this.readDay !== forumSignDay() || this.membership.signed === undefined) { return '重试'; }
     return this.membership.signed ? '已签到' : '签到';
   }
 

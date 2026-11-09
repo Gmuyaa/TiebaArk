@@ -172,8 +172,11 @@ export class MaterialManager {
     }
     const created: uiMaterial.ImmersiveMaterial = new uiMaterial.ImmersiveMaterial({
       style: immersiveStyleOf(mode), applyShadow: applyShadow,
-      interactive: interactive, lightEffect: light ? { color: AppTheme.TOUCH_LIGHT } : null,
-      materialColor: slot === MaterialSlot.FORUM_TAB_SELECTION ? AppTheme.MATERIAL_TINT : undefined
+      interactive: interactive,
+      // 发帖按钮按压时由点光源负责"亮"，再叠「光随指动」会让圆面整体发白，和周围受光的观感打架。
+      lightEffect: light && slot !== MaterialSlot.COMPOSE_BUTTON ? { color: AppTheme.TOUCH_LIGHT } : null,
+      materialColor: slot === MaterialSlot.FORUM_TAB_SELECTION ? AppTheme.MATERIAL_TINT :
+        (slot === MaterialSlot.COMPOSE_BUTTON ? AppTheme.COMPOSE_TINT : undefined)
     });
     this.cache.set(key, created);
     return created;

@@ -13,8 +13,8 @@
  */
 
 import {
-  RawAgree, RawContentItem, RawDetailForum, RawDetailPage, RawPost, RawSubPost, RawSubPostPage,
-  RawSubPostPageResponse, RawThreadHead, RawThreadPage, RawUser
+  RawAgree, RawContentItem, RawDetailForum, RawDetailPage, RawInlineSubPost, RawInlineSubPostHolder,
+  RawPost, RawSubPost, RawSubPostPage, RawSubPostPageResponse, RawThreadHead, RawThreadPage, RawUser
 } from '../api/RawThreadPage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { VoiceClip, parseVoiceClip, voiceClipLabel } from './VoiceClip';
@@ -1008,6 +1008,13 @@ export class PostItem {
   isAgreed: boolean = false;
   /** 楼中楼条数。>0 表示要点开才能看到，详情响应里不带内容 */
   subPostCount: number = 0;
+  /**
+   * 随楼层内联的楼中楼预览（请求带 `with_floor=1&floor_rn=N`）。
+   *
+   * 有它就能在楼层落地时直接把预览画出来，不必等 `/c/f/pb/floor` 的二次请求——
+   * 二次请求会让预览框先矮后高，把下面的内容顶走。
+   */
+  inlineSubPosts: SubPostItem[] = [];
   /** 该楼被折叠 */
   isFold: boolean = false;
   foldTip: string = '';
@@ -1029,9 +1036,48 @@ export class PostItem {
     p.agreeCount = agree === undefined ? 0 : toNum(agree.agree_num);
     p.isAgreed = agree === undefined ? false : toFlag(agree.has_agree);
     p.subPostCount = toNum(raw.sub_post_number);
+    p.inlineSubPosts = PostItem.inlineSubsFrom(raw, users, nowMs);
     p.isFold = toFlag(raw.is_fold);
     p.foldTip = toStr(raw.fold_tip);
     return p;
+  }
+
+  /**
+   * 解析随楼层内联的楼中楼（`with_floor=1&floor_rn=N`）。
+   *
+   * 字段比 `/c/f/pb/floor` 少：只有 `author_id` 和 `title`（昵称），没有内联作者对象、
+   * 也没有 agree。预览行只显示"昵称：正文"，这些够用；点开详情仍走 floor 接口补全。
+   */
+  private static inlineSubsFrom(raw: RawPost, users: Map<number, UserBrief>,
+    nowMs: number): SubPostItem[] {
+    const result: SubPostItem[] = [];
+    const holder: RawInlineSubPostHolder | undefined = raw.sub_post_list;
+    const list: RawInlineSubPost[] | undefined = holder === undefined ? undefined : holder.sub_post_list;
+    if (list === undefined) {
+      return result;
+    }
+    for (let i = 0; i < list.length; i++) {
+      const item: RawInlineSubPost = list[i];
+      const s: SubPostItem = new SubPostItem();
+      s.pid = toNum(item.id);
+      s.timeMs = toNum(item.time) * 1000;
+      s.timeText = formatPostTime(s.timeMs, nowMs);
+      /*
+       * 内联楼中楼不带头像/昵称对象，只有 `author_id`；`title` 是原楼层正文摘要
+       * （实测形如「回复：xxx」），不能当昵称用。作者仍走本页 `user_list` 查表，
+       * 查不到时 `lookupUser` 给"匿名用户"占位；点开详情后 floor 接口会补全。
+       */
+      s.author = PostItem.lookupUser(users, toNum(item.author_id));
+      const parsed: ReplyTargetParse = parseReplyTarget(ContentPiece.listFromRaw(item.content));
+      s.contents = parsed.contents;
+      s.replyToName = parsed.replyToName;
+      // 内联正文没有 type=4 片段，开头常直接跟着 "："，这里按同一规则剥掉。
+      if (s.contents.length > 0) {
+        s.contents[0].text = stripLeadingSeparator(s.contents[0].text);
+      }
+      result.push(s);
+    }
+    return result;
   }
 
   /** 按 uid 取用户；查不到时给占位，避免界面空白 */
@@ -1060,6 +1106,7 @@ export function copyPostItem(src: PostItem): PostItem {
   c.agreeCount = src.agreeCount;
   c.isAgreed = src.isAgreed;
   c.subPostCount = src.subPostCount;
+  c.inlineSubPosts = src.inlineSubPosts;
   c.isFold = src.isFold;
   c.foldTip = src.foldTip;
   return c;
@@ -1407,24 +1454,34 @@ export class SubPostPage {
  *
  * 放在 model 层而不是 viewmodel：它不依赖鸿蒙 API，只做数据结构与同步规则，
  * 可以像协议解析一样在 Node 侧用固定输入验证。
+ *
+ * **必须自己可观察**：界面按 `vm.subState(pid)` 拿这一份状态。若只靠外层
+ * `subStates` 数组替换来通知，任何一层的楼中楼落地都会让整页楼层重建，
+ * 滚动位置跟着抖。`@ObservedV2` + `@Trace` 让更新只落在读过该字段的那个楼层。
  */
+@ObservedV2
 export class SubPostThreadState {
   /** 所属楼层 id */
   pid: number = 0;
   /** 是否展开 */
-  expanded: boolean = false;
+  @Trace expanded: boolean = false;
   /** 是否正在请求楼中楼 */
-  loading: boolean = false;
+  @Trace loading: boolean = false;
   /** 是否成功加载过第一页 */
-  loadedOnce: boolean = false;
+  @Trace loadedOnce: boolean = false;
   /** 加载失败提示。首页失败与分页失败共用，界面按 subPosts 是否为空区分展示位置 */
-  errorText: string = '';
+  @Trace errorText: string = '';
   /** 已加载的楼中楼 */
-  subPosts: SubPostItem[] = [];
+  @Trace subPosts: SubPostItem[] = [];
   /** 楼中楼分页信息；currentPage 用于推进下一页 */
-  page: SubPostPage = new SubPostPage();
+  @Trace page: SubPostPage = new SubPostPage();
   /** 是否还有下一页 */
-  hasMore: boolean = false;
+  @Trace hasMore: boolean = false;
+  /**
+   * 当前 `subPosts` 是楼层内联下发的预览（不是 floor 接口的完整一页）。
+   * 预览够用来画灰块，但点开详情仍要拉第一页拿头像、点赞态与完整条数。
+   */
+  @Trace previewOnly: boolean = false;
 }
 
 /**

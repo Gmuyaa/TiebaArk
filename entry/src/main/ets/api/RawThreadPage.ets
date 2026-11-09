@@ -94,6 +94,11 @@ export interface RawPost {
   author_id?: number;
   /** 楼中楼条数。实测：非零也不代表本响应带 sub_post_list */
   sub_post_number?: number;
+  /**
+   * 随楼层下发的楼中楼预览；请求带 `with_floor=1&floor_rn=N` 时才有。
+   * **注意外面还包一层**：`{ pid, sub_post_list: [...] }`，不是直接数组。
+   */
+  sub_post_list?: RawInlineSubPostHolder;
   agree?: RawAgree;
   is_fold?: number;
   fold_tip?: string;
@@ -101,9 +106,33 @@ export interface RawPost {
   is_post_visible?: number;
 }
 
-/** 楼中楼的一条回复（`/c/f/pb/floor` 的 subpost_list 元素） */
-export interface RawSubPost {
+/**
+ * 楼中楼预览的**包装对象**：楼层里的 `sub_post_list` 实际形如
+ * `{ "pid": 楼层id, "sub_post_list": [ {id, author_id, title, content, time} ] }`。
+ * 直接按数组解析会拿到 undefined，一条都取不到（实测踩过）。
+ */
+export interface RawInlineSubPostHolder {
+  pid?: number;
+  sub_post_list?: RawInlineSubPost[];
+}
+
+/**
+ * 随楼层内联下发的楼中楼（请求参数 `with_floor=1&floor_rn=N`）。
+ *
+ * 与 `/c/f/pb/floor` 的 `subpost_list` 不同：这里只给 `author_id` + `title`（昵称），
+ * 没有内联 author 对象。预览行只显示"昵称：正文"，够用。
+ */
+export interface RawInlineSubPost {
   id?: number;
+  time?: number;
+  title?: string;
+  content?: RawContentItem[];
+  author_id?: number;
+  floor?: number;
+}
+
+/** 楼中楼的一条回复（`/c/f/pb/floor` 的 subpost_list 元素） */
+export interface RawSubPost {  id?: number;
   time?: number;
   title?: string;
   content?: RawContentItem[];

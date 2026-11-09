@@ -680,6 +680,14 @@
     { "name": "theme_paper_media_accent", "value": "#B1C5C6" },
     { "name": "theme_paper_home_top_backdrop", "value": "#D9F3EEE4" },
     { "name": "theme_paper_home_top_backdrop_clear", "value": "#00F3EEE4" },
-    { "name": "theme_classic_on_accent", "value": "#FFFFFF" }
+    { "name": "theme_classic_on_accent", "value": "#FFFFFF" },
+    { "name": "theme_classic_compose_tint", "value": "#E6317AF7" },
+    { "name": "theme_paper_compose_tint", "value": "#E69EC8BF" },
+    { "name": "theme_pine_compose_tint", "value": "#E693C8B9" },
+    { "name": "theme_lilac_compose_tint", "value": "#E6C7AFDC" },
+    { "name": "theme_clay_compose_tint", "value": "#E6DDB098" },
+    { "name": "theme_sky_compose_tint", "value": "#E68AB4FF" },
+    { "name": "theme_berry_compose_tint", "value": "#E6FF9FBB" },
+    { "name": "theme_orange_compose_tint", "value": "#E6FFB57D" }
   ]
 }

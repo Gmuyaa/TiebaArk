@@ -93,7 +93,7 @@ export class MyListVM {
   @Trace stoppingRemoval: boolean = false;
   @Trace threadPendingTid: number = 0;
 
-  private favoritePage: number = 0;
+  private favoriteOffset: number = 0;
   private selectedSnapshot: number[] = [];
   private selectedIndex: Set<number> = new Set<number>();
   private favoriteRequest: number = 0;
@@ -260,7 +260,7 @@ export class MyListVM {
       this.items = [];
       this.managing = false;
       this.selected = [];
-      this.favoritePage = 0;
+      this.favoriteOffset = 0;
       this.hasMore = false;
       this.loadingMore = false;
     }
@@ -272,7 +272,9 @@ export class MyListVM {
     }
     if (!more) { this.favoriteRequest++; this.loadingMore = false; }
     const request: number = this.favoriteRequest;
-    const page: number = more ? this.favoritePage + 1 : 1;
+    // 服务端的翻页游标是条目偏移（`offset`），`pn` 它根本不看——2026-11-08 真机实测，
+    // 详见 `TiebaApi.fetchStoredThreads`。游标永远从 0 起算，续页接着已取条数往后走。
+    const offset: number = more ? this.favoriteOffset : 0;
     this.loading = !more;
     this.loadingMore = more;
     this.errorText = '';
@@ -284,7 +286,7 @@ export class MyListVM {
       const uid: number = await this.resolveUid(context, session);
       if (!this.favoriteCurrent(request)) { return; }
       if (uid <= 0) { throw new Error('暂时无法获取账号信息，请稍后重试'); }
-      const res = await this.api.fetchStoredThreads(device, session, uid, page, 20);
+      const res = await this.api.fetchStoredThreads(device, session, uid, offset, 20);
       if (!this.favoriteCurrent(request)) { return; }
       if (!res.ok) { throw new Error(res.describeFailure()); }
       const incoming: MyListItem[] = MyListVM.fromStored(res.data);
@@ -297,8 +299,9 @@ export class MyListVM {
       }
       this.items = next;
       this.selected = this.selected.filter((tid: number) => seen.has(tid));
-      this.favoritePage = page;
-      // 收藏信封没有可靠 has_more，非空且有新条目才继续探测。
+      // 游标按服务端实际回了几条推进（不是按去重后的条数），这样重复项不会把下一页顶回原处。
+      this.favoriteOffset = offset + incoming.length;
+      // 收藏信封没有可靠 has_more：非空且有新条目才继续探测，空页即到底。
       this.hasMore = added > 0;
       if (next.length === 0) { this.managing = false; }
       this.resolveAvatars(context).catch(() => {});

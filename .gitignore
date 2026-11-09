@@ -1,0 +1,56 @@
+# 构建产物与依赖
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# 构建缓存与本地会话工作区
+/.cache/
+/.agents/
+
+# 本机签名材料
+*.p12
+*.cer
+*.csr
+*.p7b
+*.jks
+*.keystore
+
+# 安装包（Release 附件单独上传，不进入源码历史）
+*.hap
+*.hsp
+*.app
+
+# 根构建配置含本机签名；共享使用 build-profile.example.json5
+/build-profile.json5
+
+# 本机开发辅助产物
+/.dev-artifacts/
+/.codegenie/
+/_*
+
+# 本机文档、参考资料与项目规范，仅保留在本机
+/docs/
+/references/
+/AGENTS.md
+/BUILDING.md
+/贴吧.png
+
+# 发布暂存与临时取证
+/release-staging/
+/tools/device/out/
+/tools/verify/result.json
+/Typora_Hook_Log.txt
+/.local-apk-tools/
+/.tmp-jadx-avatar/
+/tmp-jadx-avatar/
+**/__pycache__/
+*.pyc

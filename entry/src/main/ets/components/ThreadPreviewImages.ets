@@ -11,8 +11,8 @@ import { ImageLayoutMode } from '../model/ImageLayout';
 import { ReadingDecodeSize, readingImageInfo } from '../model/PostImageLayout';
 import { ImageLayoutStore, imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import {
-  FeedImageTransform, modernFeedDecodeSize, modernFeedImageBox, modernFeedImageGap,
-  modernFeedImageTransform, modernFeedPreviewIndices, modernFeedTotalLabel
+  FeedImageTransform, modernFeedDecodeSize, modernFeedImageBox, modernFeedImageBoxForColumns,
+  modernFeedImageGap, modernFeedImageTransform, modernFeedPreviewIndices, modernFeedTotalLabel
 } from '../model/FeedImageLayout';
 
 /** 首页与吧内列表共享的帖子图片预览；按图片数量选择单图或多图布局。 */
@@ -228,8 +228,9 @@ struct ThreadPreviewImage {
 }
 
 /** 仅新版使用独立渲染器，旧版尺寸、横向滚动与回调保持原样。 */
+/** 首页方阵瓦片：等大方格 + 共享转场；评论多图也复用这套，见 ThreadDetail。 */
 @ComponentV2
-struct ModernThreadPreviewImage {
+export struct ModernThreadPreviewImage {
   @Local private sharedBindingEnabled: boolean = true;
   private imageTransition: ImageTransitionSource = new ImageTransitionSource((enabled: boolean): void => {
     this.sharedBindingEnabled = enabled;
@@ -239,8 +240,12 @@ struct ModernThreadPreviewImage {
   @Param index: number = 0;
   @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
   @Param total: number = 1;
+  /** 显式列数；0 = 按预览张数推导。正文方阵铺开全部图片时由调用方给出（4 张两列）。 */
+  @Param columns: number = 0;
   @Param contentWidth: number = 300;
   @Param density: number = 1;
+  /** 全部图片已经铺开时不必再用「共 N 张」收口（正文方格全量模式） */
+  @Param showTotalLabel: boolean = true;
   @Event onOpen: () => void = (): void => {};
   @Local flow: LowFlowStore = lowFlowStore;
   @Local loaded: boolean = false;
@@ -356,6 +361,9 @@ struct ModernThreadPreviewImage {
   }
 
   private frame(): FeedImageBox {
+    if (this.columns > 0) {
+      return modernFeedImageBoxForColumns(this.info(), this.contentWidth, this.columns, this.density);
+    }
     return modernFeedImageBox(this.info(), this.contentWidth, this.total, this.density);
   }
 
@@ -503,7 +511,7 @@ struct ModernThreadPreviewImage {
           Text('长图').fontSize(11).fontColor(Color.White)
             .backgroundColor('#88000000').borderRadius(5).padding(4).margin(8)
         }
-        if (modernFeedTotalLabel(this.total, this.index).length > 0) {
+        if (this.showTotalLabel && modernFeedTotalLabel(this.total, this.index).length > 0) {
           Row() {
             Text(modernFeedTotalLabel(this.total, this.index)).fontSize(11).fontColor(Color.White)
               .backgroundColor('#88000000').borderRadius(5).padding(4)

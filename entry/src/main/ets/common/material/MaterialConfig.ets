@@ -45,7 +45,9 @@ export enum MaterialSlot {
   /** 搜索历史、全站结果及吧内结果共用的整片官方沉浸顶栏。 */
   SEARCH_TOP_CONTINUOUS = 10,
   /** 吧页分类选中面，使用官方材质赋色。 */
-  FORUM_TAB_SELECTION = 11
+  FORUM_TAB_SELECTION = 11,
+  /** 首页悬浮发帖按钮：官方沉浸光感赋强调色，参考华为社区实心蓝面。 */
+  COMPOSE_BUTTON = 12
 }
 
 
@@ -59,6 +61,7 @@ export const MATERIAL_KEY_HDS_LEVEL: string = 'hdsLevel';
 export function defaultModeOf(slot: MaterialSlot): MaterialMode {
   switch (slot) {
     case MaterialSlot.BACK_BUTTON: return MaterialMode.ULTRA_THIN;
+    case MaterialSlot.COMPOSE_BUTTON: return MaterialMode.THIN;
     case MaterialSlot.SHEET:
     case MaterialSlot.REPLY_SHEET: return MaterialMode.THICK;
     case MaterialSlot.BOTTOM_FLOATING_BAR: return MaterialMode.REGULAR;

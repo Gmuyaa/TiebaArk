@@ -81,6 +81,7 @@ export struct ListFooter {
       PageState({ compact: true, loading: this.loading,
         message: this.loading ? '正在加载更多…' : (this.error.length > 0 ? this.error :
         (this.hasMore ? this.moreText : this.endText)),
+        // 只有失败时才给"重试"动作；正常分页由 onReachEnd 自动触发，不放可点入口。
         actionLabel: this.error.length > 0 ? '重试' : '',
         onAction: (): void => { this.onRetry(); } })
     }

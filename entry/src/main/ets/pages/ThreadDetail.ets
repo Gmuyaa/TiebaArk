@@ -33,11 +33,11 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-import { FrameCallback, LengthMetrics, promptAction, UIUtils, window } from '@kit.ArkUI';
+import { FrameCallback, LengthMetrics, promptAction, UIUtils, window, display } from '@kit.ArkUI';
 
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
-  ContentBlock, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
+  ContentBlock, ContentImage, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
   REPLY_EMOTICON_CODES, collectPreviewImageUrls, emojiCodeFromReplyToken, emojiImageUrl,
   formatThreadHeadTime, forumChipText, groupContentBlocks,
   isReplySortSupported, resolveForumName, subPostsHaveThreadAuthor, unsupportedSortTip
@@ -69,6 +69,10 @@ import { readingViewerIndex } from '../model/PostImageLayout';
 import { ImageLayoutMode } from '../model/ImageLayout';
 import { ImageLayoutStore, imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { ReplyItem } from '../components/ReplyItem';
+import { ModernThreadPreviewImage } from '../components/ThreadPreviewImages';
+import {
+  modernFeedColumns, modernFeedGapForColumns, modernFeedPreviewIndices
+} from '../model/FeedImageLayout';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadAuthorBadge } from '../components/ThreadAuthorBadge';
@@ -236,6 +240,8 @@ export struct ThreadDetailPage {
   @Local showReply: boolean = false;
 
   @Local screenWvp: number = 0;
+  /** 屏幕密度（px/vp），方阵瓦片按源图原始像素计算解码预算用 */
+  private screenDensity: number = 1;
   /** 回复弹窗句柄；0 表示未打开。页面销毁时关闭弹窗，避免其生命周期超出页面。 */
   private replyDialogId: number = 0;
   /** 表情态卡片使用固定屏幕位置，不随输入法开合移动。 */
@@ -297,6 +303,46 @@ export struct ThreadDetailPage {
   @Local navScrollOffset: number = 0;
   /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移 */
   private scroller: ListScroller = new ListScroller();
+  /** 自动补页的探测定时器；-1 表示当前没有排队中的探测 */
+  private atEndProbeTimer: number = -1;
+
+  /**
+   * 楼层列表变化后补一次"是否已停在末尾"的探测。
+   *
+   * 每页 10 层时，第一页有可能撑不满一屏，这时 List 不会触发 `onReachEnd`，
+   * 界面就停在底部不动了。数据落地后量一次滚动位置：确实在末尾且还有下一页，
+   * 就继续请求。用户还能往下滚时不动——请求时机仍然是"滑到底部"。
+   */
+  @Monitor('vm.visiblePosts', 'vm.hasMore')
+  onReplyListChanged(): void {
+    this.loadNextPageIfAtEnd();
+  }
+
+  private loadNextPageIfAtEnd(): void {
+    if (this.atEndProbeTimer >= 0 || !this.vm.hasMore || this.vm.isLoadingMore || this.vm.loading ||
+      this.vm.isRefreshing || this.vm.isSwitchingSort) {
+      return;
+    }
+    // 新楼层要等这一帧布局算完高度，否则量到的还是上一帧的位置
+    this.atEndProbeTimer = setTimeout((): void => {
+      this.atEndProbeTimer = -1;
+      if (!this.vm.hasMore || this.vm.isLoadingMore || this.vm.loading || this.vm.isRefreshing ||
+        this.vm.isSwitchingSort) {
+        return;
+      }
+      // 滚动器还没绑定到列表时会抛异常，这一帧就不判断了，等下一次数据变化
+      let atEnd: boolean = false;
+      try {
+        atEnd = this.scroller.isAtEnd();
+      } catch (err) {
+        return;
+      }
+      if (atEnd) {
+        void this.vm.loadMore(this.hostContext());
+      }
+    }, 120);
+  }
+
   @Local imageLayout: ImageLayoutStore = imageLayoutStore;
   /** 仅记当前内容的横向图集页码；弱键不延长已移除正文的生命周期。 */
   private galleryPages: WeakMap<ContentPiece[], Map<number, number>> = new WeakMap<ContentPiece[], Map<number, number>>();
@@ -474,13 +520,18 @@ export struct ThreadDetailPage {
       if (!this.commentsActive || !this.commentsJumpPending || this.vm.loading || this.vm.errorText.length > 0) { return; }
       this.commentsJumpPending = false;
       if (this.videoMode) { this.videoComments = true; }
-      else { this.scroller.scrollToIndex(this.vm.visiblePosts.length > 0 ? 1 : 0, false, ScrollAlign.START); }
+      else { this.scroller.scrollToIndex(this.vm.visiblePosts.length > 0 ? 2 : 0, false, ScrollAlign.START); }
     }));
   }
 
   aboutToDisappear(): void {
     ++this.keyboardWatchSeq;
     this.commentsActive = false;
+    // 离页后不再补页：探测回调哪怕排上了队也一并撤掉
+    if (this.atEndProbeTimer >= 0) {
+      clearTimeout(this.atEndProbeTimer);
+      this.atEndProbeTimer = -1;
+    }
     this.galleryPages = new WeakMap<ContentPiece[], Map<number, number>>();
     this.vm.dispose();
     void voicePlayback.stop();
@@ -535,6 +586,11 @@ export struct ThreadDetailPage {
         this.safeBottomVp = px2vp(area.bottomRect.height);
 
         this.screenWvp = px2vp(win.getWindowProperties().windowRect.width);
+        try {
+          this.screenDensity = display.getDefaultDisplaySync().densityPixels;
+        } catch (_) {
+          // 密度拿不到就用 1：只影响瓦片解码预算的精度，不影响布局
+        }
 
         this.keyboardAreaCb = (data: window.AvoidAreaOptions) => {
           if (data.type === window.AvoidAreaType.TYPE_KEYBOARD) {
@@ -1144,7 +1200,8 @@ export struct ThreadDetailPage {
     const posts: PostItem[] = this.vm.visiblePosts;
     for (let i: number = 0; i < posts.length; i++) {
       if (posts[i].pid === pid) {
-        this.scroller.scrollToIndex(i, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+        // 平铺后：0 = 主帖、1 = 回复排序栏、n>=1 的楼层在 n+1 的位置上。
+        this.scroller.scrollToIndex(i === 0 ? 0 : i + 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
         return;
       }
     }
@@ -1598,16 +1655,18 @@ export struct ThreadDetailPage {
     })
   }
 
-  /** 面板顶部锚点回复的正文：与主列表同一套富文本渲染 */
+  /** 面板顶部锚点回复的正文：与面板内楼中楼同一宽度口径，多图走方阵 */
   @Builder
   SheetAnchorBody() {
-    this.RichBody(this.anchorPost(this.subDetailPid), true);
+    this.RichPieces(this.anchorPost(this.subDetailPid).contents, COMMENT_BODY_SIZE, 24,
+      AppTheme.COMMENT_BODY, 9, true, true, true, this.sheetImageWidth());
   }
 
-  /** 面板里一条回复的正文 */
+  /** 面板里一条回复的正文：多图同样走方阵；宽度与面板内锚点卡一致 */
   @Builder
   SheetSubBody(sub: SubPostItem) {
-    this.RichPieces(this.subReplyPieces(sub), COMMENT_BODY_SIZE, 24, AppTheme.SUB_REPLY_BODY, 9, true, true);
+    this.RichPieces(this.subReplyPieces(sub), COMMENT_BODY_SIZE, 24, AppTheme.SUB_REPLY_BODY, 9, true, true,
+      true, this.sheetImageWidth())
   }
 
   /** 将服务端已有的回复对象前缀放回正文首行，沿用正文的图文混排。 */
@@ -2261,64 +2320,55 @@ export struct ThreadDetailPage {
         }
         .backgroundColor(Color.Transparent)
 
-        ListItemGroup() {
-          // 只创建视口与预加载区内的回复；主帖仍在组外，保持跳层的组内下标。
-          Repeat<PostItem>(this.vm.visiblePosts.slice(1))
-            .each((row: RepeatItem<PostItem>) => {
+        // 楼层直接挂在 List 下（与官方分页示例同构）：`ListItemGroup` 里的追加走的是
+        // 分组布局，触底补页时整组重排；平铺后只插入新的 ListItem，已有项位置不动。
+        LazyForEach(this.vm.floors, (row: PostItem) => {
               ListItem() {
-                // 楼中楼预览按需拉取：楼层进入视口才发请求，一层只拉一次
+                // 楼中楼预览由 VM 跟这一页楼层一起预取，楼层显示时预览已在路上
                 Column() {
                   ReplyItem({
                     tid: this.vm.tid,
                     threadTitle: this.vm.detail.title,
-                    item: this.vm.postByPid(row.item.pid) ?? row.item,
-                    isThreadAuthor: row.item.author.id === this.vm.detail.author.id,
-                    agreeState: this.vm.agreeState(row.item.pid),
-                    canDelete: this.vm.canDeletePost(this.vm.postByPid(row.item.pid) ?? row.item),
-                    canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(row.item.pid, sub),
+                    item: this.vm.postByPid(row.pid) ?? row,
+                    isThreadAuthor: row.author.id === this.vm.detail.author.id,
+                    agreeState: this.vm.agreeState(row.pid),
+                    canDelete: this.vm.canDeletePost(this.vm.postByPid(row.pid) ?? row),
+                    canDeleteSub: (sub: SubPostItem): boolean => this.vm.canDeleteSubPost(row.pid, sub),
                     deletePending: this.vm.deletePending,
                     onDelete: (): void => {
-                      void this.confirmDeleteComment(this.vm.postByPid(row.item.pid) ?? row.item);
+                      void this.confirmDeleteComment(this.vm.postByPid(row.pid) ?? row);
                     },
                     onDeleteSub: (sub: SubPostItem): void => {
-                      void this.confirmDeleteComment(this.vm.postByPid(row.item.pid) ?? row.item, sub);
+                      void this.confirmDeleteComment(this.vm.postByPid(row.pid) ?? row, sub);
                     },
-                    subPosts: this.previewSubPosts(row.item),
-                    subTotalCount: this.subPreviewCount(row.item),
-                    subLoading: this.vm.subState(row.item.pid).loading,
-                    subErrorText: this.vm.subState(row.item.pid).errorText,
-                    hasAuthorReply: this.hasAuthorReply(row.item),
+                    subPosts: this.previewSubPosts(row),
+                    subTotalCount: this.subPreviewCount(row),
+                    subLoading: this.vm.subState(row.pid).loading,
+                    subErrorText: this.vm.subState(row.pid).errorText,
+                    hasAuthorReply: this.hasAuthorReply(row),
                     bodyBuilder: (): void => {
-                      this.RichBody(row.item, true);
+                      this.RichBody(row, true);
                     },
                     onToggleLike: (): void => {
-                      this.toggleLike(row.item);
+                      this.toggleLike(row);
                     },
                     onReply: (): void => {
-                      this.openReplyBox(row.item.pid);
+                      this.openReplyBox(row.pid);
                     },
                     onOpenSubDetail: (): void => {
-                      this.openSubDetailByPid(row.item.pid);
+                      this.openSubDetailByPid(row.pid);
                     },
                     onRetrySubPosts: (): void => {
-                      this.vm.retrySubPosts(this.hostContext(), row.item.pid, this.vm.detail.author.id);
+                      this.vm.retrySubPosts(this.hostContext(), row.pid, this.vm.detail.author.id);
                     },
                     onViewImage: (url: string): void => {
                       this.openPreviewImage(url);
                     }
                   })
                 }
-                .onVisibleAreaChange([0.1, 1.0], (isVisible: boolean) => {
-                  if (isVisible) {
-                    this.vm.ensureSubPostPreview(this.hostContext(), row.item.pid,
-                      this.vm.detail.author.id);
-                  }
-                })
               }
               .backgroundColor(Color.Transparent)
-            })
-            .key((item: PostItem): string => `${item.pid}`)
-            .virtualScroll({ reusable: false })
+            }, (row: PostItem): string => `${row.pid}`)
 
           if (this.vm.visiblePosts.length <= 1 && !this.vm.loading && !this.vm.isSwitchingSort) {
             ListItem() {
@@ -2331,20 +2381,31 @@ export struct ThreadDetailPage {
             this.Footer()
           }
           .backgroundColor(Color.Transparent)
-        }
-        .backgroundColor(Color.Transparent)
       }
       .width('100%')
       .layoutWeight(1)
       .padding({ top: this.videoMode ? 0 : this.titleBarH })
       .cachedCount(2)
+      /*
+       * 必须开：触底追加一页后，列表默认会跟随到新的底部，把当前读的位置往上顶。
+       * 实测关掉后分页位移从 -73～0 恶化到 +478～+1379（正数就是内容被顶走）。
+       */
+      .maintainVisibleContentPosition(true)
       .clip(false)
       .backgroundColor(Color.Transparent)
       .divider({ strokeWidth: 0 })
-      .onAppear(() => { this.requestCommentsJump(); })
+      .onAppear(() => {
+        this.requestCommentsJump();
+      })
 
        .scrollBar(BarState.Off)
        .onReachEnd(() => {
+        /*
+         * 先挪开 1px 再请求：`maintainVisibleContentPosition` 只管"可视区外插入时保持
+         * 锚点"，而列表**精确贴底**时还有一套"跟随到新底部"的逻辑，属性拦不住。
+         * 脱离贴底后，追加按当前偏移插入，新楼层留在下面。
+         */
+        this.scroller.scrollBy(0, -1);
         this.vm.loadMore(this.hostContext());
       })
     }.refreshOffset(PULL_REFRESH_OFFSET)
@@ -2396,10 +2457,15 @@ export struct ThreadDetailPage {
           VideoPlayer({ video: this.vm.detail.video,
             onFullscreenChange: (shown: boolean): void => { this.videoFullscreen = shown; } })
         }
+        // 正文多图走等大方格（gridImages = true），且铺开全部图片（gridAll = true）。
+        // 单图走正文几何（commentPreview = false）：宽度撑满，高度超约一屏就顶部裁切
+        // 并挂「长图」角标——以前这里传 true，正文单图被按评论口径压在 200vp 以内，
+        // 一张长截图只剩几十 vp 宽的细条。
         this.RichPieces(this.videoMode ? item.contents.filter((piece: ContentPiece): boolean =>
           !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents, visualThemeStore.isPaper ? PaperLayout.READING_BODY : POST_BODY_SIZE,
           visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24, AppTheme.TEXT_MAIN,
-          visualThemeStore.isPaper ? PaperLayout.READING_BLOCK_GAP : 9, true)
+          visualThemeStore.isPaper ? PaperLayout.READING_BLOCK_GAP : 9, true, false, true,
+          this.mainImageWidth(), true)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -2474,32 +2540,69 @@ export struct ThreadDetailPage {
       })
   }
 
-  /** 评论及面板锚点正文，图片使用紧凑预览；主帖正文由 ThreadIntro 单独传入。 */
+  /**
+   * 评论及面板锚点正文，图片使用紧凑预览；主帖正文由 ThreadIntro 单独传入。
+   *
+   * `inCommentList` 只在真正的一级评论列表里为 true：那里图片宽度可以由
+   * 屏宽推出（评论右侧省略头像列），多图也能按方阵显示。详情面板的宽度
+   * 与列表不同，由 `SheetSubBody`/`SheetAnchorBody` 自行传 `imageWidth`。
+   */
   @Builder
-  RichBody(item: PostItem, mainList: boolean = false) {
-    this.RichPieces(item.contents, COMMENT_BODY_SIZE, 24, AppTheme.COMMENT_BODY, 9, mainList, true)
+  RichBody(item: PostItem, mainList: boolean = false, inCommentList: boolean = true) {
+    this.RichPieces(item.contents, COMMENT_BODY_SIZE, 24, AppTheme.COMMENT_BODY, 9, mainList, true,
+      inCommentList, inCommentList ? this.commentImageWidth() : 0)
+  }
+
+  /** 主帖正文图片可用宽度：页面左右各 16vp */
+  private mainImageWidth(): number {
+    return this.screenWvp > 0 ? this.screenWvp - 32 : 0;
+  }
+
+  /** 评论正文图片可用宽度：左右各 16vp + 头像 36vp + 头像与正文间距 12vp */
+  private commentImageWidth(): number {
+    return this.screenWvp > 0 ? this.screenWvp - 80 : 0;
+  }
+
+  /**
+   * 方格内容宽：调用方给的内容宽优先，没给才按评论口径兜底。
+   *
+   * 主帖正文没有头像列（可用宽 = 屏宽 − 32），评论有（屏宽 − 80）。
+   * 方格若一律按评论口径算，主帖那一行会窄 48vp、右边空出一条。
+   */
+  private gridContentWidth(widthHint: number): number {
+    if (Number.isFinite(widthHint) && widthHint > 0) { return widthHint; }
+    return this.commentImageWidth();
+  }
+
+  /** 详情面板内图片可用宽度：面板左右各 14+16vp + 头像 32vp + 间距 10vp */
+  private sheetImageWidth(): number {
+    return this.screenWvp > 0 ? this.screenWvp - 86 : 0;
   }
 
   /** 富文本片段渲染：文本块流式排布，图片块独占一行 */
   @Builder
   RichPieces(pieces: ContentPiece[], fontSize: number = POST_BODY_SIZE, lineHeight: number = 24,
     textColor: ResourceColor = AppTheme.TEXT_MAIN, blockGap: number = 9, mainList: boolean = false,
-    commentPreview: boolean = false) {
+    commentPreview: boolean = false, gridImages: boolean = false, imageWidth: number = 0,
+    gridAll: boolean = false) {
     ImageTransitionGalleryScope({ blockGap: blockGap,
       content: (gallery: ImageTransitionGallery): void => {
-        this.RichPiecesBlocks(pieces, fontSize, lineHeight, textColor, mainList, commentPreview, gallery);
+        this.RichPiecesBlocks(pieces, fontSize, lineHeight, textColor, mainList, commentPreview, gallery,
+          gridImages, imageWidth, gridAll);
       } })
   }
 
   /** 图片被文字拆成不同区段时，仍共享当前渲染实例的完整图库。 */
   @Builder
   RichPiecesBlocks(pieces: ContentPiece[], fontSize: number, lineHeight: number, textColor: ResourceColor,
-    mainList: boolean, commentPreview: boolean, gallery: ImageTransitionGallery) {
+    mainList: boolean, commentPreview: boolean, gallery: ImageTransitionGallery,
+    gridImages: boolean = false, imageWidth: number = 0, gridAll: boolean = false) {
     ForEach(groupContentBlocks(pieces), (block: ContentBlock, index: number) => {
       if (block.isVoice && block.voice !== undefined) {
         VoicePlayer({ voice: block.voice })
       } else if (block.isImage) {
-        this.ImageBlock(block, collectPreviewImageUrls(pieces), pieces, mainList, commentPreview, gallery)
+        this.ImageBlock(block, collectPreviewImageUrls(pieces), pieces, mainList, commentPreview, gallery,
+          gridImages, imageWidth, gridAll)
       } else {
         this.TextBlock(block, fontSize, lineHeight, textColor)
       }
@@ -2526,12 +2629,19 @@ export struct ThreadDetailPage {
   /** 主帖、评论及楼中楼按图片排布偏好切换，旧版保留原有图集。 */
   @Builder
   ImageBlock(block: ContentBlock, imageUrls: string[], pieces: ContentPiece[], mainList: boolean = false,
-    commentPreview: boolean = false, gallery: ImageTransitionGallery | undefined = undefined) {
-    if (mainList && this.imageLayout.mode === ImageLayoutMode.MODERN) {
+    commentPreview: boolean = false, gallery: ImageTransitionGallery | undefined = undefined,
+    gridImages: boolean = false, imageWidth: number = 0, gridAll: boolean = false) {
+    if (gridImages && block.images.length >= 2) {
+      // 多图一律等大方格：高度不随图片比例变化，连发几张照片也不会把首楼撑成长龙。
+      // 格子宽度取调用方传来的内容宽——主帖没有头像列，不能按评论口径留白。
+      // 主帖正文（gridAll）铺开全部图片，评论只露前三张并用「共 N 张」收口。
+      this.CommentImageGrid(block, imageUrls, pieces, gallery, imageWidth, gridAll);
+    } else if (mainList && this.imageLayout.mode === ImageLayoutMode.MODERN) {
       PostImageFlow({
         images: block.images, startIndex: block.imageStartIndex,
         viewerIndices: this.blockViewerIndices(pieces, block), transitionGallery: gallery,
         commentPreview: commentPreview,
+        contentWidthHint: imageWidth,
         onOpenImage: (globalIndex: number): void => {
           const index: number = readingViewerIndex(pieces, globalIndex);
           if (index >= 0) { this.openGalleryImage(imageUrls, index); }
@@ -2543,6 +2653,7 @@ export struct ThreadDetailPage {
         startIndex: block.imageStartIndex,
         viewerIndices: this.blockViewerIndices(pieces, block), transitionGallery: gallery,
         initialPage: this.galleryPage(pieces, block.imageStartIndex),
+        widthHint: imageWidth,
         onPageChange: (page: number): void => {
           this.rememberGalleryPage(pieces, block.imageStartIndex, page);
         },
@@ -2552,6 +2663,120 @@ export struct ThreadDetailPage {
         }
       })
     }
+  }
+
+  /**
+   * 内容多图方阵，两个入口共用一套瓦片：
+   *
+   * - 主帖正文（`all`）：铺开**全部**图片，三列等大方格自动换行，最后一行不满三张时左对齐；
+   *   图都在眼前了，就不再挂「共 N 张」角标。
+   * - 评论（默认）：只露前三张，第三张右下角标总数。
+   *
+   * 瓦片直接复用首页的 `ModernThreadPreviewImage`，转场链路也与首页一致：
+   * 瓦片 `index` 用**查看器序号**注册进 gallery（首页注册的是卡片相对下标，
+   * 与查看器 initialIndex 的换算在 `openFeedImages` 的 URLs 顺序上完成），
+   * 这里 viewers 序号就是查看器页码本身，注册键与翻页后 `gallery.prepare`
+   * 查询键天然一致，切图再返回也能重新配对，不会退化成淡入淡出。
+   * 每格高度 = (行宽 − (列数−1)×间距) / 列数，首帧即定，不依赖图片实测尺寸；
+   * 列数按可见张数走 `modernFeedColumns`：2 张、4 张两列（4 张排 2+2，不留孤儿格），
+   * 3、5~9 张三列，9 张正好 3×3。
+   */
+  @Builder
+  CommentImageGrid(block: ContentBlock, imageUrls: string[], pieces: ContentPiece[],
+    gallery: ImageTransitionGallery | undefined = undefined, widthHint: number = 0,
+    all: boolean = false) {
+    if (all) {
+      Flex({ wrap: FlexWrap.Wrap,
+        space: {
+          main: LengthMetrics.vp(this.gridGap(widthHint, block.images.length, true)),
+          cross: LengthMetrics.vp(this.gridGap(widthHint, block.images.length, true))
+        } }) {
+        ForEach(this.gridIndices(block.images.length, true), (i: number) => {
+          ModernThreadPreviewImage({
+            url: this.gridImageSource(block, i),
+            origin: this.gridImageOrigin(block, i),
+            index: this.gridViewerIndex(pieces, block, i),
+            total: block.images.length,
+            columns: this.gridColumns(block.images.length, true),
+            contentWidth: this.gridContentWidth(widthHint),
+            density: this.screenDensity,
+            transitionGallery: gallery,
+            showTotalLabel: false,
+            onOpen: (): void => {
+              const viewer: number = this.gridViewerIndex(pieces, block, i);
+              if (viewer >= 0) { this.openGalleryImage(imageUrls, viewer); }
+            }
+          })
+        }, (i: number) => `${i}:${this.gridImageSource(block, i)}`)
+      }
+      .width('100%')
+    } else {
+      Row({ space: this.gridGap(widthHint, block.images.length, false) }) {
+        ForEach(modernFeedPreviewIndices(block.images.length), (i: number) => {
+          ModernThreadPreviewImage({
+            url: this.gridImageSource(block, i),
+            origin: this.gridImageOrigin(block, i),
+            index: this.gridViewerIndex(pieces, block, i),
+            total: block.images.length,
+            contentWidth: this.gridContentWidth(widthHint),
+            density: this.screenDensity,
+            transitionGallery: gallery,
+            onOpen: (): void => {
+              const index: number = this.gridViewerIndex(pieces, block, i);
+              if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+            }
+          })
+        }, (i: number) => `${i}:${this.gridImageSource(block, i)}`)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Top)
+    }
+  }
+
+  /** 图格间距：与首页卡片同一口径，按内容宽和列数收缩 */
+  private gridGap(widthHint: number, total: number, all: boolean): number {
+    return modernFeedGapForColumns(this.gridContentWidth(widthHint), this.gridColumns(total, all));
+  }
+
+  /** 方阵列数：全量模式看真实张数，收口模式看实际露出的张数 */
+  private gridColumns(total: number, all: boolean): number {
+    return modernFeedColumns(all ? total : modernFeedPreviewIndices(total).length);
+  }
+
+  /** 方阵下标：全量模式铺开所有图，收口模式只给前 3 张预览 */
+  private gridIndices(total: number, all: boolean): number[] {
+    if (!all) { return modernFeedPreviewIndices(total); }
+    const indices: number[] = [];
+    for (let index: number = 0; index < total; index++) { indices.push(index); }
+    return indices;
+  }
+
+  /** 方阵里第 i 张的展示地址：活动图优先，缺失时退回原图 */
+  private gridImageSource(block: ContentBlock, index: number): string {
+    if (index < 0 || index >= block.images.length) {
+      return '';
+    }
+    const image: ContentImage = block.images[index];
+    return image.imageUrl.length > 0 ? image.imageUrl : image.originImageUrl;
+  }
+
+  /**
+   * 方阵里第 i 张的原图地址（转场身份与查看器配对用）。
+   *
+   * 与 `openGalleryImage` 的 `viewerUrls` 口径一致：原图优先、缺失退展示图。
+   * 瓦片侧空 origin 会跳过返回注册，查看器就找不到返回目标。
+   */
+  private gridImageOrigin(block: ContentBlock, index: number): string {
+    if (index < 0 || index >= block.images.length) {
+      return '';
+    }
+    const image: ContentImage = block.images[index];
+    return image.originImageUrl.length > 0 ? image.originImageUrl : image.imageUrl;
+  }
+
+  /** 方阵里第 i 张在整篇内容图片序列里的查看器下标；无效返回 -1 */
+  private gridViewerIndex(pieces: ContentPiece[], block: ContentBlock, index: number): number {
+    return readingViewerIndex(pieces, block.imageStartIndex + index);
   }
 
   private blockViewerIndices(pieces: ContentPiece[], block: ContentBlock): number[] {
@@ -2728,7 +2953,8 @@ export struct ThreadDetailPage {
         .width('100%')
       }
 
-      this.RichPieces(sub.contents, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT, AppTheme.SUB_REPLY_BODY, 9, true, true)
+      this.RichPieces(sub.contents, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT, AppTheme.SUB_REPLY_BODY, 9,
+        true, true, true, this.commentImageWidth())
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -2817,7 +3043,7 @@ export struct ThreadDetailPage {
     } else if (index === 1) {
       this.PopupMenuItem($r('sys.symbol.message'), `${this.displayedReplyCount()}`, 'comments', '查看评论', (): void => {
         this.popupMenuShow = false;
-        this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+        this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
       });
     } else if (index === 2) {
       this.PopupMenuItem(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
@@ -3057,7 +3283,7 @@ export struct ThreadDetailPage {
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
 
-      this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+      this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
     })
   }
 
@@ -3089,11 +3315,14 @@ export struct ThreadDetailPage {
         PageState({ compact: true, message: '当前显示定位回复', actionLabel: '查看全部回复',
           onAction: (): void => {
             this.vm.load(this.hostContext(), this.vm.tid).then(() => {
-              this.scroller.scrollToIndex(1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+              this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
             });
           } })
       } else {
+        // moreText 让"还有下一页"在底部有常驻提示：滑到底先看到"上拉加载更多"，
+        // 请求发出后原位换成"正在加载更多…"，不会整块跳出来
         ListFooter({ loading: this.vm.isLoadingMore, error: this.vm.errorText, hasMore: this.vm.hasMore,
+          moreText: '上拉加载更多',
           endText: this.vm.posts.length > 0 ? '已经到底了' : '',
           onRetry: (): void => { void this.vm.loadMore(this.hostContext()); } })
       }

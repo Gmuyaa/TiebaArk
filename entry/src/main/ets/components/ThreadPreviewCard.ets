@@ -12,6 +12,7 @@ import { TaggedThreadText } from './TaggedThreadText';
 import { materialManager } from '../common/material/MaterialManager';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { popupMotion } from '../common/appearance/MotionPolicy';
+import { hdsEffect } from '@kit.UIDesignKit';
 
 /** 标准帖子卡：页面传入展示值与动作，组件不发请求、不执行导航。 */
 @ComponentV2
@@ -38,6 +39,15 @@ export struct ThreadPreviewCard {
   @Param isTop: boolean = false;
   @Param isGood: boolean = false;
   @Param isHelp: boolean = false;
+  /**
+   * 点光源**受光**类型（`PointLightIlluminatedType`）。默认 NONE = 不受光。
+   *
+   * 官方语义：受光端只写 `illuminatedType`，光源由别处的 `pointLight({ options })` 提供，
+   * 光会照到周围标记为可受光的组件上。默认值必须是 NONE——本组件有 6 处调用，
+   * 只有首页试验入口显式开启，其他页面行为不变。
+   * 约束：受光组件若设置了 border 的颜色和宽度，会覆盖掉点光源效果（见 build 末尾那条 border）。
+   */
+  @Param litType: hdsEffect.PointLightIlluminatedType = hdsEffect.PointLightIlluminatedType.NONE;
   @Local actionState: ThreadCardActionState = new ThreadCardActionState();
   @Event onToggleLike: (state: ThreadCardActionState) => void = (_state: ThreadCardActionState): void => {};
   @Event onOpenComments: () => void = (): void => {};
@@ -282,5 +292,7 @@ export struct ThreadPreviewCard {
       .padding({ top: ThreadCardLayout.TOP_PADDING, bottom: ThreadCardLayout.BOTTOM_PADDING })
       .borderRadius(ThreadCardLayout.RADIUS).backgroundColor(AppTheme.CARD)
       .border({ width: { bottom: visualThemeStore.isPaper ? 0.5 : 0 }, color: AppTheme.DIVIDER })
+      // 受光端：只声明"可以被照亮"，光源在发帖按钮上。
+      .visualEffect(new hdsEffect.HdsEffectBuilder().pointLight({ illuminatedType: this.litType }).buildEffect())
   }
 }

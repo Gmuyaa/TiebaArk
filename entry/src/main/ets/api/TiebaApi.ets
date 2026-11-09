@@ -1390,8 +1390,18 @@ export class TiebaApi {
     return response;
   }
 
+  /**
+   * 我的收藏列表（`POST /c/f/post/threadstore`，旧版 form + 客户端签名）。
+   *
+   * **翻页游标是 `offset`（条目偏移，从 0 起），不是 `pn`**——2026-11-08 真机探针
+   * （`entry/src/ohosTest/ets/test/StorePageProbe.test.ets`）实测：
+   * `pn=0/1/2/3` 与 `page_no`/`start`/`last_tid`/`max_tid`/`st_type` **全部返回同一批首 20 条**
+   * （页间交集 20/20），只有 `offset=20` 恰好接在第 1 页之后（交集 0）；`rn` 有效（rn=40/50
+   * 分别回 40/50 条）。旧实现发 `pn`，服务端忽略它 → 每次都是第 1 页 → 收藏永远只有 20 条。
+   * 别再改回 `pn`。
+   */
   async fetchStoredThreads(device: TiebaDevice, session: TiebaSession, uid: number,
-    page: number, pageSize: number): Promise<StoredThreadsResponse> {
+    offset: number, pageSize: number): Promise<StoredThreadsResponse> {
     const response: StoredThreadsResponse = new StoredThreadsResponse();
     if (!session.hasBduss()) {
       response.failLocal('未登录，无法获取收藏');
@@ -1401,7 +1411,7 @@ export class TiebaApi {
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('user_id', String(uid)));
-    params.push(new SignParam('pn', String(page)));
+    params.push(new SignParam('offset', String(offset)));
     params.push(new SignParam('rn', String(pageSize)));
     const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
     const transport: HttpResult = await client.postForm(
@@ -1719,6 +1729,12 @@ export class TiebaApi {
     const serverSort: number = onlyAuthor ? ReplySortType.ASC : sortType;
     params.push(new SignParam('r', String(serverSort)));
     params.push(new SignParam('lz', onlyAuthor ? '1' : '0'));
+    /*
+     * 诊断用：按官方 protobuf `DataReq` 的 with_floor/floor_rn 语义，试着让服务端
+     * 随楼层下发前几条楼中楼。若 JSON 通道也认这两个参数，就不用走 protobuf 解析。
+     */
+    params.push(new SignParam('with_floor', '1'));
+    params.push(new SignParam('floor_rn', '5'));
 
     const text: string | undefined = await this.postJsonText(client, '/c/f/pb/page', params, response);
     if (text === undefined) {

@@ -135,6 +135,8 @@ struct ZoomableImagePage {
   private imageLoadEpoch: number = 0;
   private panBaseX: number = 0;
   private panBaseY: number = 0;
+  /** 用户拖过图片后，加载完成不再自动把长图拉回顶部。 */
+  private panTouched: boolean = false;
 
   aboutToAppear(): void {
     this.pageActive = true;
@@ -159,8 +161,7 @@ struct ZoomableImagePage {
 
   private readReturnState(): ImageReturnPageState {
     const state: ImageReturnPageState = new ImageReturnPageState();
-    state.atRest = this.pageActive && !this.zoomAnimating && this.zoomScale === MIN_SCALE &&
-      this.contentAspectMatchesSource();
+    state.atRest = this.pageActive && this.isAtRest();
     state.ready = this.loadState === ImageLoadState.SUCCESS && this.primaryImageVisible();
     const width: number = this.displayedSourceWidth();
     const height: number = this.displayedSourceHeight();
@@ -174,6 +175,7 @@ struct ZoomableImagePage {
     this.zoomScale = MIN_SCALE;
     this.panX = 0;
     this.panY = 0;
+    this.panTouched = false;
     this.loadState = ImageLoadState.LOADING;
     this.retryCount = 0;
     this.sourceWidth = 0;
@@ -296,6 +298,9 @@ struct ZoomableImagePage {
     result.height = height;
     const ratio: number = this.contentAspectRatio();
     if (ratio > 0) {
+      // 整张图缩进屏幕：长图打开时是全貌（上下留白），不是整宽铺开。
+      // 这样共享元素从正文的裁切窗口"收"成整图，方向和看图习惯一致；
+      // 要读文字再双击放大——放大后才有纵向拖动。
       if (width / height > ratio) {
         result.width = height * ratio;
       } else {
@@ -333,6 +338,8 @@ struct ZoomableImagePage {
 
   private onPreviewHoldChanged(_propertyName: string): void {
     if (!this.canUpdatePage()) { return; }
+    // 共享转场结束后才把长图挪到顶部，避免动画中途被平移打断。
+    if (!this.holdTransitionPreview) { this.applyInitialPan(); }
     this.clampOffsets();
     this.reportReturnEligibility();
   }
@@ -473,13 +480,40 @@ struct ZoomableImagePage {
     this.panY = Math.max(-limitY, Math.min(limitY, this.panY));
   }
 
+  /** 图片比容器高：宽度拟合后纵向溢出，需要靠拖动阅读。 */
+  private verticalOverflow(): boolean {
+    return this.offsetLimitY() > 0.5;
+  }
+
+  /** 允许单指拖动：已放大，或者长图在 1× 下本来就比屏幕高。 */
+  private panAllowed(): boolean {
+    return this.zoomScale > MIN_SCALE || this.verticalOverflow();
+  }
+
+  /** 1× 下的静息位置：长图停在顶部（图片顶对齐屏幕顶），普通图居中。 */
+  private restPanY(): number {
+    return this.zoomScale === MIN_SCALE && this.verticalOverflow() ? -this.offsetLimitY() : 0;
+  }
+
+  private isAtRest(): boolean {
+    return !this.zoomAnimating && this.zoomScale === MIN_SCALE && this.contentAspectMatchesSource() &&
+      Math.abs(this.panX) <= 1 && Math.abs(this.panY - this.restPanY()) <= 1;
+  }
+
+  /** 图片加载完、容器尺寸确定后把长图从中间拉到顶部；用户拖过就不再自动回位。 */
+  private applyInitialPan(): void {
+    if (this.holdTransitionPreview || this.panTouched || this.zoomScale > MIN_SCALE) { return; }
+    this.panX = 0;
+    this.panY = this.restPanY();
+  }
+
   private setScale(value: number): void {
     if (!this.canUpdatePage()) { return; }
     const next: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
     this.zoomScale = next;
     if (next === MIN_SCALE) {
       this.panX = 0;
-      this.panY = 0;
+      this.panY = this.restPanY();
     } else {
       this.clampOffsets();
     }
@@ -488,8 +522,7 @@ struct ZoomableImagePage {
 
   private reportReturnEligibility(): void {
     if (this.canUpdatePage()) {
-      this.onReturnEligibility(this.index, !this.zoomAnimating && this.zoomScale === MIN_SCALE &&
-        this.contentAspectMatchesSource());
+      this.onReturnEligibility(this.index, this.isAtRest());
     }
   }
 
@@ -512,8 +545,33 @@ struct ZoomableImagePage {
       this.setScale(target);
       if (target === MIN_SCALE) {
         this.panX = 0;
-        this.panY = 0;
+        this.panY = this.restPanY();
       }
+    });
+  }
+
+  /**
+   * 退出前先把长图拉回顶部：正文裁切态展示的是图片顶部，
+   * 若停在滚动中段直接反向转场，起点内容会和落点对不上、跳一下。
+   */
+  private closeWithTopReset(): void {
+    if (!this.canUpdatePage()) { return; }
+    if (Math.abs(this.panY - this.restPanY()) <= 1) {
+      this.onTapImage();
+      return;
+    }
+    const epoch: number = ++this.zoomAnimationEpoch;
+    this.zoomAnimating = true;
+    this.reportReturnEligibility();
+    this.getUIContext().animateTo({ duration: ANIMATION_DURATION,
+      onFinish: (): void => {
+        if (!this.canUpdatePage() || epoch !== this.zoomAnimationEpoch) { return; }
+        this.zoomAnimating = false;
+        this.reportReturnEligibility();
+        this.onTapImage();
+      } }, (): void => {
+      this.panX = 0;
+      this.panY = this.restPanY();
     });
   }
 
@@ -560,6 +618,7 @@ struct ZoomableImagePage {
             this.onImageDecoded(this.index, width, height);
           }
           this.loadState = ImageLoadState.SUCCESS;
+          this.applyInitialPan();
           this.clampOffsets();
           this.reportReturnEligibility();
         });
@@ -583,24 +642,38 @@ struct ZoomableImagePage {
 
   @Builder
   private PreviewImage() {
-    Image(this.displaySource())
-      .objectFit(ImageFit.Contain)
-      // 全屏缩放优先保留边缘细节；列表缩略图继续使用默认插值以控制开销。
-      .interpolation(this.zoomScale > MIN_SCALE ? ImageInterpolation.High : ImageInterpolation.Medium)
-      .width('100%')
-      .height('100%')
-      .scale({ x: this.zoomScale, y: this.zoomScale })
-      .translate({ x: this.panX, y: this.panY })
-      // 同 URI 始终显示唯一图片；异 URI 等开场结束且原图成功后才交接。
-      .opacity(this.primaryImageVisible() ? 1 : 0)
-      .onComplete(this.completeHandler(this.displaySource(), this.imageLoadEpoch))
-      .onError(this.errorHandler(this.displaySource(), this.imageLoadEpoch))
+    if (this.contentAspectRatio() > 0) {
+      // 图片节点按原图比例排（宽度撑满、高度自己长）：转场中共享框的宽高是各自插值的，
+      // 若图片固定 100%×100% 再 Contain，就会在框变宽的那些帧里露出左右的空白/拉伸画面。
+      Image(this.displaySource())
+        .objectFit(ImageFit.Contain)
+        .interpolation(this.zoomScale > MIN_SCALE ? ImageInterpolation.High : ImageInterpolation.Medium)
+        .width('100%')
+        .aspectRatio(this.contentAspectRatio())
+        .scale({ x: this.zoomScale, y: this.zoomScale })
+        .translate({ x: this.panX, y: this.panY })
+        .opacity(this.primaryImageVisible() ? 1 : 0)
+        .onComplete(this.completeHandler(this.displaySource(), this.imageLoadEpoch))
+        .onError(this.errorHandler(this.displaySource(), this.imageLoadEpoch))
+    } else {
+      Image(this.displaySource())
+        .objectFit(ImageFit.Contain)
+        .interpolation(this.zoomScale > MIN_SCALE ? ImageInterpolation.High : ImageInterpolation.Medium)
+        .width('100%')
+        .height('100%')
+        .scale({ x: this.zoomScale, y: this.zoomScale })
+        .translate({ x: this.panX, y: this.panY })
+        .opacity(this.primaryImageVisible() ? 1 : 0)
+        .onComplete(this.completeHandler(this.displaySource(), this.imageLoadEpoch))
+        .onError(this.errorHandler(this.displaySource(), this.imageLoadEpoch))
+    }
   }
 
   @Builder
   /** 缩放始终使用同一棵图片子树，跨过1倍时不销毁/重建Image。 */
   private InteractiveImage() {
-    Stack() {
+    // 顶部对齐：转场中图片比共享框高时，露出的必须是图片顶部。
+    Stack({ alignContent: Alignment.Top }) {
       this.PreviewImage()
     }
     .width('100%')
@@ -672,22 +745,27 @@ struct ZoomableImagePage {
           .width(this.imageFrameWidth())
           .height(this.imageFrameHeight())
           .geometryTransition(this.sharedGeometryId())
-          .renderFit(RenderFit.RESIZE_FILL)
+          // 保持比例、贴左上：共享框在转场里宽高各自插值，RESIZE_FILL 会把画面拉伸，
+          // 侧边空白处就会出现"被裁过的图"，动画结束后才消失。
+          .renderFit(RenderFit.TOP_LEFT)
           .clip(this.imageFrameClipped())
           .transition(this.imageContentTransition())
         }
         .width('100%').height('100%')
         // 保留原来的子层 Pan 与父层 Pinch/Tap 仲裁，触摸区不随窄图片缩小。
         .gesture(
-          PanGesture({ fingers: 1, distance: 5 })
+          PanGesture({ fingers: 1, distance: 5,
+            // 1× 长图只吃纵向拖动，横向留给 Swiper 翻页；放大后两个方向都归图片。
+            direction: this.zoomScale > MIN_SCALE ? PanDirection.All : PanDirection.Vertical })
             .tag('image-zoom-pan')
             .onActionStart(() => {
               if (!this.canUpdatePage()) { return; }
+              this.panTouched = true;
               this.panBaseX = this.panX;
               this.panBaseY = this.panY;
             })
             .onActionUpdate((event: GestureEvent) => {
-              if (!this.canUpdatePage() || this.zoomScale <= MIN_SCALE) { return; }
+              if (!this.canUpdatePage() || !this.panAllowed()) { return; }
               this.panX = this.panBaseX + event.offsetX;
               this.panY = this.panBaseY + event.offsetY;
               this.clampOffsets();
@@ -697,7 +775,7 @@ struct ZoomableImagePage {
         .parallelGesture(LongPressGesture({ duration: 450 })
           .onAction((): void => { if (!this.srBlocked()) { this.onLongPressImage(); } }))
         .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
-          return info.tag === 'image-zoom-pan' && this.zoomScale <= MIN_SCALE
+          return info.tag === 'image-zoom-pan' && !this.panAllowed()
             ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
         })
         this.LoadOverlay()
@@ -708,6 +786,7 @@ struct ZoomableImagePage {
         if (!this.canUpdatePage()) { return; }
         this.containerWidth = Number(area.width);
         this.containerHeight = Number(area.height);
+        this.applyInitialPan();
         this.clampOffsets();
       })
       .gesture(
@@ -732,7 +811,7 @@ struct ZoomableImagePage {
             }),
           TapGesture({ count: 1 })
             .onAction(() => {
-              if (!this.srBlocked()) { this.onTapImage(); }
+              if (!this.srBlocked()) { this.closeWithTopReset(); }
             })
         )
       )

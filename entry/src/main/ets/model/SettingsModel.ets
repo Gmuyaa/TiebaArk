@@ -153,8 +153,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.206';
-export const SETTINGS_VERSION_CODE: string = '2611058';
+export const SETTINGS_APP_VERSION: string = '1.0.222';
+export const SETTINGS_VERSION_CODE: string = '2611074';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 

@@ -3,6 +3,7 @@
 import { homeChannelHeight, UiLayout } from '../common/appearance/UiLayout';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageState, ListFooter } from '../components/PageState';
 import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
@@ -377,8 +378,8 @@ export struct SearchResultPage {
 
   @Builder
   ResultList() {
-    List({ space: 10 }) {
-      ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
+    List({ space: ThreadCardLayout.LIST_GAP }) {
+      ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - ThreadCardLayout.LIST_GAP)) }
       ForEach(this.vm.items, (item: SearchPostItem) => {
         ListItem() {
           ThreadPreviewCard({

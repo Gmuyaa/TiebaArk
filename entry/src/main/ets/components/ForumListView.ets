@@ -3,6 +3,7 @@ import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionDuration, motionSpringCurve, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PaperLayout } from '../common/appearance/VisualTheme';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageState, ListFooter } from './PageState';
 import { followChanges } from '../viewmodel/FollowActionVM';
 
@@ -33,6 +34,7 @@ import { TiebaDevice, TiebaSession } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { BrowseItem, loadBrowseHistory } from '../utils/BrowseHistory';
 import { readStatusBarVp } from '../utils/SafeArea';
+import { hdsEffect } from '@kit.UIDesignKit';
 
 interface FeedChannel {
   label: string;
@@ -78,6 +80,11 @@ export struct ForumListView {
     if (this.selectedChannel === '关注') { this.followVm.load(this.hostContext()); }
   }
   @Param topNavigationRowHeight: number = 54;
+  /**
+   * 帖子卡片的点光源**受光**类型，默认 NONE（不受光）。
+   * 试验入口在首页；其他调用方不传即保持原样。
+   */
+  @Param cardLitType: hdsEffect.PointLightIlluminatedType = hdsEffect.PointLightIlluminatedType.NONE;
   @Param topNavigationHidden: boolean = false;
   @Param scrollNavigationHidden: boolean = false;
   /** 与 Root HdsNavigation 共用列表控制器，供官方顶栏绑定滚动内容。 */
@@ -171,6 +178,11 @@ export struct ForumListView {
   private scrollDistance: number = 0;
   private suppressScrollUntil: number = 0;
   /**
+   * 列表触到末缘后锁存：松手后的弹簧回程（Fling 负增量）不算上滑信号，
+   * 否则每次滑到底回弹都会把收起的导航栏弹回来。手指重新按下才解锁。
+   */
+  private endEdgeLatch: boolean = false;
+  /**
    * 状态栏高度（vp，运行时实测，39 仅为首帧估计值）。
    * 玻璃头要向上铺进状态栏区（expandSafeArea TOP），扩展后组件顶边到 y=0，
    * 内部必须用这个高度做 padding 补偿，搜索框才不会被压进状态栏。
@@ -243,6 +255,10 @@ export struct ForumListView {
       return;
     }
     const direction: number = offset > 0 ? 1 : -1;
+    // 撞底后的 Fling 回程不是手指意图：锁存期间忽略全部增量，直到新手势按下。
+    if (this.endEdgeLatch && direction < 0) {
+      return;
+    }
     if (direction !== this.scrollDirection) {
       this.scrollDirection = direction;
       this.scrollDistance = 0;
@@ -256,6 +272,19 @@ export struct ForumListView {
       this.suppressScrollUntil = Date.now() + 240;
       this.onScrollNavigationHiddenChange(direction > 0);
     }
+  }
+
+  /** 触底锁存导航栏收起态；新手势按下或回顶时解锁。 */
+  private latchEndEdge(): void {
+    this.endEdgeLatch = true;
+    this.scrollDirection = 0;
+    this.scrollDistance = 0;
+  }
+
+  private resetScrollGesture(): void {
+    this.endEdgeLatch = false;
+    this.scrollDirection = 0;
+    this.scrollDistance = 0;
   }
 
   private restoreStatusBar(): void {
@@ -672,7 +701,7 @@ export struct ForumListView {
 
   @Builder
   FeedList(channel: string) {
-    List({ space: visualThemeStore.isPaper ? 0 : 8, scroller: channel === '关注' ? this.followScroller : this.recommendScroller }) {
+    List({ space: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP, scroller: channel === '关注' ? this.followScroller : this.recommendScroller }) {
 
       ListItem() {
         Row()
@@ -699,6 +728,7 @@ export struct ForumListView {
     .scrollBar(BarState.Off)
 
     .onReachEnd(() => {
+      this.latchEndEdge();
       this.loadMoreFor(channel);
     })
 
@@ -713,6 +743,11 @@ export struct ForumListView {
     .onReachStart(() => {
       if (channel === this.selectedChannel) {
         this.restoreStatusBar();
+      }
+    })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.resetScrollGesture();
       }
     })
 
@@ -1018,12 +1053,21 @@ export struct ForumListView {
     .height('100%')
     .padding({ left: 14, right: 14 })
     .scrollBar(BarState.Off)
+    .onReachEnd((): void => {
+      // 热榜不分页，但撞底回弹同样不该把收起的导航栏弹回来。
+      this.latchEndEdge();
+    })
     .onDidScroll((offset: number, state: ScrollState) => {
       this.trackStatusBarScroll('热榜', offset, state);
     })
     .onReachStart(() => {
       if (this.selectedChannel === '热榜') {
         this.restoreStatusBar();
+      }
+    })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.resetScrollGesture();
       }
     })
   }
@@ -1086,6 +1130,7 @@ export struct ForumListView {
       postedTime: formatPostTime(item.postedMs, Date.now()),
       title: item.title, summary: item.summary,
       isHelp: item.isHelp,
+      litType: this.cardLitType,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),
       isTop: this.vm.mode.length > 0 && item.isTop,
       isGood: this.vm.mode.length > 0 && item.isGood,

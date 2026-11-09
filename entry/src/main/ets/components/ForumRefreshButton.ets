@@ -1,6 +1,7 @@
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionDuration, motionTransition, motionSpringCurve } from '../common/appearance/MotionPolicy';
 import { common } from '@kit.AbilityKit';
+import { curves } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { GlassCircleButton } from './GlassCircleButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
@@ -8,6 +9,10 @@ import {
   floatingBounds, clampFloating, positionRatio, dockFloatingX, holdingSide, HoldingSession, floatingButtonHitRegion
 } from '../model/SmartReach';
 import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
+import { MaterialSlot } from '../common/material/MaterialConfig';
+
+/** 按压点光源强度，与 `HomeComposeButton` 同值，保证两类按钮反馈一致。 */
+const LIGHT_INTENSITY: number = 0.8;
 
 /** 页面尺寸坐标系内的48vp按钮；握姿只换边，拖拽松手吸附最近侧边，保留高度。 */
 @ComponentV2
@@ -29,7 +34,10 @@ export struct ForumRefreshButton {
   @Local y: number = 16;
   @Local left: boolean = false;
   @Local dragging: boolean = false;
-  private pressed: boolean = false;
+  /** 按压缩放：悬浮按钮不在标题栏/底部 TabBar，材质 interactive 不生效，按官方建议用 scale 自绘。 */
+  @Local pressScale: number = 1;
+  /** 按下态要驱动点光源，必须是可观察状态；普通字段不会触发重新渲染，光源永远拿不到强度。 */
+  @Local pressed: boolean = false;
   private ready: boolean = false;
   private alive: boolean = false;
   private originX: number = 0;
@@ -168,14 +176,16 @@ export struct ForumRefreshButton {
   Button(left: boolean) {
     // 整个材质子树退出命中测试，触控区外的手势交给底下的列表。
     Stack() {
-      GlassCircleButton({ symbol: $r('sys.symbol.arrow_clockwise'), diameter: 48, iconSize: 24 })
+      // 与首页发帖按钮同一套观感：不透明主题色圆面 + 固定白图标（深浅同色）。
+      // 按压同样打点光源：圆面是半透明实色，没有光对冲时形变会让它发白。
+      GlassCircleButton({ symbol: $r('sys.symbol.arrow_clockwise'), diameter: 48, iconSize: 24,
+        slot: MaterialSlot.COMPOSE_BUTTON, iconColor: Color.White, composePressLight: this.pressed ? LIGHT_INTENSITY : 0 })
         .hitTestBehavior(HitTestMode.BLOCK_DESCENDANTS)
     }
       .width(48).height(48)
       .responseRegion(floatingButtonHitRegion(48))
       .id('forumRefreshButton')
       .position({ x: this.x, y: this.y })
-      .opacity(this.busy ? 0.6 : 1)
       .hitTestBehavior(this.active ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
       .accessibilityLevel(this.active ? 'auto' : 'no-hide-descendants')
       .accessibilityText('刷新当前分类，可拖拽移动')
@@ -185,13 +195,23 @@ export struct ForumRefreshButton {
       .transition(motionTransition(TransitionEffect.translate({ x: left ? -80 : 80 }), MotionEffect.MOVE)
         .animation({ duration: motionDuration(300), curve: motionSpringCurve() }))
       .onTouch((event: TouchEvent): void => {
-        event.stopPropagation();
-        if (event.type === TouchType.Down) { this.pressed = true; }
+        // 材质 interactive 在悬浮按钮上不生效（官方生效区域限制），形变由 scale + 弹簧曲线自行模拟。
+        if (event.type === TouchType.Down) {
+          this.pressed = true;
+          this.getUIContext().animateTo({ curve: curves.springMotion(0.15, 0.86) }, (): void => {
+            this.pressScale = 0.9;
+          });
+        }
         else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
           this.pressed = false; this.scheduleMove();
+          this.getUIContext().animateTo({ curve: curves.springMotion(0.55, 0.825) }, (): void => {
+            this.pressScale = 1;
+          });
         }
       })
-      .priorityGesture(PanGesture({ direction: PanDirection.All, distance: 8 })
+      .scale({ x: this.pressScale, y: this.pressScale })
+      // 同 HomeComposeButton：普通手势，避免优先手势抢走触摸导致材质交互形变失效。
+      .gesture(PanGesture({ direction: PanDirection.All, distance: 8 })
         .onActionStart((): void => {
           this.dragging = true; this.cancelPending(); this.originX = this.x; this.originY = this.y;
           this.onMoveStart();

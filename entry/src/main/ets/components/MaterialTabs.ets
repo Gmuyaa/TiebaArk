@@ -57,7 +57,10 @@ export struct MaterialTabs {
           this.pages()
         }
         .vertical(false).barMode(BarMode.Fixed).scrollable(false).animationDuration(0)
-        .barHeight(this.barVisible ? this.barHeight : 0, true)
+        // 不带隐式动画标志：宿主逐帧驱动 barHeight 参数（scale 每帧变），收尾的
+        // collapsed 切换发生时栏体 alpha 已为 0，隐式动画只会把浮面→贴底的锚点
+        // 切换也播出来，收起尾巴看起来像"换了个位置接着收"（2026-11-08 真机）。
+        .barHeight(this.barVisible ? this.barHeight : 0)
         // 子组件已有官方材质；纯承载 TabBar 不再额外开启整片重叠模糊。
         .barOverlap(!this.componentMaterial)
         .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)

@@ -2,9 +2,11 @@ import { BODY_FALLBACK_ASPECT, BODY_MIN_BOX_W, FeedImageBox, FeedImageInfo,
   PREVIEW_LONG_RATIO } from './HomeFeedPresentation';
 import { ContentKind, ContentPiece } from './ThreadDetail';
 
-/** 新版正文的长图预览高度；展开后按完整比例阅读。 */
-export const POST_LONG_PREVIEW_HEIGHT: number = 240;
-/** 普通正文图片完整等比预览的高度上限；长图展开阅读不受此限制。 */
+/** 正文单图的高度上限（× 内容宽，约一屏）；超过就顶部裁切。 */
+export const POST_IMAGE_MAX_H_RATIO: number = 2;
+/** 正文长图的显示宽度占内容宽的比例；整块按这个比例同比缩小。 */
+export const POST_LONG_WIDTH_RATIO: number = 0.8;
+/** 正文图片未测到尺寸时的占位高度上限。 */
 export const POST_IMAGE_PREVIEW_MAX_HEIGHT: number = 280;
 /** 评论图片完整等比预览的高度上限；帖子正文仍按原规则展开阅读。 */
 export const COMMENT_IMAGE_PREVIEW_MAX_HEIGHT: number = 200;
@@ -35,6 +37,15 @@ export function readingImageInfo(declared: FeedImageInfo, actual: FeedImageInfo)
   return info;
 }
 
+/**
+ * 正文（含评论）单图的几何。
+ *
+ * `expanded = true`：按完整比例给高度，不裁切（评论、旧图集用）。
+ * `expanded = false`：高度超过 `POST_IMAGE_MAX_H_RATIO × 宽度` 就裁。
+ * 会被裁的图（按比例判定的长图，或被高度上限截掉的截图）宽度收窄到
+ * `POST_LONG_WIDTH_RATIO`：正文里它只是附图，不该和正文抢满宽。
+ * 普通图仍然满宽、只限制小图放大。
+ */
 export function readingImageBox(info: FeedImageInfo, contentWidth: number,
   density: number, expanded: boolean): FeedImageBox {
   const box: FeedImageBox = new FeedImageBox();
@@ -44,19 +55,38 @@ export function readingImageBox(info: FeedImageInfo, contentWidth: number,
   box.long = info.long;
   if (!hasReadingImageSize(info)) { return box; }
   const ratio: number = info.width / info.height;
-  box.long = info.long || ratio < PREVIEW_LONG_RATIO;
   const scale: number = Number.isFinite(density) && density > 0 ? density : 1;
-  // 普通图同时适配宽高上限并保留小图限制；长图按正文宽度预览或展开阅读。
-  box.width = box.long ? usable : Math.max(1,
-    Math.min(usable, info.width / scale * 1.5, POST_IMAGE_PREVIEW_MAX_HEIGHT * ratio));
+  const longByRatio: boolean = info.long || ratio < PREVIEW_LONG_RATIO;
+  // 先按满宽估一次：满宽下就已经超上限的图，和长图同样处理。
+  const clipsAtFullWidth: boolean = !expanded && usable / ratio > usable * POST_IMAGE_MAX_H_RATIO;
+  const isLong: boolean = longByRatio || clipsAtFullWidth;
+  // 长图/长截图不能被 1.5 倍放大限制压成细线，改为收窄到 80% 内容宽；
+  // 评论、旧图集的展开态仍按满宽算，尺寸由调用方再缩。
+  box.width = isLong
+    ? (expanded ? usable : usable * POST_LONG_WIDTH_RATIO)
+    : Math.max(1, Math.min(usable, info.width / scale * 1.5));
   const fullHeight: number = box.width / ratio;
   if (!Number.isFinite(fullHeight) || fullHeight <= 0) {
     box.width = usable;
     return box;
   }
-  box.height = box.long && !expanded ? Math.min(POST_LONG_PREVIEW_HEIGHT, fullHeight) : fullHeight;
+  // 高度上限跟着实际宽度走：长图整块同比缩小，不是只收窄不改高。
+  const maxHeight: number = expanded ? fullHeight : box.width * POST_IMAGE_MAX_H_RATIO;
+  box.height = Math.min(fullHeight, maxHeight);
+  // 被裁过的图一律按长图处理：顶部对齐绘制，并挂「长图」角标。
+  box.long = isLong || box.height < fullHeight;
   box.known = true;
   return box;
+}
+
+/** 外框是否比整张图矮；比图矮就必须顶部对齐裁切，不能 Contain 留白。 */
+export function readingImageClipped(info: FeedImageInfo, frame: FeedImageBox): boolean {
+  if (!hasReadingImageSize(info) || !Number.isFinite(frame.width) || !Number.isFinite(frame.height) ||
+    frame.width <= 0 || frame.height <= 0) { return false; }
+  const ratio: number = info.width / info.height;
+  if (!Number.isFinite(ratio) || ratio <= 0) { return false; }
+  const fullHeight: number = frame.width / ratio;
+  return Number.isFinite(fullHeight) && fullHeight > frame.height + 0.5;
 }
 
 /** 评论只缩小整张预览，不裁切或额外撑宽；实际图片与圆角、共享源框保持一致。 */

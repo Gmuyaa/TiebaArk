@@ -2,6 +2,7 @@ import { motionStore } from '../common/appearance/MotionStore';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageState, ListFooter } from '../components/PageState';
 import { RefreshSpinner, FORUM_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { ForumIdentity, FORUM_IDENTITY_TITLE_TOP } from '../components/ForumIdentity';
@@ -24,7 +25,7 @@ import { common } from '@kit.AbilityKit';
 import { DirectoryKind } from '../model/PageDirectory';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { promptAction, AnimatorResult } from '@kit.ArkUI';
-import { HdsNavDestination } from '@kit.UIDesignKit';
+import { HdsNavDestination, hdsEffect } from '@kit.UIDesignKit';
 import { ForumTab, ThreadBrief } from '../model/ThreadList';
 import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
 import { ThreadListVM } from '../viewmodel/ThreadListVM';
@@ -294,18 +295,12 @@ export struct ForumPage {
     }
     this.refreshing = true;
     this.settlePullDistance(FORUM_REFRESH_OFFSET);
+    // 悬浮刷新按钮：先回顶再刷新。回顶是点击后的即时反馈，不必等网络回来——
+    // 等完再滚会让"点了没反应"和"出来先蹦一下"两件事同时发生。
+    if (scrollToContentTop) { this.scrollToThreadsTop(); }
     try {
       await this.vm.refresh(this.hostContext(), this.forumName, this.vm.loadedOnce);
-      if (this.vm.errorText.length === 0) {
-        if (scrollToContentTop) {
-          setTimeout(() => {
-            if (!this.active) { return; }
-            const top: number = this.heroHeight() - FORUM_TOOLBAR_HEIGHT;
-            this.scroller.scrollTo({ xOffset: 0, yOffset: top, animation: motionStore.isOn(MotionEffect.MOVE) });
-            if (this.pageState !== undefined) { this.pageState.scrollOffset = top; }
-          }, 16);
-        }
-      } else {
+      if (this.vm.errorText.length > 0) {
         promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
       }
     } finally {
@@ -313,6 +308,14 @@ export struct ForumPage {
       this.refreshing = false;
       if (this.active) { this.settlePullDistance(0); }
     }
+  }
+
+  /** 滚到帖子区顶部（头图与工具栏之下）；不带动画时直接落位，避免长列表顶着旧内容滑。 */
+  private scrollToThreadsTop(): void {
+    if (!this.active) { return; }
+    const top: number = this.heroHeight() - FORUM_TOOLBAR_HEIGHT;
+    this.scroller.scrollTo({ xOffset: 0, yOffset: top, animation: motionStore.isOn(MotionEffect.MOVE) });
+    if (this.pageState !== undefined) { this.pageState.scrollOffset = top; }
   }
 
   /** 超过刷新带高后连续减小跟手比例，避免固定封顶形成硬挡板。 */
@@ -1044,7 +1047,7 @@ export struct ForumPage {
                       }, (side: number) => `${side}`)
                     }.width('100%').alignItems(VerticalAlign.Top)
                   }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : 8 })
+                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
                     .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
                     .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }
@@ -1061,7 +1064,7 @@ export struct ForumPage {
                     this.PinnedSection()
                   }
                   .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : 8 })
+                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
                   .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
                   .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }
@@ -1080,7 +1083,7 @@ export struct ForumPage {
                     } else { this.ThreadCard(item) }
                   }
                   .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : 8 })
+                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
                   .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
                   .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
                 }, (item: ThreadBrief) => `${item.tid}`)
@@ -1250,6 +1253,9 @@ export struct ForumPage {
   ThreadCard(item: ThreadBrief) {
     ThreadPreviewCard({
       useImageLayoutPreference: true,
+      // 与首页帖子卡片同口径受光：用 BORDER（细边）而非羽化，羽化近光侧会过曝外溢。
+      // 光源仍是各页面的发帖按钮；本页判断发光由按钮自己按可见性决定。
+      litType: hdsEffect.PointLightIlluminatedType.BORDER,
       authorName: item.authorName, authorAvatar: item.authorAvatar,
       postedTime: formatPostTime(item.postedMs, Date.now()), title: item.title, summary: item.summary,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),

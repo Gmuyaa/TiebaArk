@@ -60,7 +60,7 @@ export struct FollowButton {
     if (this.vm.pending) { return this.vm.following ? '关注中…' : '取消中…'; }
     if (this.vm.verifying && !this.vm.known) { return '确认中…'; }
     return this.vm.known ? (this.vm.following ? (this.fansStyle ? '已互关' : '已关注') :
-      (this.fansStyle ? '回关' : '关注')) : '重试关注状态';
+      (this.fansStyle ? '回关' : '关注')) : '重试';
   }
   private followedAppearance(): boolean {
     return this.vm.known && this.vm.following && !this.vm.pending;

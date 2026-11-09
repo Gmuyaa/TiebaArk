@@ -340,7 +340,7 @@ export struct FollowView {
 
   private signLabel(item: FollowForumItem): string {
     if (this.vm.signingFname === item.fname) { return '签到中…'; }
-    if (!item.signKnown) { return this.vm.loading ? '读取中…' : '重试签到状态'; }
+    if (!item.signKnown) { return this.vm.loading ? '读取中…' : '重试'; }
     return item.isSigned ? '已签到' : '签到';
   }
 

@@ -38,11 +38,11 @@ export class AppTheme {
   static get ICON(): Resource {
     return themeResource($r('app.color.app_icon'), $r('app.color.paper_app_icon'), ThemeColorRole.ICON);
   }
-  /** 页面浅灰背景（深 `#101112`，对齐 detail_page_background dark） */
+  /** 页面浅灰背景（深 `#0A0A0B`，对齐 detail_page_background dark） */
   static get BG(): Resource {
     return themeResource($r('app.color.app_bg'), $r('app.color.paper_app_bg'), ThemeColorRole.BG);
   }
-  /** 卡片白（深 `#1E2023`，比页面底亮一档，保持卡片分层） */
+  /** 卡片白（深 `#191919`，比页面底 `#0A0A0B` 亮一档，保持卡片分层） */
   static get CARD(): Resource {
     return themeResource($r('app.color.app_card'), $r('app.color.paper_app_card'), ThemeColorRole.CARD);
   }
@@ -135,7 +135,8 @@ export class AppTheme {
     return themeResource($r('app.color.app_forum_tab_bg'), $r('app.color.paper_app_forum_tab_bg'), ThemeColorRole.CARD);
   }
   /** 设置页顶栏渐隐的起始色（原 SettingsCardStyle.NAV_FADE_COLOR `#FFFFFF`；深色=页面底）。
-   *  透明终点保留同一页面色相。 */
+   *  透明终点保留同一页面色相。
+   *  ⚠️ 当前无调用点：设置页顶栏已改为官方玻璃材质，保留定义供后续复用。 */
   static get NAV_FADE(): Resource {
     return themeResource($r('app.color.app_nav_fade'), $r('app.color.paper_app_nav_fade'), ThemeColorRole.NAV_FADE);
   }
@@ -144,7 +145,8 @@ export class AppTheme {
     return themeResource($r('app.color.app_nav_fade_clear'), $r('app.color.paper_app_nav_fade_clear'), ThemeColorRole.NAV_FADE_CLEAR);
   }
   /** 首页底栏 `gradientMask.maskColor`（原 `#33F5F5F7` = 页面底色 20%）。
-   *  ⚠️ 这层是"页面底色的延伸"，不是玻璃 —— 深色下必须跟着页面底走，否则浅雾突兀。 */
+   *  ⚠️ 这层是"页面底色的延伸"，不是玻璃 —— 深色下必须跟着页面底走，否则浅雾突兀。
+   *  ⚠️ 2026-11-09 起首页底栏不再叠这层蒙层（`Index` 传 `Color.Transparent`），保留资源供后续复用。 */
   static get BOTTOM_BAR_MASK(): Resource {
     return themeResource($r('app.color.app_bottom_mask'), $r('app.color.paper_app_bottom_mask'), ThemeColorRole.BOTTOM_MASK);
   }
@@ -248,11 +250,20 @@ export class AppTheme {
   static get MEDIA_ACCENT(): Resource {
     return themeResource($r('app.color.theme_classic_media_accent'), $r('app.color.theme_paper_media_accent'), ThemeColorRole.MEDIA_ACCENT);
   }
+  /** 首页顶栏「明度保护层」的渐隐色（`#D9` 页面底 → 透明）。
+   *  ⚠️ 当前无调用点：2026-11-09 起顶栏不再铺这层渐隐，`HomeTopNavBackdrop` 已移除。 */
   static get HOME_TOP_BACKDROP(): Resource {
     return themeResource($r('app.color.theme_classic_home_top_backdrop'), $r('app.color.theme_paper_home_top_backdrop'), ThemeColorRole.HOME_TOP_BACKDROP);
   }
   static get HOME_TOP_BACKDROP_CLEAR(): Resource {
     return themeResource($r('app.color.theme_classic_home_top_backdrop_clear'), $r('app.color.theme_paper_home_top_backdrop_clear'), ThemeColorRole.HOME_TOP_BACKDROP_CLEAR);
+  }
+  /** 发帖按钮的沉浸光感着色：当前主题强调色，六色主题各自独立。
+   *  2026-11-10 起 alpha 由 70% 提到 100%（`#B3` → `#FF`），且浅深同色——按钮在深浅模式下观感一致。
+   *  统一取深色那支（强调色的亮版，如经典 `#317AF7`）：原浅色 `#0A59F7` 偏深，放浅底上显得沉。
+   *  ⚠️ 圆面既已不透明，圆内图标就不能再跟 `TEXT_MAIN`：`HomeComposeButton` 固定传白色。 */
+  static get COMPOSE_TINT(): Resource {
+    return themeResource($r('app.color.theme_classic_compose_tint'), $r('app.color.theme_paper_compose_tint'), ThemeColorRole.COMPOSE_TINT);
   }
 
   /** 全局页面左右安全留白 */

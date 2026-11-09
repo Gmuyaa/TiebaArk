@@ -2,8 +2,9 @@ import { display, FrameCallback } from '@kit.ArkUI';
 import { ContentImage } from '../model/ThreadDetail';
 import { BODY_RADIUS, FeedImageBox, FeedImageInfo, feedImageInfo,
   rememberMeasuredImage } from '../model/HomeFeedPresentation';
-import { POST_IMAGE_PREVIEW_MAX_HEIGHT, ReadingDecodeSize, commentImageBox, hasReadingImageSize, readingDecodeSize,
-  readingImageBox, readingImageInfo } from '../model/PostImageLayout';
+import { POST_IMAGE_PREVIEW_MAX_HEIGHT, ReadingDecodeSize, commentImageBox, hasReadingImageSize,
+  readingDecodeSize, readingImageBox, readingImageClipped, readingImageDrawScale,
+  readingImageInfo } from '../model/PostImageLayout';
 import { FeedImageTransform } from '../model/FeedImageLayout';
 import { ImageTransitionCrop, imageTransitionCrop } from '../model/ImageTransitionCrop';
 import { LowFlowStore, lowFlowStore } from '../common/appearance/LowFlowStore';
@@ -216,11 +217,26 @@ struct PostFlowImage {
     if (this.commentPreview) {
       return commentImageBox(this.sourceInfo(), this.contentWidth, this.density, this.flow.enabled);
     }
-    // 正常阅读直接完整显示；低流量只保留有界占位，不撑出整张长图的空白高度。
-    return readingImageBox(this.sourceInfo(), this.contentWidth, this.density, !this.flow.enabled);
+    // 正文单图限高：宽度撑满，超过约一屏高的部分顶部裁切，点开看全。
+    return readingImageBox(this.sourceInfo(), this.contentWidth, this.density, false);
   }
 
-  /** 完整图片只需单位变换，仍用 crop 会话保持同源预览交接及返回保护。 */
+  /** 外框比整张图矮时才是裁切态；普通图仍然是完整 Contain 显示。 */
+  private clipped(): boolean {
+    return !this.commentPreview && readingImageClipped(this.sourceInfo(), this.frame());
+  }
+
+  /** 裁切态的绘制放大量：让缩略图的宽度正好贴满外框，顶部保持在 y = 0。 */
+  private drawScale(): number {
+    return this.clipped() ? readingImageDrawScale(this.sourceInfo(), this.frame(), false) : 1;
+  }
+
+  /**
+   * 完整图片只需单位变换，仍用 crop 会话保持同源预览交接及返回保护。
+   *
+   * 正文裁切只体现在外框上：查看器那边的图片节点按原图比例排、宽度撑满，
+   * 转场时共享框从裁切窗口长成完整图，这段变化不需要再叠一次缩放。
+   */
   private drawingCrop(): ImageTransitionCrop {
     const crop: ImageTransitionCrop = imageTransitionCrop(new FeedImageTransform());
     const info: FeedImageInfo = this.sourceInfo();
@@ -364,11 +380,26 @@ struct PostFlowImage {
             .objectFit(ImageFit.Contain)
             .objectRepeat(ImageRepeat.NoRepeat)
             .autoResize(true)
+            // 裁切态：以顶部中心放大绘制，宽度贴满外框，下方由父层 clip 掉。
+            .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
             .sourceSize(this.decodeSize())
             .opacity(this.isLoaded() ? 1 : 0)
             .onComplete(this.completeHandler(this.sourceUrl(), this.requestEpoch))
             .onError(this.errorHandler(this.sourceUrl(), this.requestEpoch))
         }
+      }
+      if (this.clipped() && !this.flow.enabled) {
+        // 只留左上角标，不加底部渐变：裁切边界靠角标和"点开看全"就够了。
+        // `.align()` 只对齐文本自身内容，不会把子组件摆到 Stack 的角上，这里用铺满的 Row 定位。
+        Row() {
+          Text('长图').fontSize(11).fontColor(Color.White)
+            .backgroundColor('#88000000').borderRadius(5).padding(4)
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Start)
+        .alignItems(VerticalAlign.Top)
+        .padding(8)
+        .hitTestBehavior(HitTestMode.None)
       }
     }
     .width(this.frame().width).height(this.frame().height)
@@ -398,6 +429,12 @@ export struct PostImageFlow {
   @Param viewerIndices: number[] = [];
   @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
   @Param commentPreview: boolean = false;
+  /**
+   * 调用方已知的可用宽度（vp）。>0 时作为首帧宽度，代替按屏宽估算——
+   * 评论左侧有头像列，按屏宽算会宽出 48vp，首帧高度偏大、`onAreaChange`
+   * 修正后再塌回，翻页插入新楼层时就表现为"页面跳一下"。0 = 沿用估算。
+   */
+  @Param contentWidthHint: number = 0;
   @Event onOpenImage: (index: number) => void = (): void => {};
   @Local contentWidth: number = 320;
   private density: number = 1;
@@ -406,8 +443,11 @@ export struct PostImageFlow {
     try {
       const screen: display.Display = display.getDefaultDisplaySync();
       this.density = screen.densityPixels;
-      this.contentWidth = screen.width / screen.densityPixels - 32;
-    } catch (_) { /* onAreaChange 提供实际内容宽度。 */ }
+      this.contentWidth = this.contentWidthHint > 0 ? this.contentWidthHint : screen.width / screen.densityPixels - 32;
+    } catch (_) {
+      // 拿到宽度就先用，拿不到等 onAreaChange 提供实际内容宽度
+      if (this.contentWidthHint > 0) { this.contentWidth = this.contentWidthHint; }
+    }
   }
 
   build() {

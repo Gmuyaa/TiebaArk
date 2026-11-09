@@ -19,6 +19,7 @@ import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { MyListParams, NavigationService } from '../navigation/AppNavigation';
 import { PostContentInline } from '../components/PostContentInline';
 import { POST_BODY_SIZE } from '../common/appearance/PostTypography';
+import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
@@ -348,7 +349,7 @@ export struct MyListPage {
             PageState({ compact: true, message: this.vm.errorText, actionLabel: '重试',
               onAction: (): void => { void this.vm.load(this.hostContext()); } })
           }
-          List({ space: 10 }) {
+          List({ space: ThreadCardLayout.LIST_GAP }) {
             ForEach(this.vm.items, (item: MyListItem) => {
               ListItem() { this.ThreadCard(item) }
             }, (item: MyListItem) => `${item.tid}-${item.forumAvatar}-${item.hideFromProfile}`)

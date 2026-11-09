@@ -47,15 +47,15 @@
     },
     {
       "name": "start_window_background",
-      "value": "#101112"
+      "value": "#0A0A0B"
     },
     {
       "name": "detail_page_background",
-      "value": "#101112"
+      "value": "#0A0A0B"
     },
     {
       "name": "detail_content_background",
-      "value": "#101112"
+      "value": "#0A0A0B"
     },
     {
       "name": "detail_secondary_background",
@@ -103,11 +103,11 @@
     },
     {
       "name": "app_bg",
-      "value": "#101112"
+      "value": "#0A0A0B"
     },
     {
       "name": "app_card",
-      "value": "#1E2023"
+      "value": "#191919"
     },
     {
       "name": "app_surface_muted",
@@ -147,11 +147,11 @@
     },
     {
       "name": "app_nav_fade",
-      "value": "#101112"
+      "value": "#0A0A0B"
     },
     {
       "name": "app_nav_fade_clear",
-      "value": "#00101112"
+      "value": "#000A0A0B"
     },
     {
       "name": "app_tab_pill_text",
@@ -231,7 +231,7 @@
     },
     {
       "name": "app_bottom_mask",
-      "value": "#33101112"
+      "value": "#330A0A0B"
     },
     {
       "name": "app_msg_badge_red_bg",
@@ -664,8 +664,8 @@
     { "name": "theme_classic_flow_background_middle", "value": "#224C9BEB" },
     { "name": "theme_classic_flow_background_end", "value": "#225F88F4" },
     { "name": "theme_classic_media_accent", "value": "#B8D8FF" },
-    { "name": "theme_classic_home_top_backdrop", "value": "#D9101112" },
-    { "name": "theme_classic_home_top_backdrop_clear", "value": "#00101112" },
+    { "name": "theme_classic_home_top_backdrop", "value": "#D90A0A0B" },
+    { "name": "theme_classic_home_top_backdrop_clear", "value": "#000A0A0B" },
     { "name": "theme_paper_busy_accent", "value": "#85A7A0" },
     { "name": "theme_paper_selection_background", "value": "#409EC8BF" },
     { "name": "theme_paper_material_tint", "value": "#339EC8BF" },
@@ -678,6 +678,14 @@
     { "name": "theme_paper_media_accent", "value": "#DAEAE7" },
     { "name": "theme_paper_home_top_backdrop", "value": "#D9202522" },
     { "name": "theme_paper_home_top_backdrop_clear", "value": "#00202522" },
-    { "name": "theme_classic_on_accent", "value": "#080E18" }
+    { "name": "theme_classic_on_accent", "value": "#080E18" },
+    { "name": "theme_classic_compose_tint", "value": "#E6317AF7" },
+    { "name": "theme_paper_compose_tint", "value": "#E69EC8BF" },
+    { "name": "theme_pine_compose_tint", "value": "#E693C8B9" },
+    { "name": "theme_lilac_compose_tint", "value": "#E6C7AFDC" },
+    { "name": "theme_clay_compose_tint", "value": "#E6DDB098" },
+    { "name": "theme_sky_compose_tint", "value": "#E68AB4FF" },
+    { "name": "theme_berry_compose_tint", "value": "#E6FF9FBB" },
+    { "name": "theme_orange_compose_tint", "value": "#E6FFB57D" }
   ]
 }
