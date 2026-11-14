@@ -27,6 +27,7 @@ import { ImageViewer } from '../components/ImageViewer';
 import { closeImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
+import { MyListItemDataSource, MyListRow, myListRowKey } from '../model/MyListItemDataSource';
 
 /** 已删除帖子的左下角提示（标题同色灰显，见 `CardItem`） */
 const DELETED_LABEL: string = '该帖子已被删除';
@@ -46,9 +47,23 @@ export struct MyListPage {
   @Local viewerIndex: number = 0;
   @Local favoriteResult: string = '';
   private favoriteResultTimer: number = -1;
+  /** 收藏列表的 LazyForEach 数据源（吧头像逐条上屏只重建那一行，见 model/MyListItemDataSource） */
+  @Local favSource: MyListItemDataSource = new MyListItemDataSource();
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private deletionRevision: number = contentDeletionRevision();
   @Local pageVisible: boolean = false;
+
+  /**
+   * `vm.items` 一变就推给 LazyForEach 数据源。
+   *
+   * 收藏页的三种变化都走这里：首屏/刷新（整表重建）、触底翻页（尾部追加）、
+   * 吧头像逐条补到（只重建那一行）——`Repeat` 在前两种上就不重建，是 2026-11-13
+   * 收藏页"头像不刷新"的根因，详见 model/MyListItemDataSource.ets 文件头。
+   */
+  @Monitor('vm.items')
+  syncFavoriteSource(): void {
+    this.favSource.sync(this.vm.items);
+  }
 
   @Monitor('vm.loading', 'vm.loadingMore', 'vm.threadPendingTid', 'vm.removing', 'pageVisible')
   refreshAfterDeletion(): void {
@@ -414,13 +429,9 @@ export struct MyListPage {
                 onAction: (): void => { void this.vm.load(this.hostContext()); } })
             }
             List({ space: 10 }) {
-              Repeat<MyListItem>(this.vm.items)
-                .each((row: RepeatItem<MyListItem>) => {
-                  ListItem() { this.FavoriteRow(row.item) }
-                })
-                .key((item: MyListItem): string =>
-                  `${item.tid}-${item.forumAvatar}-${item.isDeleted}-${item.title}-${item.coverUrl}`)
-                .virtualScroll({ reusable: false })
+              LazyForEach(this.favSource, (item: MyListRow) => {
+                ListItem() { this.FavoriteRow(item as MyListItem) }
+              }, (item: MyListRow): string => myListRowKey(item))
               ListItem() {
                 ListFooter({ loading: this.vm.loadingMore, error: this.vm.pagingError, hasMore: this.vm.hasMore,
                 onRetry: (): void => { void this.vm.loadMore(this.hostContext()); } })
@@ -536,7 +547,9 @@ export struct MyListPage {
 
           if (item.forumAvatar.length > 0 || item.forumName.length > 0) {
             ForumAvatarImage({ url: item.forumAvatar, forumName: item.forumName,
-              avatarSize: 18, radius: forumAvatarRadius(18), fontSize: 10 })
+              avatarSize: 18, radius: forumAvatarRadius(18), fontSize: 10,
+              // 落盘地址可能提前失效：失败就作废重取一次（见 MyListVM.retryAvatar）
+              onLoadError: (): void => { void this.vm.retryAvatar(this.hostContext(), item.forumName); } })
           }
           if (item.forumName.length > 0) {
             Text(this.forumLabel(item.forumName)).fontSize(11).fontColor(AppTheme.TEXT_MUTED)
@@ -582,7 +595,8 @@ export struct MyListPage {
             if (item.forumAvatar.length > 0 || item.forumName.length > 0) {
               // 没头像（或加载失败）时用吧名首字占位，不给空圈
               ForumAvatarImage({ url: item.forumAvatar, forumName: item.forumName,
-                avatarSize: 20, radius: forumAvatarRadius(20), fontSize: 11 })
+                avatarSize: 20, radius: forumAvatarRadius(20), fontSize: 11,
+                onLoadError: (): void => { void this.vm.retryAvatar(this.hostContext(), item.forumName); } })
             }
             if (item.forumName.length > 0) {
               Text(this.forumLabel(item.forumName))

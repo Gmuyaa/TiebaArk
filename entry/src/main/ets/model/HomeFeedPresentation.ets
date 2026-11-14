@@ -1,20 +1,5 @@
 
 
-export function formatPostTime(milliseconds: number, nowMs: number): string {
-  if (milliseconds <= 0) { return ''; }
-  const at: Date = new Date(milliseconds);
-  const now: Date = new Date(nowMs);
-  if (at.getFullYear() !== now.getFullYear()) {
-    return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
-  }
-  return `${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
-}
-
-/** 两位补零（月/日/时/分） */
-function two(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
-}
-
 export class FeedImageInfo {
   width: number = 0;
   height: number = 0;

@@ -4,7 +4,7 @@ import { authSession } from '../auth/AuthSession';
 import { VideoFeedItem, appendVideoFeed } from '../model/VideoFeed';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { readVideoEnvironment } from '../utils/VideoEnvironment';
-function owner(): string { return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : ''; }
+import { accountWithPortrait } from './SessionOwner';
 @ObservedV2
 export class VideoFeedVM {
   @Trace items: VideoFeedItem[] = [];
@@ -15,20 +15,20 @@ export class VideoFeedVM {
   @Trace moreError: string = '';
   @Trace canContinue: boolean = false;
   private epoch: number = 0;
-  private account: string = owner();
+  private account: string = accountWithPortrait();
   private disposed: boolean = false;
   private api: TiebaApi = new TiebaApi();
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === accountWithPortrait(); }
   async refresh(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed) { return; }
-    const changed: boolean = this.account !== owner(); this.account = owner();
+    const changed: boolean = this.account !== accountWithPortrait(); this.account = accountWithPortrait();
     if (changed) { this.items = []; this.loaded = false; this.canContinue = false; }
     const mine: number = ++this.epoch; this.loading = true; this.loadingMore = false; this.error = ''; this.moreError = '';
     await this.fetch(context, mine, true);
   }
   async loadMore(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed) { return; }
-    if (this.account !== owner()) { await this.refresh(context); return; }
+    if (this.account !== accountWithPortrait()) { await this.refresh(context); return; }
     if (this.loading || this.loadingMore || !this.canContinue || this.error.length > 0) { return; }
     const mine: number = ++this.epoch; this.loadingMore = true; this.moreError = '';
     await this.fetch(context, mine, false);
@@ -48,7 +48,7 @@ export class VideoFeedVM {
     } finally {
       if (mine === this.epoch) {
         this.loading = false; this.loadingMore = false;
-        if (!this.disposed && this.account !== owner()) {
+        if (!this.disposed && this.account !== accountWithPortrait()) {
           this.items = []; this.loaded = false; this.canContinue = false; this.error = '账号已变化，请刷新'; this.moreError = '';
         }
       }

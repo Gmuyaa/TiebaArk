@@ -22,10 +22,13 @@ import { motionStore } from '../common/appearance/MotionStore';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
 import { restoreForumCache } from '../viewmodel/ForumReadCache';
+import { threadBlockScope } from '../viewmodel/SessionOwner';
+import { setThreadBlockScopeProvider } from '../utils/ThreadBlockStore';
 import { foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import app from '@system.app';
 import { IMAGE_DISK_CACHE_BYTES } from '../model/CachePolicy';
 import { trimExportCache } from '../utils/ExportCachePolicy';
+import { flushForumAvatarCache, initForumAvatarCache } from '../utils/ForumAvatarPrefs';
 
 const DOMAIN = 0x0000;
 
@@ -35,6 +38,19 @@ export default class EntryAbility extends UIAbility {
     try { trimExportCache(this.context); }
     catch (_) { hilog.warn(DOMAIN, 'CachePolicy', 'export cache maintenance failed'); }
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onCreate');
+
+    /*
+     * 吧头像落盘索引（吧名→fid/URL）：启动读一次、后台时落盘。
+     * 放在 Ability 层而不是页面里——它服务首页/收藏/搜帖三处，不该由某个组件持有生命周期。
+     */
+    void initForumAvatarCache(this.context);
+
+    /*
+     * 屏蔽名单按账号分键，但落盘层（utils/ThreadBlockStore）不该 import 认证层：
+     * 账号作用域在这里注入一次，口径在 viewmodel/SessionOwner（登录取 uid、未登录 anonymous）。
+     * 惰性求值，注入时机只需早于第一个读取它的页面。
+     */
+    setThreadBlockScopeProvider(threadBlockScope);
 
     visualThemeStore.load(this.context);
     themeModeStore.load(this.context);
@@ -124,6 +140,8 @@ export default class EntryAbility extends UIAbility {
   onWindowStageDestroy(): void {
     visualThemeStore.setThemeRefresher(undefined);
     themeModeStore.setPaletteRefresher(undefined);
+    // 系统栏回调持有 mainWindow：窗口销毁后必须撤销，否则主题变化会对着已销毁的 Window 调用
+    themeModeStore.setSystemBarRefresher(undefined);
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
@@ -160,6 +178,8 @@ export default class EntryAbility extends UIAbility {
     foregroundRefresh.onBackground();
     void videoPlayback.stop();
     void voicePlayback.stop();
+    // 切后台是落盘点：吧头像索引只在这里（以及 10s 兜底定时器）写盘。
+    void flushForumAvatarCache();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onBackground');
   }
 }

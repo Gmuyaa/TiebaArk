@@ -3,11 +3,10 @@
 import { common } from '@kit.AbilityKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { TiebaApi } from '../api/TiebaApi';
 import { authSession, AuthSession } from '../auth/AuthSession';
 import { HotTopicCardInfo } from '../model/HotTopicCard';
-import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { HotTopicCardsVM } from '../viewmodel/HotTopicCardsVM';
+import { fetchHotTopicCardForPage } from '../viewmodel/PageFetch';
 import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { homeChannelHeight } from '../common/appearance/UiLayout';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
@@ -26,7 +25,8 @@ import { closeImageTransition, imageLayerRetentionTransition } from '../componen
 import { ThreadBrief } from '../model/ThreadList';
 import { visibleThreads } from '../model/ThreadBlock';
 import { ContentPiece } from '../model/ThreadDetail';
-import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
+import { feedImageInfo } from '../model/HomeFeedPresentation';
+import { formatTimeText } from '../model/TimeText';
 import { formatCount } from '../model/UserProfile';
 import { NavigationService, HotTopicParams } from '../navigation/AppNavigation';
 import { openContentPiece } from '../navigation/ContentNavigation';
@@ -57,7 +57,6 @@ export struct HotTopicPage {
   private listScroller: ListScroller = new ListScroller();
   private alive: boolean = false;
   private refreshPending: boolean = false;
-  private cardApi: TiebaApi = new TiebaApi();
 
   private hostContext(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -83,11 +82,10 @@ export struct HotTopicPage {
   private configureCards(): void {
     const account: string = authSession.sessionKey();
     const context: common.UIAbilityContext = this.hostContext();
+    // 设备身份、会话与换号比对在 viewmodel/PageFetch；页面只留「这一屏还在不在」。
     this.cards.reset(async (tid: number): Promise<HotTopicCardInfo | undefined> => {
-      const device = await DeviceIdentity.ensure(context);
-      if (!this.alive || account !== authSession.sessionKey()) { return undefined; }
-      const response = await this.cardApi.fetchHotTopicCard(device, authSession.session(), tid);
-      return this.alive && account === authSession.sessionKey() && response.ok ? response.data : undefined;
+      const info: HotTopicCardInfo | undefined = await fetchHotTopicCardForPage(context, tid, account);
+      return this.alive ? info : undefined;
     });
   }
 
@@ -262,7 +260,7 @@ export struct HotTopicPage {
       authorAvatar: this.cardInfo(item, this.cards.revision).authorAvatar,
       forumName: item.sourceForum, forumAvatar: this.cardInfo(item, this.cards.revision).sourceForumAvatar,
       forumAvatarRevision: this.cardInfo(item, this.cards.revision).avatarStamp,
-      postedTime: formatPostTime(this.cardInfo(item, this.cards.revision).postedMs, Date.now()),
+      postedTime: formatTimeText(this.cardInfo(item, this.cards.revision).postedMs, Date.now()),
       title: item.title, summary: item.summary, images: this.threadImages(item),
       isTop: item.isTop, isGood: item.isGood, isHelp: item.isHelp,
       agreeCount: this.cardInfo(item, this.cards.revision).agreeCount, replyCount: item.replyCount,
@@ -309,9 +307,18 @@ export struct HotTopicPage {
         if (this.vm.loading && !this.refreshing) {
           ListItem() { PageState({ compact: true, loading: true, message: '正在更新讨论…' }) }
         }
-        ForEach(this.visibleTopicThreads, (item: ThreadBrief) => {
-          ListItem() { this.ThreadCard(item) }
-        }, (item: ThreadBrief) => this.cardKey(item))
+        /*
+         * 与首页 `ForumListView.FeedList` 同一处理：帖子流走 Repeat 虚拟列表（Repeat 指南建议优先于
+         * LazyForEach），按可视区 + 预加载区创建、滑出回收。键沿用 `cardKey`（对象身份 + 递增号），
+         * `reusable` 不开启——评论区 2026-11-07 的 A/B 实测开启后反而更慢（91 vs 97 fps）。
+         * 外层其余状态项（简介、排序栏、错误/空态、页脚）仍留在 Repeat 之外。
+         */
+        Repeat<ThreadBrief>(this.visibleTopicThreads)
+          .each((ri: RepeatItem<ThreadBrief>) => {
+            ListItem() { this.ThreadCard(ri.item) }
+          })
+          .key((item: ThreadBrief): string => this.cardKey(item))
+          .virtualScroll({ totalCount: this.visibleTopicThreads.length })
         if (this.vm.items.length === 0 && !this.vm.loading && this.vm.error.length === 0) {
           ListItem() { PageState({ message: '这个话题暂时没有可展示的帖子' }) }
         }

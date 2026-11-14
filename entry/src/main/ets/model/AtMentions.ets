@@ -1,5 +1,6 @@
 import { NotifyItem, NotifyResult } from './Notify';
 import { portraitUrl } from './ThreadDetail';
+import { wireString } from './Wire';
 
 interface AtAuthor { id?: string | number; name?: string; name_show?: string; portrait?: string; }
 interface AtRow {
@@ -22,7 +23,6 @@ function idText(value: string | number | undefined, required: boolean): string {
   return text;
 }
 function safeId(text: string): number { const value: number = Number(text); return Number.isSafeInteger(value) ? value : 0; }
-function stringValue(value: string | undefined): string { return typeof value === 'string' ? value : ''; }
 
 /** 当前 APK AtMeNetModel→qwb/axb→FeedData：表单请求、顶层 JSON 列表，非 ReplyMe protobuf。 */
 export function parseAtMentions(text: string): NotifyResult {
@@ -32,7 +32,7 @@ export function parseAtMentions(text: string): NotifyResult {
     if (raw.error_code !== 0 && raw.error_code !== '0') {
       if (typeof raw.error_code === 'number' && Number.isSafeInteger(raw.error_code)) { out.code = raw.error_code; }
       else if (typeof raw.error_code === 'string' && /^\d+$/.test(raw.error_code) && Number.isSafeInteger(Number(raw.error_code))) { out.code = Number(raw.error_code); }
-      out.message = stringValue(raw.error_msg) || '@我的响应未确认'; return out;
+      out.message = wireString(raw.error_msg) || '@我的响应未确认'; return out;
     }
     // 与 axb 相同：reply_list 存在时优先，否则 at_list。错误形态不能退到另一字段掩盖。
     // 当前真实空响应：at_list="" 且 page.has_more=0；仅兼容已核实的这一种空形态。
@@ -53,11 +53,11 @@ export function parseAtMentions(text: string): NotifyResult {
       item.threadIdText = idText(row.thread_id, true); item.postIdText = idText(row.post_id, false);
       item.userIdText = idText(row.replyer?.id, false);
       item.threadId = safeId(item.threadIdText); item.postId = safeId(item.postIdText); item.userId = safeId(item.userIdText);
-      item.title = stringValue(row.title); item.excerpt = stringValue(row.content); item.quoteContent = stringValue(row.quote_content);
+      item.title = wireString(row.title); item.excerpt = wireString(row.content); item.quoteContent = wireString(row.quote_content);
       if (row.hide_fname !== undefined && row.hide_fname !== 0 && row.hide_fname !== '0' && row.hide_fname !== 1 && row.hide_fname !== '1') { throw new Error('吧名隐藏状态无效'); }
-      item.forumName = row.hide_fname === 1 || row.hide_fname === '1' ? '' : stringValue(row.fname);
-      item.userName = stringValue(row.replyer?.name); item.nameShow = stringValue(row.replyer?.name_show);
-      item.portrait = stringValue(row.replyer?.portrait); item.avatar = portraitUrl(item.portrait);
+      item.forumName = row.hide_fname === 1 || row.hide_fname === '1' ? '' : wireString(row.fname);
+      item.userName = wireString(row.replyer?.name); item.nameShow = wireString(row.replyer?.name_show);
+      item.portrait = wireString(row.replyer?.portrait); item.avatar = portraitUrl(item.portrait);
       item.isFloor = row.is_floor === 1 ? 1 : 0;
       if (row.time !== undefined) {
         if (typeof row.time !== 'number' && typeof row.time !== 'string') { throw new Error('时间无效'); }

@@ -103,8 +103,8 @@ export class ThemeModeStore {
     }
   }
 
-  /** EntryAbility 在拿到窗口后注册；每次生效模式变化都会被调一次 */
-  setSystemBarRefresher(refresher: () => void): void {
+  /** EntryAbility 在拿到窗口后注册；窗口销毁时必须传 undefined 撤销，否则回调会对着已销毁的 Window 生效 */
+  setSystemBarRefresher(refresher: (() => void) | undefined): void {
     this.systemBarRefresher = refresher;
   }
 

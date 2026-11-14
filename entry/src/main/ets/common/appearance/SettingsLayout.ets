@@ -9,18 +9,6 @@ export const SUMMARY_MAX_CHARS: number = 8;
 /** 名称与摘要之间的最小间隙（vp）。 */
 export const SUMMARY_MIN_GAP: number = 12;
 
-/**
- * 「接近底部自动加载」触发距离（px）：距已加载内容底部小于它即请求下一页。
- * **集中配置**，页面与组件都不写魔法数。
- */
-export const AUTO_LOAD_TRIGGER_PX: number = 400;
-
-/**
- * 首屏不足一屏时的连续补页上限：达到上限且内容仍无增长就停手，
- * 保留"继续加载"的途径（继续下滑会再次触发），不无限请求。
- */
-export const AUTO_FILL_MAX: number = 3;
-
 /** 东文按 1em、西文按 0.56em 估算文字宽度。 */
 const ASCII_WIDTH_RATIO: number = 0.56;
 

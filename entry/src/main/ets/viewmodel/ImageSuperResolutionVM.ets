@@ -2,7 +2,7 @@
 
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { fetchImageBytes } from '../utils/ImageExport';
+import { fetchImageBytes } from '../net/ImageDownload';
 import {
   SrDecodedImage,
   SrEngine,

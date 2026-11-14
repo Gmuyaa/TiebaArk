@@ -64,7 +64,7 @@ import { lowFlowStore } from '../common/appearance/LowFlowStore';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { ImageLayoutMode, imageLayoutLabel } from '../model/ImageLayout';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
-import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
+import { smartReachStore, SmartReachStore, ForumTabsStyle } from '../common/appearance/SmartReachStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 // 系统总量与注册缓存根内的可清理文件量分别读取。
 import {
@@ -87,7 +87,7 @@ import {
 } from '../common/appearance/FontSizeScale';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 
-import { SettingsLayout, AUTO_LOAD_TRIGGER_PX, AUTO_FILL_MAX } from '../common/appearance/SettingsLayout';
+import { SettingsLayout } from '../common/appearance/SettingsLayout';
 import { portraitUrl } from '../model/ThreadDetail';
 import {
   SettingsActionRow, SettingsActionTone, SettingsCard, SettingsEntryRow, SettingsGroupTitle,
@@ -102,6 +102,8 @@ const TOP_NAV_PREVIEW_H: number = 108;
 // 再露出 28vp 内容让玻璃有东西可透。
 const TOP_NAV_PREVIEW_DUAL_H: number = 119 + 28;
 const PANE_ENTRY_DISTANCE: number = 18;
+/** 吧页分类栏三选一（顺序与 ForumTabsStyle 枚举一致：0 常规吸顶 / 1 胶囊 / 2 悬浮） */
+const FORUM_TABS_STYLE_LABELS: string[] = ['常规吸顶', '胶囊', '悬浮'];
 const PANE_ENTRY_DURATION: number = 180;
 
 class SettingsPaneFrame extends FrameCallback {
@@ -190,17 +192,30 @@ struct SettingsPage {
   }
 
   /**
-   * 页面销毁时收掉头像流程。上传已发出但读回还没回来时，`dispose()` 会把这次读回
+   * 页面销毁时收掉页面自己创建的流程。头像上传已发出但读回还没回来时，`dispose()` 会把这次读回
    * 交接给共享刷新队列（换号则放弃），不是静默丢弃 —— 语义在 `AvatarEditVM.handOffSync`。
+   *
+   * `forbiddenVm` 也在这里兜底：它由页面创建（`navigateTo` 进屏蔽吧前重建），
+   * `ForbiddenForumsPane` 离开面板时已 dispose 过一次（离开即停在途准备/取消），
+   * `dispose()` 幂等（只置位、递增代次、清标志），这里再收一次不改变停止时机。
    */
   aboutToDisappear(): void {
-    this.pageVisible = false;
-    this.finishPaneEntry();
+    this.leavePage();
     this.avatarVm.dispose();
     this.cacheStats.dispose();
+    this.forbiddenVm.dispose();
   }
 
   onPageHide(): void {
+    this.leavePage();
+  }
+
+  /**
+   * 离页的公共两件事：标记页面不可见（挡住迟到的前台刷新写回）、收掉进入动画的中间态。
+   * `finishPaneEntry` 里是 0 时长 `animateTo`，它在销毁期调用是否安全**仍未实测**；
+   * 这里只做去重，不改它的行为。
+   */
+  private leavePage(): void {
     this.pageVisible = false;
     this.finishPaneEntry();
   }
@@ -258,9 +273,12 @@ struct SettingsPage {
       superResolution: superResolutionStore.enabled,
       smartReach: this.smartReach.enabled,
       homeComposeSmartReach: this.smartReach.homeComposeEnabled,
+      homeComposeVisible: this.smartReach.homeComposeVisible,
       imageMenuSmartReach: this.smartReach.imageMenuEnabled,
       imageMenuLongPress: this.smartReach.imageMenuLongPress,
       forumTabsSmartReach: this.smartReach.forumTabsEnabled,
+      forumTabsStyle: this.smartReach.forumTabsStyle,
+      forumTabsStyleLabel: FORUM_TABS_STYLE_LABELS[this.smartReach.forumTabsStyle],
       forumTabsFloating: this.smartReach.forumTabsFloating,
       // 入口显示系统应用缓存总量，不再用导出目录大小冒充总量。
       cacheLabel: this.cacheStats.label(),
@@ -288,8 +306,6 @@ struct SettingsPage {
   @Local navGlass: number = 0;
   /** 从系统设置返回时通知权限子页重读；初值 0 不触发。 */
   @Local paneRefreshSeq: number = 0;
-  /** 通知分页子页「接近底部」（滚动到底 → 自增；同一时间只允许一个分页请求，由 VM 单飞吸收） */
-  @Local paneLoadMoreSeq: number = 0;
   @Local forbiddenVm: ForbiddenForumsVM = new ForbiddenForumsVM();
   @Local forbiddenUnblockSeq: number = 0;
   private scroller: Scroller = new Scroller();
@@ -357,7 +373,6 @@ struct SettingsPage {
     this.navSeq += 1;
     this.pendingRestore = -1;          // 新页面从顶部开始：作废任何未决恢复
     this.paneScrollY.delete(String(next));
-    this.autoFillCount = 0;            // 首屏补页计数随新页归零
     this.pane = next;
     if (next === SettingsPane.ACCOUNT && from !== next && authSession.isLoggedIn()) {
       void this.foreground.refreshAvatar(
@@ -372,42 +387,6 @@ struct SettingsPage {
     const span: number = SettingsLayout.NAV_GLASS_FULL - SettingsLayout.NAV_GLASS_START;
     const ratio: number = span > 0 ? (offset - SettingsLayout.NAV_GLASS_START) / span : 0;
     this.navGlass = Math.max(0, Math.min(1, ratio));
-  }
-
-  /** 首屏补页的本次进入计数：每次切页（`navigateTo`/恢复顶部）归零。 */
-  private autoFillCount: number = 0;
-  /** 内容列的实际高度（vp）：由内容容器 `onAreaChange` 记录（Scroller 没有内容总高 API）。 */
-  private paneContentH: number = 0;
-  /** 滚动视口高度（vp）：由滚动容器 `onAreaChange` 记录。 */
-  private viewportH: number = 0;
-
-  /**
-   * 接近底部自动加载：距内容底部小于 `AUTO_LOAD_TRIGGER_PX` 即请求下一页。
-   *
-   * 两条触发路径：
-   * - `onScroll`（atEnd=false）：滚动途中**提前**加载，用户看到到底之前下一页已在路上；
-   * - `onReachEnd`（atEnd=true）：兜底，惯性滚动跨过触发窗口、或内容不足一屏时也能补上。
-   *
-   * **首屏不足一屏**（内容高度 ≤ 视口，无滚动发生）：由 `AUTO_FILL_MAX` 限制连续补页
-   * 次数，只在 VM 真正接受续页时计数；达到上限后由「点击加载更多」继续。
-   * 新页进入时归零，内容增长和重复触底都不重置计数。
-   */
-  private autoLoadMore(atEnd: boolean): void {
-    if (this.pane !== SettingsPane.FORBIDDEN_FORUMS) { return; }
-    if (this.paneContentH <= 0 || this.viewportH <= 0) { return; }
-    const content: number = this.paneContentH;
-    const extent: number = this.viewportH;
-    if (content <= extent) {
-      // 首屏不足一屏：只允许有限次连续补页（到达上限就停手）
-      if (this.autoFillCount >= AUTO_FILL_MAX) { return; }
-    } else {
-      const offset: number = this.scroller.currentOffset().yOffset;
-      const distanceToEnd: number = Math.max(0, content - extent - offset);
-      if (!atEnd && distanceToEnd > AUTO_LOAD_TRIGGER_PX) { return; }
-    }
-    // VM 单飞守卫吸收重复触发，onPageStarted 只报告实际接受的续页。
-
-    this.paneLoadMoreSeq += 1;
   }
 
   /** 顶栏返回：二级页里回列表，列表上才真的退出设置页 */
@@ -539,6 +518,9 @@ struct SettingsPage {
     if (pane === SettingsPane.FORUM_LEVEL) {
       return buildOptions(['简洁', '官方'], forumLevelStore.style, 'forum_level');
     }
+    if (pane === SettingsPane.FORUM_TABS_STYLE) {
+      return buildOptions(FORUM_TABS_STYLE_LABELS, this.smartReach.forumTabsStyle, 'forum_tabs_style');
+    }
     if (pane === SettingsPane.IMAGE_MENU) {
       return buildOptions(['常显胶囊', '长按显示'], this.smartReach.imageMenuLongPress ? 1 : 0, 'image_menu');
     }
@@ -601,6 +583,13 @@ struct SettingsPage {
     if (pane === SettingsPane.FORUM_LEVEL) {
       void forumLevelStore.setStyle(index, this.getUIContext().getHostContext() as common.UIAbilityContext)
         .catch((error: Error) => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.FORUM_TABS_STYLE) {
+      if (index < 0 || index > 2) { return; }
+      void this.smartReach.setForumTabsStyle(index as ForumTabsStyle,
+        this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
       this.closePopup(); return;
     }
     if (pane === SettingsPane.IMAGE_MENU) {
@@ -694,11 +683,14 @@ struct SettingsPage {
         .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
       return;
     }
-    if (entry.action === 'forum_tabs_smart_reach' || entry.action === 'forum_tabs_floating') {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const saved: Promise<void> = entry.action === 'forum_tabs_smart_reach' ?
-        this.smartReach.setForumTabsEnabled(checked, context) : this.smartReach.setForumTabsFloating(checked, context);
-      saved.catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+    if (entry.action === 'home_compose_visible') {
+      this.smartReach.setHomeComposeVisible(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+      return;
+    }
+    if (entry.action === 'forum_tabs_smart_reach') {
+      this.smartReach.setForumTabsEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
+        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'image_menu_smart_reach') {
@@ -834,7 +826,8 @@ struct SettingsPage {
       // 只有"删了一部分又删不掉"时才停在"部分完成"，因为那时剩余占用本身未确认。
       await this.cacheStats.refresh(this.getUIContext().getHostContext() as common.UIAbilityContext);
       this.cacheBusy = false;
-      if (this.lastFailed > 0) {
+      // 读取失败优先于"部分完成"：回读都没成功时不能宣称部分完成，否则会掩盖 READ_FAIL 并误报剩余占用
+      if (this.lastFailed > 0 && this.cacheStats.phase !== CachePhase.READ_FAIL) {
         this.cacheStats.phase = CachePhase.PARTIAL_DONE;
       }
     }
@@ -935,7 +928,7 @@ struct SettingsPage {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.pane === SettingsPane.FORBIDDEN_FORUMS) {
         ForbiddenForumsPane({ vm: this.forbiddenVm, scroller: this.scroller, topInset: this.titleBarH(),
-          unblockSeq: this.forbiddenUnblockSeq, refreshSeq: this.paneRefreshSeq,
+          unblockSeq: this.forbiddenUnblockSeq,
           onScrolled: (): void => { this.updateNavGlass(); } })
           .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
           .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
@@ -957,12 +950,7 @@ struct SettingsPage {
           .width('100%')
           .padding({ left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER })
           // 内容布局变化 = 真正就绪的信号（不用 setTimeout 猜）
-          .onAreaChange((_o: Area, n: Area) => {
-            // 记录内容实际高度供接近底部判定；内容变高 = 自动补页有了新进展
-            const contentH: number = Number(n.height);
-
-            this.paneContentH = contentH;
-            this.autoLoadMore(false);
+          .onAreaChange((_o: Area, _n: Area) => {
             this.applyPendingRestore();
           })
           // 底部间距放在滚动内容内，滑到底后末卡不贴屏幕边缘。
@@ -976,19 +964,9 @@ struct SettingsPage {
       .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
       .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       .align(Alignment.Top)
-      // 记录视口高度供接近底部判定（Scroller 没有视口尺寸 API）
-      .onAreaChange((_o: Area, n: Area) => {
-        this.viewportH = Number(n.height);
-        this.autoLoadMore(false);
-      })
       // 顶栏玻璃层跟随滚动渐显（阈值集中定义，见 updateNavGlass）
-
-      .onReachEnd(() => {
-        this.autoLoadMore(true);
-      })
       .onScroll(() => {
         this.updateNavGlass();
-        this.autoLoadMore(false);
       })
       }
 
@@ -1253,81 +1231,47 @@ struct SettingsPage {
     this.PrefSaveErrors()
   }
 
+  /**
+   * 一条「保存失败 → 重试」提示。所有设置项共用：`kind` 与按钮文案不再各写各的
+   * （历史上出现过「重试保存」与「重新读取」混用），空消息自动不渲染。
+   */
+  @Builder
+  SaveErrorLine(message: string, retryLabel: string, retry: (context: common.UIAbilityContext) => void) {
+    if (message.length > 0) {
+      SettingsStatusLine({ kind: SettingsStatusKind.ERROR, message, retryLabel,
+        onRetry: (): void => {
+          retry(this.getUIContext().getHostContext() as common.UIAbilityContext);
+        } })
+    }
+  }
+
   /** 只在发生保存错误时显示；重试保存当前选择，不重置偏好。 */
   @Builder
   PrefSaveErrors() {
     if (this.pane === SettingsPane.APPEARANCE) {
-      if (themeModeStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: themeModeStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            themeModeStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (fontScaleStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: fontScaleStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            fontScaleStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
+      this.SaveErrorLine(themeModeStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void themeModeStore.retrySave(context); });
+      this.SaveErrorLine(fontScaleStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void fontScaleStore.retrySave(context); });
     } else if (this.pane === SettingsPane.NAVIGATION_LAYOUT) {
-      if (homeTopNavStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: homeTopNavStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void homeTopNavStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (threadActionBarStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: threadActionBarStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void threadActionBarStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (homeNavigationHideStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: homeNavigationHideStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void homeNavigationHideStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
+      this.SaveErrorLine(homeTopNavStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void homeTopNavStore.retrySave(context); });
+      this.SaveErrorLine(threadActionBarStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void threadActionBarStore.retrySave(context); });
+      this.SaveErrorLine(homeNavigationHideStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void homeNavigationHideStore.retrySave(context); });
     } else if (this.pane === SettingsPane.BROWSING) {
-      if (imageLayoutStore.loadError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: imageLayoutStore.loadError, retryLabel: '重新读取',
-          onRetry: (): void => {
-            void imageLayoutStore.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (imageLayoutStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: imageLayoutStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void imageLayoutStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (lowFlowStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: lowFlowStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void lowFlowStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-      if (superResolutionStore.saveError.length > 0) {
-        SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-          message: superResolutionStore.saveError, retryLabel: '重试保存',
-          onRetry: (): void => {
-            void superResolutionStore.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-          } })
-      }
-    } else if (this.pane === SettingsPane.MATERIAL_EFFECTS && materialManager.saveError.length > 0) {
-      SettingsStatusLine({ kind: SettingsStatusKind.ERROR,
-        message: materialManager.saveError, retryLabel: '重试保存',
-        onRetry: (): void => {
-          void materialManager.retrySave(this.getUIContext().getHostContext() as common.UIAbilityContext);
-        } })
+      this.SaveErrorLine(imageLayoutStore.loadError, '重新读取',
+        (context: common.UIAbilityContext): void => { void imageLayoutStore.load(context); });
+      this.SaveErrorLine(imageLayoutStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void imageLayoutStore.retrySave(context); });
+      this.SaveErrorLine(lowFlowStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void lowFlowStore.retrySave(context); });
+      this.SaveErrorLine(superResolutionStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void superResolutionStore.retrySave(context); });
+    } else if (this.pane === SettingsPane.MATERIAL_EFFECTS) {
+      this.SaveErrorLine(materialManager.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void materialManager.retrySave(context); });
     }
   }
 
@@ -1369,6 +1313,9 @@ struct SettingsPage {
       this.AppearancePane()
     } else if (this.pane === SettingsPane.CACHE) {
       this.CachePane()
+    } else {
+      // 兜底：未覆盖或已退役的编号回到入口列表。原来没有 else，遇到这种值会白屏、只剩 PrefSaveErrors。
+      this.EntryList()
     }
   }
 
@@ -1812,7 +1759,7 @@ struct SettingsPage {
     SettingsGroupTitle({ title: '分类显示' })
     SettingsCard({
       content: (): void => {
-        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['forum_tabs_floating'])
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['forum_tabs_style'])
       }
     })
     SettingsGroupTitle({ title: '首页滑动隐藏' })
@@ -1823,6 +1770,12 @@ struct SettingsPage {
       }
     })
     SettingsNote({ text: '上滑隐藏，下滑恢复。' })
+    SettingsGroupTitle({ title: '悬浮按钮' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['home_compose_visible'])
+      }
+    })
   }
 
   @Builder

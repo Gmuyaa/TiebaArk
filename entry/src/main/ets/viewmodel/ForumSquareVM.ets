@@ -3,7 +3,7 @@ import { TiebaApi, ForumSquareResponse } from '../api/TiebaApi';
 import { SquareCategory, SquareForum } from '../model/ForumSquare';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { authSession } from '../auth/AuthSession';
-import { FollowReadGuard, seedFollowState } from './FollowActionVM';
+import { applyForumFollowing } from './ForumStateStore';
 
 @ObservedV2
 export class ForumSquareVM {
@@ -50,7 +50,6 @@ export class ForumSquareVM {
     const category: string = this.selected;
     const subcategory: string = this.selectedSub;
     const owner: string = authSession.sessionKey();
-    const followGuard: FollowReadGuard = new FollowReadGuard();
     const page: number = more ? this.page + 1 : 1;
     this.loading = true; this.error = '';
     try {
@@ -60,7 +59,7 @@ export class ForumSquareVM {
       if (sequence !== this.sequence || owner !== authSession.sessionKey()) { return; }
       if (!response.ok) { this.error = response.describeFailure(); return; }
       for (const item of response.data.forums) {
-        seedFollowState(followGuard, 'forum', item.followId(), '', item.name, item.following);
+        applyForumFollowing(item.followId(), item.name, item.following);
       }
       if (this.categories.length === 0) { this.categories = response.data.categories; }
       if (!more) {

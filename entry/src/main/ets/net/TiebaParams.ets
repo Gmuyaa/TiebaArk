@@ -53,6 +53,7 @@ export class CreateForumParams {
     params.push(new SignParam('fid', '0'), new SignParam('pub_type', '0'), new SignParam('fname', ''), new SignParam('tid', '0'));
     return params;
   }
+  /** 建吧参数（未接入生产：`TiebaApi` 没有创建吧的写入口，唯一消费者是 `CreateForum.test`） */
   static create(device: TiebaDevice, session: TiebaSession, draft: CreateForumDraft): SignParam[] {
     if (session.tbs.length === 0 || createForumDraftError(draft).length > 0) { return []; }
     const params: SignParam[] = TiebaCommonParams.build(device, session);
@@ -332,7 +333,7 @@ export class AntiSpamParams {
     return params;
   }
 
-  /** 日志用：只取时间戳与传输统计（都不是凭据） */
+  /** 日志用：只取时间戳与传输统计（都不是凭据）。当前无调用方（写操作日志未接入）。 */
   static describe(params: SignParam[]): string {
     let out: string = '';
     for (let i = 0; i < params.length; i++) {
@@ -920,9 +921,6 @@ export class AddPostTarget {
 export class AddThreadParams {
   static readonly PATH: string = '/c/c/thread/add';
 
-  static url(): string {
-    return `https://${TiebaHost.APP}${AddThreadParams.PATH}`;
-  }
 
   /**
    * 构造**待签名**的表单参数：`TiebaCommonParams` 打底（`_client_type`/`_client_version`/
@@ -1307,7 +1305,6 @@ export class SubmitDislikeParams {
 
   static readonly DISLIKE_ID_BLOCK_FORUM: string = '7';
 
-  static url(): string { return `https://${TiebaHost.APP}${SubmitDislikeParams.PATH}`; }
 
   /**
    * 构造 `dislike` 数组（单元素）。字段顺序与官方一致，便于抓包对照。
@@ -1337,7 +1334,7 @@ export class SubmitDislikeParams {
 /** 取消屏蔽使用 submitCancelDislike，参数为 forum_id，需有效 tbs。依据官方 ml8.java 的 HttpMessage(1003487)。 */
 export class CancelForbiddenForumParams {
   static readonly PATH: string = '/c/c/excellent/submitCancelDislike';
-  static url(): string { return `https://${TiebaHost.APP}${CancelForbiddenForumParams.PATH}`; }
+
 
   static build(device: TiebaDevice, session: TiebaSession, forumId: string): SignParam[] {
     if (forumId.length === 0 || !/^[0-9]+$/.test(forumId)) {

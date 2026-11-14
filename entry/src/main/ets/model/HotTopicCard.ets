@@ -1,5 +1,5 @@
 /** 话题卡片的轻量补充资料；只取匹配主题的公开展示字段，不持有完整详情。 */
-import { RawThreadPage, RawThreadHead, RawDetailForum, RawUser } from '../api/RawThreadPage';
+import { RawThreadPage, RawThreadHead, RawDetailForum, RawUser } from './RawThreadPage';
 import { hotTopicImageUrl } from './HotTopicDetail';
 import { portraitUrl } from './ThreadDetail';
 

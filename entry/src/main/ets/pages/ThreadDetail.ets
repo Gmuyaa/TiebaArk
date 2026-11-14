@@ -39,9 +39,10 @@ import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
   ContentBlock, ContentImage, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
   REPLY_EMOTICON_CODES, collectPreviewImageUrls, emojiCodeFromReplyToken, emojiImageUrl,
-  formatThreadHeadTime, forumChipText, groupContentBlocks,
+  forumChipText, groupContentBlocks,
   isReplySortSupported, resolveForumName, subPostsHaveThreadAuthor, unsupportedSortTip
 } from '../model/ThreadDetail';
+import { formatTimeText } from '../model/TimeText';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { POST_BODY_SIZE, POST_NICKNAME_SIZE, POST_TITLE_SIZE,
   COMMENT_BODY_SIZE, COMMENT_NICKNAME_SIZE, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT } from '../common/appearance/PostTypography';
@@ -301,7 +302,7 @@ export struct ThreadDetailPage {
   private deleteConfirming: boolean = false;
   /** 列表滚动位置（vp），由 onDidScroll 回报；标题栏渐变由原生导航负责。 */
   @Local navScrollOffset: number = 0;
-  /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移 */
+  /** 回顶与跳层都走 scrollToIndex，不自己估算像素偏移；统一入口见 `jumpToTop`/`jumpToReplies`/`jumpToPost` */
   private scroller: ListScroller = new ListScroller();
   /** 自动补页的探测定时器；-1 表示当前没有排队中的探测 */
   private atEndProbeTimer: number = -1;
@@ -467,11 +468,7 @@ export struct ThreadDetailPage {
         if (index >= 0) {
           this.getUIContext().runScopedTask(() => {
             setTimeout(() => {
-              if (index === 0) {
-                this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
-              } else {
-                this.scroller.scrollToItemInGroup(2, index - 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
-              }
+              this.jumpToPost(index);
             }, 200);
           });
         } else {
@@ -502,7 +499,8 @@ export struct ThreadDetailPage {
         this.vm.detail.title, forumName,
         cover, this.vm.detail.forumAvatar,
         // 标题与吧名都没有 → 这个帖子在服务端已经不存在，历史里就标成已删除
-        this.vm.detail.title.length === 0 && forumName.length === 0);
+        this.vm.detail.title.length === 0 && forumName.length === 0,
+        this.vm.detail.forumId);
     }).catch(() => {
       // 加载失败不记历史，也不打断页面
     });
@@ -520,8 +518,42 @@ export struct ThreadDetailPage {
       if (!this.commentsActive || !this.commentsJumpPending || this.vm.loading || this.vm.errorText.length > 0) { return; }
       this.commentsJumpPending = false;
       if (this.videoMode) { this.videoComments = true; }
-      else { this.scroller.scrollToIndex(this.vm.visiblePosts.length > 0 ? 2 : 0, false, ScrollAlign.START); }
+      else { this.jumpToReplies(false); }
     }));
+  }
+
+  /** 滚动动画跟随设置里的「动画效果」。 */
+  private scrollAnimate(): boolean {
+    return motionStore.isOn(MotionEffect.MOVE);
+  }
+
+  private jumpToTop(): void {
+    this.scroller.scrollToIndex(0, this.scrollAnimate(), ScrollAlign.START);
+  }
+
+  /**
+   * 滚到楼层区第 1 楼。
+   *
+   * 列表结构（见 `PostList`）：下标 0 是主帖、1 是回复摘要、2 起才是楼层，所以「回复区」
+   * 的锚点固定是 2；一条楼层都没有时退化为回顶，避免滚到空提示或 Footer 上。
+   */
+  private jumpToReplies(animate: boolean = this.scrollAnimate()): void {
+    this.scroller.scrollToIndex(this.vm.visiblePosts.length > 0 ? 2 : 0, animate, ScrollAlign.START);
+  }
+
+  /**
+   * 按 `visiblePosts` 的下标定位精确到某一楼（0 = 主帖）。
+   *
+   * 楼层 2026-10-18 起不再挂在 `ListItemGroup` 里，而是与主帖、摘要条平铺在同一个 List 下，
+   * 所以只能用 `scrollToIndex`。`visibleReplies = visiblePosts.slice(1)`，第 i 个帖子在列表
+   * 里的下标是 `i + 1`（原实现调 `scrollToItemInGroup(2, i - 1)`，找不到分组、静默不滚动）。
+   */
+  private jumpToPost(index: number): void {
+    if (index <= 0) {
+      this.jumpToTop();
+      return;
+    }
+    this.scroller.scrollToIndex(index + 1, this.scrollAnimate(), ScrollAlign.START);
   }
 
   aboutToDisappear(): void {
@@ -704,15 +736,9 @@ export struct ThreadDetailPage {
     this.showSubSheet = false;
   }
 
-  /** 按 pid 找已加载的楼层，用作面板顶部的锚点回复；找不到返回空对象 */
+  /** 按 pid 找已加载的楼层，用作面板顶部的锚点回复；找不到返回空对象（与 `vm.postByPid` 同源，不再自己扫一遍） */
   private anchorPost(pid: number): PostItem {
-    const posts: PostItem[] = this.vm.visiblePosts;
-    for (let i = 0; i < posts.length; i++) {
-      if (posts[i].pid === pid) {
-        return posts[i];
-      }
-    }
-    return new PostItem();
+    return this.vm.postByPid(pid) ?? new PostItem();
   }
 
   /** 面板里列表区失败后的重试：首屏没过就重拉首屏，否则重试翻页 */
@@ -1187,26 +1213,6 @@ export struct ThreadDetailPage {
     return post === undefined ? '' : post.author.displayName;
   }
 
-  /**
-   * 滚动到某条楼层。
-   *
-   * pid 为 0（对主帖发表时服务端没回 pid）或不在当前列表里（正序排在后面的页）
-   * 就什么都不做——宁可留在原地，也不要跳到一个算出来的位置。
-   */
-  private scrollToPost(pid: number): void {
-    if (pid <= 0) {
-      return;
-    }
-    const posts: PostItem[] = this.vm.visiblePosts;
-    for (let i: number = 0; i < posts.length; i++) {
-      if (posts[i].pid === pid) {
-        // 平铺后：0 = 主帖、1 = 回复排序栏、n>=1 的楼层在 n+1 的位置上。
-        this.scroller.scrollToIndex(i === 0 ? 0 : i + 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
-        return;
-      }
-    }
-  }
-
   /** 防止分享面板启动期间连续点击重复打开。 */
   private shareOpening: boolean = false;
 
@@ -1269,7 +1275,7 @@ export struct ThreadDetailPage {
   /**
    * 作者行第二行的 `时间 · 地区 · 内容声明`。
    *
-   * 时间取 1 楼的发布时间（主帖头部要带日期，用 `formatThreadHeadTime`），
+   * 时间取 1 楼的发布时间（与列表、楼层同一套文案，见 `model/TimeText`），
    * 地区取作者 IP 归属地（`thread.author` 常缺这个字段，由 `mergeAuthorFallback`
    * 从 `user_list` 补齐），声明取 `thread.content_statement`（发帖时选的那一项，
    * 官方 App 也是把它接在时间、地区之后）。三段都缺返回空串——界面据此整行不渲染。
@@ -1298,7 +1304,7 @@ export struct ThreadDetailPage {
     if (posts.length === 0) {
       return '';
     }
-    return formatThreadHeadTime(posts[0].timeMs, Date.now());
+    return formatTimeText(posts[0].timeMs, Date.now());
   }
 
   /**
@@ -1323,12 +1329,7 @@ export struct ThreadDetailPage {
       const posts: PostItem[] = this.vm.visiblePosts;
       for (let i = 0; i < posts.length; i++) {
         if (posts[i].floor === floor) {
-          if (i === 0) {
-            this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE));
-          } else {
-
-            this.scroller.scrollToItemInGroup(2, i - 1, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
-          }
+          this.jumpToPost(i);
           break;
         }
       }
@@ -1875,7 +1876,7 @@ export struct ThreadDetailPage {
         .width('100%')
         .padding({ left: 14, right: 14, top: 12, bottom: 12 })
         .onClick(() => {
-          this.scroller.scrollToIndex(0, motionStore.isOn(MotionEffect.MOVE));
+          this.jumpToTop();
           this.showMore = false;
         })
 
@@ -3043,7 +3044,7 @@ export struct ThreadDetailPage {
     } else if (index === 1) {
       this.PopupMenuItem($r('sys.symbol.message'), `${this.displayedReplyCount()}`, 'comments', '查看评论', (): void => {
         this.popupMenuShow = false;
-        this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+        this.jumpToReplies();
       });
     } else if (index === 2) {
       this.PopupMenuItem(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
@@ -3283,7 +3284,7 @@ export struct ThreadDetailPage {
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
 
-      this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+      this.jumpToReplies();
     })
   }
 
@@ -3315,7 +3316,7 @@ export struct ThreadDetailPage {
         PageState({ compact: true, message: '当前显示定位回复', actionLabel: '查看全部回复',
           onAction: (): void => {
             this.vm.load(this.hostContext(), this.vm.tid).then(() => {
-              this.scroller.scrollToIndex(2, motionStore.isOn(MotionEffect.MOVE), ScrollAlign.START);
+              this.jumpToReplies();
             });
           } })
       } else {

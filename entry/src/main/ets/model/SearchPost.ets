@@ -1,8 +1,9 @@
 
 
-import { RawSearchPostEntry, RawSearchPostPage, RawSearchPostResponse } from '../api/RawSearchPost';
+import { RawSearchPostEntry, RawSearchPostPage, RawSearchPostResponse } from './RawSearchPost';
 import { profilePortrait } from './PageDirectory';
 import { portraitUrl, PostItem, ThreadDetail } from './ThreadDetail';
+import { wireString } from './Wire';
 
 /** 搜帖 name 可能是昵称；只从同帖同楼层的作者资料补图，不能按名字认领身份。 */
 export function searchPostAuthorAvatar(detail: ThreadDetail, tid: number, pid: number): string {
@@ -63,9 +64,6 @@ function numStr(value: string | number | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function str(value: string | undefined): string {
-  return value === undefined ? '' : value;
-}
 
 /**
  * 从 `<img ...>` 标签体里取出表情编码；不是表情图就返回空串。
@@ -260,20 +258,20 @@ export class SearchPostPage {
     const emptyPage: RawSearchPostPage = {};
     const rawPage: RawSearchPostPage = raw.page === undefined ? emptyPage : raw.page;
     result.page = numStr(rawPage.current_page);
-    result.hasMore = str(rawPage.has_more) === '1';
+    result.hasMore = wireString(rawPage.has_more) === '1';
     const entries: RawSearchPostEntry[] = raw.post_list === undefined ? [] : raw.post_list;
     for (const entry of entries) {
       const item: SearchPostItem = new SearchPostItem();
       item.tid = numStr(entry.tid);
       item.pid = numStr(entry.pid);
-      item.title = cleanTitle(str(entry.title));
-      item.snippet = cleanSnippet(str(entry.content));
-      item.forumName = str(entry.fname);
+      item.title = cleanTitle(wireString(entry.title));
+      item.snippet = cleanSnippet(wireString(entry.content));
+      item.forumName = wireString(entry.fname);
       item.timeMs = numStr(entry.time) * 1000;
       if (entry.author !== undefined) {
         // name 也可能是昵称，两个字段仅用于展示；身份以 tid + pid 对应的作者为准。
-        item.authorName = str(entry.author.name_show).length > 0
-          ? str(entry.author.name_show) : str(entry.author.name);
+        item.authorName = wireString(entry.author.name_show).length > 0
+          ? wireString(entry.author.name_show) : wireString(entry.author.name);
       }
       result.items.push(item);
     }

@@ -6,19 +6,14 @@
  * 关注/帖子数直接用服务端格式化好的展示串（"2W"/"31W"），自己再做数字格式化属于重复劳动。
  */
 
-import { RawForumMatch, RawForumSearchResponse } from '../api/RawForumSearch';
+import { RawForumMatch, RawForumSearchResponse } from './RawForumSearch';
+import { wireString, wireNumber } from './Wire';
 
-function numOrZero(value: number | undefined): number {
-  return value === undefined ? 0 : value;
-}
 
 function displayStr(value: string | number | undefined): string {
   return value === undefined ? '' : String(value);
 }
 
-function text(value: string | undefined): string {
-  return value === undefined ? '' : value;
-}
 
 /** 一条吧搜索结果 */
 export class ForumSearchItem {
@@ -79,7 +74,7 @@ export class ForumSearchPage {
     if (data === undefined) {
       return result;
     }
-    result.page = numOrZero(data.pn) > 0 ? numOrZero(data.pn) : 1;
+    result.page = wireNumber(data.pn) > 0 ? wireNumber(data.pn) : 1;
     result.hasMore = data.has_more === 1;
 
     // 精确在前，模糊随后；forum_id 去重（精确吧常重复出现在模糊列表）
@@ -106,14 +101,14 @@ export class ForumSearchPage {
 
   private static fromMatch(raw: RawForumMatch): ForumSearchItem {
     const item: ForumSearchItem = new ForumSearchItem();
-    item.forumId = numOrZero(raw.forum_id);
-    item.forumName = text(raw.forum_name);
-    item.forumNameShow = text(raw.forum_name_show);
-    item.avatar = text(raw.avatar);
+    item.forumId = wireNumber(raw.forum_id);
+    item.forumName = wireString(raw.forum_name);
+    item.forumNameShow = wireString(raw.forum_name_show);
+    item.avatar = wireString(raw.avatar);
     item.concernNum = displayStr(raw.concern_num);
     item.postNum = displayStr(raw.post_num);
     // slogan 缺省时退 intro（两个字段语义相同，实测精确匹配有 slogan、部分模糊结果只有 intro）
-    item.slogan = text(raw.slogan).length > 0 ? text(raw.slogan) : text(raw.intro);
+    item.slogan = wireString(raw.slogan).length > 0 ? wireString(raw.slogan) : wireString(raw.intro);
     item.isOfficial = raw.is_official_forum === 1;
     return item;
   }

@@ -10,10 +10,6 @@ import { SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLi
 
 @ComponentV2
 export struct ForbiddenForumsPane {
-  /** 页面顶栏刷新序号：自增即触发重读（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
-  /** 页面「接近底部」序号：自增即请求下一页（初值 0 不触发） */
-  @Param loadMoreSeq: number = 0;
   @Event onPageStarted: () => void = (): void => {};
   @Event onPageSettled: () => void = (): void => {};
   @Require @Param vm: ForbiddenForumsVM;
@@ -34,6 +30,7 @@ export struct ForbiddenForumsPane {
     this.reload();
   }
 
+  /** 离开面板即停掉在途准备/取消；页面销毁时还会再 dispose 一次（幂等，见 `Settings.aboutToDisappear`）。 */
   aboutToDisappear(): void {
     this.vm.dispose();
   }
@@ -52,23 +49,6 @@ export struct ForbiddenForumsPane {
       if (item.name.length > 0) { names.push(item.name); }
     }
     void threadBlockStore.replaceBlockedForums(this.context(), names, !this.vm.hasMore && !this.vm.stalled && this.vm.pagingError.length === 0);
-  }
-
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      this.vm.load(this.context(), false, (): void => {}, this.onPageSettled).then((): void => {
-        this.syncMirror();
-      });
-    }
-  }
-
-  @Monitor('loadMoreSeq')
-  onLoadMoreRequested(): void {
-    if (this.loadMoreSeq > 0) {
-      // 实际接受的分页由 VM 通知父页，忽略重复触发不发完成事件
-      void this.vm.load(this.context(), true, this.onPageStarted, this.onPageSettled).then((): void => { this.syncMirror(); });
-    }
   }
 
   @Monitor('unblockSeq')

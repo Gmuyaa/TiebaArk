@@ -14,8 +14,6 @@ import {
 @ComponentV2
 export struct BlockManagePane {
   @Param hiddenThreads: boolean = false;
-  /** 页面顶栏刷新序号：自增即重读本机记录（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
   @Local actionBusy: boolean = false;
 
   private context(): common.UIAbilityContext {
@@ -24,13 +22,6 @@ export struct BlockManagePane {
 
   aboutToAppear(): void {
     void this.reload();
-  }
-
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      void this.reload();
-    }
   }
 
   private async reload(): Promise<void> {

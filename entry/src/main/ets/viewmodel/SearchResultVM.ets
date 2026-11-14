@@ -2,7 +2,10 @@ import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { ForumSearchItem } from '../model/ForumSearch';
-import { getForumAvatar, isForumAvatarFetched, markForumAvatarFetched, putForumAvatar } from '../model/ForumAvatarStore';
+import {
+  getCachedForumAvatarUrl, getForumAvatar, getForumAvatarId, isForumAvatarFetched, markForumAvatarFetched, putForumAvatar
+} from '../model/ForumAvatarStore';
+import { FORUM_AVATAR_URL_TTL_MS } from '../model/CachePolicy';
 import { SearchPostItem } from '../model/SearchPost';
 import { TiebaDevice } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
@@ -66,10 +69,17 @@ export class SearchResultVM {
         const cached: string = getForumAvatar(name);
         if (cached.length > 0) { return cached; }
       }
-      const response = await avatarApi.fetchThreadList(device, authSession.session(), name, 1, 1);
-      if (!this.currentOwner(epoch, owner) || !response.ok) { return ''; }
-      const url: string = response.data.forum.avatar;
-      if (url.length > 0) { putForumAvatar(name, url); markForumAvatarFetched(name); }
+      // 落盘地址在 TTL 内直接复用，不发请求（2026-11-13 方案 2）。
+      const fromDisk: string = getCachedForumAvatarUrl(name, Date.now(), FORUM_AVATAR_URL_TTL_MS);
+      if (fromDisk.length > 0) {
+        markForumAvatarFetched(name);
+        return fromDisk;
+      }
+      // 会话里已知这个吧的 fid 就走轻量端点；不知道才按吧名拉整页 frs/page。
+      const known: number = getForumAvatarId(name);
+      const url: string = await avatarApi.fetchForumAvatar(device, authSession.session(), name, known, 'search');
+      if (!this.currentOwner(epoch, owner)) { return ''; }
+      if (url.length > 0) { putForumAvatar(name, url, known); markForumAvatarFetched(name); }
       return url;
     });
   }

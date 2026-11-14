@@ -5,9 +5,7 @@ import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { createReplyImagePreview, pickUploadImage } from '../utils/ImagePrepare';
 import { CryptoUtil } from '../utils/CryptoUtil';
 import { ImageUploadChunk, ImageUploadInput, UploadedPostImage, imageUploadInputError, imageUploadChunkError, uploadedImageToken } from '../model/ImageUpload';
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
+import { accountWithPortrait } from './SessionOwner';
 /** 整图上传调度；已发出的请求不宣称能撤销。 */
 @ObservedV2
 export class ImageUploadVM {
@@ -21,11 +19,11 @@ export class ImageUploadVM {
   private account: string = '';
   private epoch: number = 0;
   private disposed: boolean = false;
-  private current(mine: number): boolean { return !this.disposed && this.epoch === mine && this.account === owner(); }
-  contentToken(): string { return this.account === owner() && !this.disposed && this.image !== undefined ? uploadedImageToken(this.image) : ''; }
+  private current(mine: number): boolean { return !this.disposed && this.epoch === mine && this.account === accountWithPortrait(); }
+  contentToken(): string { return this.account === accountWithPortrait() && !this.disposed && this.image !== undefined ? uploadedImageToken(this.image) : ''; }
   async pickAndUpload(context: common.UIAbilityContext, forumName: string, forCollection: boolean = false): Promise<void> {
-    if (this.disposed || ((this.busy || this.selecting) && this.account === owner())) { return; }
-    const mine: number = ++this.epoch; this.account = owner();
+    if (this.disposed || ((this.busy || this.selecting) && this.account === accountWithPortrait())) { return; }
+    const mine: number = ++this.epoch; this.account = accountWithPortrait();
     this.image = undefined; this.error = ''; this.busy = false; this.selecting = false;
     this.totalBytes = 0; this.uploadedBytes = 0;
     if (this.account.length === 0) { this.error = '登录后才能上传图片'; return; }
@@ -41,13 +39,13 @@ export class ImageUploadVM {
     finally {
       if (mine === this.epoch) {
         this.selecting = false;
-        if (!this.disposed && this.account !== owner()) { this.error = '账号已变化，请重新选择图片'; }
+        if (!this.disposed && this.account !== accountWithPortrait()) { this.error = '账号已变化，请重新选择图片'; }
       }
     }
   }
   async upload(context: common.UIAbilityContext, input: ImageUploadInput): Promise<void> {
-    if (this.disposed || ((this.busy || this.selecting) && this.account === owner())) { return; }
-    const mine: number = ++this.epoch; this.account = owner();
+    if (this.disposed || ((this.busy || this.selecting) && this.account === accountWithPortrait())) { return; }
+    const mine: number = ++this.epoch; this.account = accountWithPortrait();
     this.image = undefined; this.error = ''; this.uploadedBytes = 0; this.totalBytes = 0; this.busy = false; this.selecting = false;
     if (this.account.length === 0) { this.error = '登录后才能上传图片'; return; }
     const invalid: string = imageUploadInputError(input);
@@ -122,7 +120,7 @@ export class ImageUploadVM {
     finally {
       if (mine === this.epoch) {
         this.busy = false;
-        if (!this.disposed && this.account !== owner()) {
+        if (!this.disposed && this.account !== accountWithPortrait()) {
           this.image = undefined; this.uploadedBytes = 0; this.totalBytes = 0; this.error = '账号已变化，上传结果未确认';
         }
       }

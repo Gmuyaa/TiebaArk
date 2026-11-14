@@ -23,6 +23,11 @@ export struct ForumAvatarImage {
   @Param onHero: boolean = false;
   /** 图片加载中/失败时的底色；默认透明 */
   @Param bgColor: ResourceColor = Color.Transparent;
+  /**
+   * 图片加载失败回调（只报"当前这张地址"的失败）。
+   * 用于落盘 URL 的自愈：调用方作废该地址并重取一次，见 `MyListVM.retryAvatar`。
+   */
+  @Param onLoadError: (url: string) => void = (_url: string): void => {};
 
   /** 加载失败标记：失败后改走文字兜底，不再留空方块 */
   @Local failed: boolean = false;
@@ -35,7 +40,10 @@ export struct ForumAvatarImage {
 
   private errorHandler(url: string, revision: number): () => void {
     return (): void => {
-      if (url === this.url && revision === this.retryRevision) { this.failed = true; }
+      if (url === this.url && revision === this.retryRevision) {
+        this.failed = true;
+        this.onLoadError(url);
+      }
     };
   }
 

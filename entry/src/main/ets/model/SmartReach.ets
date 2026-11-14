@@ -32,9 +32,29 @@ export interface FloatingButtonHitRegion {
   height: number;
 }
 
-/** 触控区居中，四角也落在 48vp 和 52vp 圆面内。 */
+/** 悬浮圆按钮的种类：决定停靠范围与记忆字段，供公共组件 `FloatingCircleButton` 查表分发。 */
+export enum FloatingButtonKind {
+  /** 首页发帖：吸附最近侧边，底部留出底栏操作空间。 */
+  HOME_COMPOSE = 0,
+  /** 吧页刷新：吸附最近侧边，范围比发帖按钮宽松（底部留 64）。 */
+  FORUM_REFRESH = 1
+}
+
+/**
+ * 按按钮种类取停靠范围。差异只在这两个函数上，公共组件不再各写一份 if。
+ * 新增按钮种类时在这里补一条，不要在组件里散开判断。
+ */
+export function buttonDockBounds(kind: FloatingButtonKind, width: number, height: number, top: number): FloatingBounds {
+  return kind === FloatingButtonKind.HOME_COMPOSE ? homeComposeBounds(width, height, top) :
+    floatingBounds(width, height, top);
+}
+
+/** 触控区居中。原为 32（四角刚好落在 48vp 圆面内），但按住边缘稍偏就落空、
+ * 拖拽起不来（2026-11-10 持有者反馈），提到 40：边长 +25%、面积 +56%，
+ * 允许四角略微伸出视觉圆面换取按压容错。
+ */
 export function floatingButtonHitRegion(diameter: number, x: number = 0, y: number = 0): FloatingButtonHitRegion {
-  const size: number = 32;
+  const size: number = Math.min(diameter, 40);
   const inset: number = (diameter - size) / 2;
   return { x: x + inset, y: y + inset, width: size, height: size };
 }

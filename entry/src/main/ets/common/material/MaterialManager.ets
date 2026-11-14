@@ -152,20 +152,25 @@ export class MaterialManager {
     return resolveMode(slot, this.mode);
   }
 
-  /** 官方材质按用途、厚度与阴影开关复用；不提供自绘模糊回退。 */
-  officialOf(slot: MaterialSlot, applyShadow: boolean = true): uiMaterial.ImmersiveMaterial | undefined {
+  /**
+   * 官方材质按用途、厚度与阴影开关复用；不提供自绘模糊回退。
+   * `forceStatic`：跳过全局动效开关、强制 `interactive:false` / `lightEffect:null` ——
+   * 用于贴顶分类胶囊这类"整排紧挨着的材质件"（2026-11-11 持有者定）：
+   * 任意一颗按压形变都会让 8vp 缝里的边缘层跟着动，整排观感发飘。
+   */
+  officialOf(slot: MaterialSlot, applyShadow: boolean = true, forceStatic: boolean = false): uiMaterial.ImmersiveMaterial | undefined {
     if (!this.useArkUI) {
       return undefined;
     }
-    const interactive: boolean = motionStore.isOn(MotionEffect.DEFORMATION);
-    const light: boolean = motionStore.isOn(MotionEffect.TOUCH_LIGHT);
+    const interactive: boolean = !forceStatic && motionStore.isOn(MotionEffect.DEFORMATION);
+    const light: boolean = !forceStatic && motionStore.isOn(MotionEffect.TOUCH_LIGHT);
     const appearanceKey: string = `${visualThemeStore.theme}:${themeModeStore.isDark}:${this.mode}:${interactive}:${light}`;
     if (appearanceKey !== this.appearanceKey) {
       this.cache.clear();
       this.appearanceKey = appearanceKey;
     }
     const mode: MaterialMode = this.modeOf(slot);
-    const key: string = `${slot}:${mode}:${applyShadow}`;
+    const key: string = `${slot}:${mode}:${applyShadow}:${interactive}:${light}`;
     const hit: uiMaterial.ImmersiveMaterial | undefined = this.cache.get(key);
     if (hit !== undefined) {
       return hit;

@@ -135,6 +135,8 @@ export class ThreadDetailVM {
    * 触发的 `ensureSubPostPreview`。
    */
   private subTouchPending: boolean = false;
+  /** 合并刷新的挂起帧；-1 = 无挂起。dispose 时清掉，避免已销毁实例的定时器存活到触发。 */
+  private subTouchTimer: number = -1;
   /** 楼层 pid 对应的服务端页码；确认点赞时必须读回该页。 */
   private postPages: Map<number, number> = new Map<number, number>();
   /** 楼中楼 pid 所在页与所属楼层，供点赞后读回对应的 floor 页面。 */
@@ -211,14 +213,23 @@ export class ThreadDetailVM {
    * 失败时保留 errorText 供界面展示，不抛异常。
    */
   async load(context: common.UIAbilityContext, tid: number, targetPid: number = 0): Promise<void> {
-    if (this.deletePending) { return; }
+    /*
+     * 已 dispose 的实例不得复用：页面销毁时调 dispose()，重进帖子是新的页面实例 + 新的 VM。
+     * 这里不再把 disposed 复位成 false —— 迟到的 load 会把已销毁的 VM 复活并继续写 @Trace 状态。
+     */
+    if (this.disposed || this.deletePending) { return; }
     if (tid <= 0) {
       this.errorText = '帖子 id 无效';
       return;
     }
     const sameThread: boolean = this.tid === tid;
     if (!sameThread) { this.deletedPid = 0; this.deletedParentPid = 0; }
-    this.disposed = false;
+    /*
+     * load 是整页重置：必须同时清掉上一轮翻页的在途标记。本方法会推进 requestSeq，
+     * 在途 loadMore 的 finally 因此不再复位 isLoadingMore；而 refresh/loadMore/switchReplySort
+     * 的入口守卫都包含该标记，漏清会让三处入口永久被挡（只有删除路径能解）。
+     */
+    this.isLoadingMore = false;
     this.threadDeleted = false;
     this.rereadPageAfterDelete = 0;
     this.tid = tid;
@@ -1093,6 +1104,9 @@ export class ThreadDetailVM {
     this.deletePending = false;
     this.deletedPid = 0;
     this.deletedParentPid = 0;
+    // 合并刷新的挂起帧一并作废：回调里的 disposed 判断仍然保留，这里只是不留存活定时器。
+    if (this.subTouchTimer >= 0) { clearTimeout(this.subTouchTimer); this.subTouchTimer = -1; }
+    this.subTouchPending = false;
   }
 
   /** 页面只提供目标身份与读回位置，写入串行化由共享状态机负责。 */
@@ -1602,7 +1616,8 @@ export class ThreadDetailVM {
   private scheduleSubStatesTouch(): void {
     if (this.subTouchPending || this.disposed) { return; }
     this.subTouchPending = true;
-    setTimeout((): void => {
+    this.subTouchTimer = setTimeout((): void => {
+      this.subTouchTimer = -1;
       this.subTouchPending = false;
       if (!this.disposed) { this.touchSubStates(); }
     }, 0);

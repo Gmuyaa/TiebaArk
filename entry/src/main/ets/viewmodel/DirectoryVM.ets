@@ -5,9 +5,10 @@ import { DirectoryData, DirectoryKind, DirectoryUser, mergeDirectoryUsers } from
 import { fanActionPreview } from '../model/NotifyUnread';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { FollowReadGuard, seedFollowState } from './FollowActionVM';
+import { registerForumAlias } from './ForumStateStore';
 import { notifyUnreadVM } from './NotifyUnreadVM';
+import { rawSessionKey } from './SessionOwner';
 
-function owner(): string { return authSession.sessionKey(); }
 
 @ObservedV2
 export class DirectoryVM {
@@ -30,13 +31,13 @@ export class DirectoryVM {
     more: boolean = false): Promise<void> {
     if (this.disposed) { return; }
     const target: string = `${kind}:${id}`;
-    const changed: boolean = this.target !== target || this.account !== owner();
+    const changed: boolean = this.target !== target || this.account !== rawSessionKey();
     if (this.removingUid > 0 && !changed) { return; }
     if (!changed && ((this.loading && !more) || (more && (this.loading || this.loadingMore || !this.data.hasMore)))) { return; }
     if (changed) {
       this.removingUid = 0;
       this.pagingNeedsRefresh = false;
-      this.target = target; this.account = owner(); more = false;
+      this.target = target; this.account = rawSessionKey(); more = false;
       this.data = new DirectoryData(); this.page = 0; this.loaded = false;
     }
     const mine: number = ++this.epoch;
@@ -71,6 +72,9 @@ export class DirectoryVM {
         for (const user of response.data.users) {
           seedFollowState(followGuard, 'user', user.uid, user.portrait, user.name, user.followed);
         }
+      } else if (kind === 'forum' && response.data.forum.id > 0) {
+        // 吧资料回包不含关注字段，但能把名字与 fid 对上：关注按钮据此复用同一份身份状态。
+        registerForumAlias(response.data.forum.id, response.data.forum.name);
       }
       if (more) {
         const oldCount: number = this.data.users.length;
@@ -89,7 +93,7 @@ export class DirectoryVM {
     } finally {
       if (mine === this.epoch) {
         this.loading = false; this.loadingMore = false;
-        if (this.account !== owner()) {
+        if (this.account !== rawSessionKey()) {
           this.data = new DirectoryData(); this.page = 0; this.loaded = false;
           this.error = '账号已变化，请重新读取'; this.pagingError = '';
         }
@@ -100,7 +104,7 @@ export class DirectoryVM {
   /** 仅本人列表、确认后的当前会话可移除；业务成功才撤下行，写后停止旧偏移续页。 */
   async removeFan(context: common.UIAbilityContext, user: DirectoryUser, expectedOwner: string): Promise<string> {
     const uid: number = authSession.snapshot.uid;
-    if (this.disposed || this.removingUid > 0 || !authSession.isLoggedIn() || expectedOwner !== owner() ||
+    if (this.disposed || this.removingUid > 0 || !authSession.isLoggedIn() || expectedOwner !== rawSessionKey() ||
       this.account !== expectedOwner || this.target !== `fans:${uid}` || !Number.isSafeInteger(user.uid) ||
       user.uid <= 0 || user.uid === uid || !this.data.users.some((row: DirectoryUser): boolean => row.uid === user.uid)) { return ''; }
     const mine: number = ++this.epoch;
@@ -130,7 +134,7 @@ export class DirectoryVM {
       if (mine === this.epoch) {
         this.removingUid = 0;
         if (sent) { this.data = this.withoutPagination(this.data.users); this.pagingError = ''; this.pagingNeedsRefresh = hadMore; }
-        if (this.account !== owner()) { this.data = new DirectoryData(); this.loaded = false; this.error = ''; }
+        if (this.account !== rawSessionKey()) { this.data = new DirectoryData(); this.loaded = false; this.error = ''; }
       }
     }
   }
@@ -141,7 +145,7 @@ export class DirectoryVM {
     return data;
   }
   private current(mine: number): boolean {
-    return !this.disposed && mine === this.epoch && this.account === owner();
+    return !this.disposed && mine === this.epoch && this.account === rawSessionKey();
   }
   dispose(): void {
     this.disposed = true; this.epoch++; this.data = new DirectoryData();

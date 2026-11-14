@@ -2,12 +2,11 @@
 import { common } from '@kit.AbilityKit';
 import { TailItem, tailColor, tailSelectionLabel } from '../model/Tails';
 import { TailsVM } from '../viewmodel/TailsVM';
-import { SettingsCard, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SettingsInfoRow } from './SettingsComponents';
+import { PreferencePaneScaffold } from './PreferencePaneScaffold';
 
 @ComponentV2
 export struct TailsPane {
-  /** 页面顶栏刷新序号：自增即触发重读（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
   @Local vm: TailsVM = new TailsVM();
 
   private context(): common.UIAbilityContext {
@@ -22,32 +21,14 @@ export struct TailsPane {
     this.vm.dispose();
   }
 
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      this.vm.load(this.context()).then((): void => {
-      });
-    }
-  }
-
   build() {
-    Column() {
-      SettingsNote({ text: '仅查看，回复暂不附加小尾巴。' })
-      SettingsCard({
-        content: (): void => { this.TailRows() }
-      })
-      if (this.vm.error.length > 0) {
-        SettingsStatusLine({
-          kind: SettingsStatusKind.ERROR,
-          message: this.vm.error,
-          retryLabel: '重试',
-          onRetry: (): void => {
-            void this.vm.load(this.context());
-          }
-        })
-      }
+    PreferencePaneScaffold({
+      note: '仅查看，回复暂不附加小尾巴。',
+      message: this.vm.error,
+      onRetry: (): void => { void this.vm.load(this.context()); }
+    }) {
+      this.TailRows()
     }
-    .width('100%')
   }
 
   @Builder

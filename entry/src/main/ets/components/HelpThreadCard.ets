@@ -1,5 +1,5 @@
 import { ThreadBrief } from '../model/ThreadList';
-import { formatPostTime } from '../model/ThreadDetail';
+import { formatTimeText } from '../model/TimeText';
 import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AvatarComponent } from './AvatarComponent';
@@ -19,12 +19,9 @@ export struct HelpThreadCard {
   @Event onOpenImage: () => void = (): void => {};
   @Local textHeight: number = 80;
 
+  /** 时间与全站一致（`model/TimeText`）；原先这里另有一套「N分钟前」口径。 */
   private timeText(): string {
-    const minutes: number = Math.max(0, Math.floor((Date.now() - this.item.lastTimeMs) / 60000));
-    if (minutes === 0) { return '刚刚'; }
-    if (minutes < 60) { return `${minutes}分钟前`; }
-    if (minutes < 1440) { return `${Math.floor(minutes / 60)}小时前`; }
-    return formatPostTime(this.item.lastTimeMs, Date.now());
+    return formatTimeText(this.item.lastTimeMs, Date.now());
   }
 
   @Builder

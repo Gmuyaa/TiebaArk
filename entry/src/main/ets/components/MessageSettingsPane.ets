@@ -8,8 +8,6 @@ import {
 
 @ComponentV2
 export struct MessageSettingsPane {
-  /** 页面顶栏刷新序号：自增即触发重读（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
   /** 进入「官方账号消息提醒」独立页（换页由页面负责） */
   @Event onOpenOfficial: () => void = (): void => {};
   @Local vm: MessageSettingsVM = new MessageSettingsVM();
@@ -24,14 +22,6 @@ export struct MessageSettingsPane {
 
   aboutToDisappear(): void {
     this.vm.dispose();
-  }
-
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      this.vm.load(this.context()).then((): void => {
-      });
-    }
   }
 
   build() {

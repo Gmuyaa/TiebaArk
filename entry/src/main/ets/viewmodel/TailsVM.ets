@@ -3,10 +3,8 @@ import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { TailChange, TailItem, TailList, tailChangeError } from '../model/Tails';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 @ObservedV2
 export class TailsVM {
@@ -27,7 +25,7 @@ export class TailsVM {
 
   async load(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || ((this.pending || this.loading) && this.sameAccount())) { return; }
-    const nextAccount: string = owner();
+    const nextAccount: string = accountWithPortrait();
     const sameAccount: boolean = nextAccount.length > 0 && nextAccount === this.account &&
       this.sameAccount();
     this.readValid = false;
@@ -67,7 +65,7 @@ export class TailsVM {
 
   private sameAccount(): boolean {
     const live = authSession.session();
-    return this.account.length > 0 && this.account === owner() &&
+    return this.account.length > 0 && this.account === accountWithPortrait() &&
       this.bduss === (live.bduss ?? '') && this.stoken === (live.stoken ?? '');
   }
 
@@ -77,7 +75,7 @@ export class TailsVM {
 
   /** 写 UI 尚未开放。只在已读取当前账号列表上操作，写一次后只读校准。 */
   async change(context: common.UIAbilityContext, input: TailChange): Promise<void> {
-    if (this.disposed || this.loading || this.pending || !this.loaded || !this.readValid || !this.sameAccount() || owner().length === 0) {
+    if (this.disposed || this.loading || this.pending || !this.loaded || !this.readValid || !this.sameAccount() || accountWithPortrait().length === 0) {
       return;
     }
     const error: string = tailChangeError(input);

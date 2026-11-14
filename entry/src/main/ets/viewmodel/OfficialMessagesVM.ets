@@ -3,9 +3,7 @@ import { authSession } from '../auth/AuthSession';
 import { TiebaApi } from '../api/TiebaApi';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { OfficialMessageSetting } from '../model/OfficialMessages';
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
+import { accountWithPortrait } from './SessionOwner';
 @ObservedV2
 export class OfficialMessagesVM {
   @Trace items: OfficialMessageSetting[] = [];
@@ -16,11 +14,11 @@ export class OfficialMessagesVM {
   private epoch: number = 0;
   private disposed: boolean = false;
   private api: TiebaApi = new TiebaApi();
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === accountWithPortrait(); }
 
   async load(context: common.UIAbilityContext): Promise<void> {
-    if (this.disposed || (this.loading && this.account === owner())) { return; }
-    const nextAccount: string = owner();
+    if (this.disposed || (this.loading && this.account === accountWithPortrait())) { return; }
+    const nextAccount: string = accountWithPortrait();
     const sameAccount: boolean = nextAccount.length > 0 && nextAccount === this.account;
     const keepOld: boolean = sameAccount && this.loaded;   // 只有同账号刷新才保留旧内容
     this.account = nextAccount; const mine: number = ++this.epoch;
@@ -39,7 +37,7 @@ export class OfficialMessagesVM {
     finally {
       if (mine === this.epoch) {
         this.loading = false;
-        if (!this.disposed && this.account !== owner()) {
+        if (!this.disposed && this.account !== accountWithPortrait()) {
           // 账号已变化：立即清空旧账号的数据与状态
           this.items = []; this.loaded = false; this.error = '账号已变化，请重新读取';
         }

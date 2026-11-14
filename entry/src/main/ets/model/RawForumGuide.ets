@@ -26,6 +26,6 @@ export interface RawForumGuideResponse {
   error_msg?: string;
   like_forum?: RawFollowForum[];
   like_forum_has_more?: number | string | boolean;
-  /** 兼容 data 包一层的情况（实测在顶层，这里只作多余兜底） */
+  /** `data` 包一层：实测在顶层，但 `FollowForum.fromRaw` 仍读这个字段兜底 —— 两处要一起删，删前先做一次真机 raw 取证 */
   data?: RawForumGuideData;
 }

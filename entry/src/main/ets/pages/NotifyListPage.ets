@@ -7,6 +7,7 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { PageHeader } from '../components/PageHeader';
 import { NotifyAuthor, NotifyItem, NotifyKind } from '../model/Notify';
+import { formatTimeText } from '../model/TimeText';
 import { NavigationService, NotifyListParams } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
@@ -275,17 +276,8 @@ export struct NotifyListPage {
     .onClick(() => { this.openTarget(item); })
   }
 
-  /** 时间文案：今天显示时分，其余显示月-日（与帖子卡片的口径一致，不引入新依赖） */
+  /** 时间文案：与全站统一（`model/TimeText`），不再自带一份「当天只给时分」的实现。 */
   private timeText(timeMs: number): string {
-    const date: Date = new Date(timeMs);
-    const now: Date = new Date();
-    const sameDay: boolean = date.getFullYear() === now.getFullYear()
-      && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-    const pad = (n: number): string => n < 10 ? `0${n}` : `${n}`;
-    if (sameDay) {
-      return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    }
-    const year: string = date.getFullYear() === now.getFullYear() ? '' : `${date.getFullYear()}-`;
-    return `${year}${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return formatTimeText(timeMs, Date.now());
   }
 }

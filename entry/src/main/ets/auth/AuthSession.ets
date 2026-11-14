@@ -23,7 +23,7 @@ import { mergeProfile, UserProfileInfo, avatarIdentity } from '../model/UserProf
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { avatarTrace, avatarTracePhase, avatarUptimeMs } from '../utils/AvatarTrace';
 import { AuthStore, StoreResult } from './AuthStore';
-import { deleteForumSnapshot } from '../viewmodel/ForumSnapshotStore';
+import { deleteForumSnapshot } from '../utils/ForumSnapshotStore';
 import {
   AuthSnapshot, CredentialBundle, credentialsFromUserInput, expiredSnapshot,
   loggedInSnapshotCarrying, LoginResult, normalizeBduss,

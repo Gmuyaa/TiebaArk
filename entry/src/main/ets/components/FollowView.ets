@@ -1,6 +1,7 @@
 import { RootPageHeader } from './PageHeader';
 import { PageState } from './PageState';
-import { followChanges } from '../viewmodel/FollowActionVM';
+import { FollowChanges, followChanges } from '../viewmodel/FollowActionVM';
+import { ForumStateChanges, forumStateChanges } from '../viewmodel/ForumStateStore';
 
 import { common } from '@kit.AbilityKit';
 import { promptAction, router } from '@kit.ArkUI';
@@ -100,7 +101,11 @@ export struct FollowView {
     void this.vm.load(this.hostContext(), true);
   }
 
-  private changes = followChanges;
+  @Local private changes: FollowChanges = followChanges;
+  @Local private states: ForumStateChanges = forumStateChanges;
+  /** 吧页/吧资料签到成功后无需重读列表：按身份状态就地校正今天的签到标记。 */
+  @Monitor('states.signRevision')
+  syncSignFromStore(): void { this.vm.syncFromStore(); }
   private relationshipRefreshPending: boolean = false;
   private visibleForums: Map<number, FollowForumItem> = new Map();
   @Monitor('changes.forums')
@@ -338,9 +343,10 @@ export struct FollowView {
     })
   }
 
+  /** 进行中只用按钮内的转圈表示，文案保持稳定状态（2026-11-13 持有者要求去掉「…中…」字样）。 */
   private signLabel(item: FollowForumItem): string {
-    if (this.vm.signingFname === item.fname) { return '签到中…'; }
-    if (!item.signKnown) { return this.vm.loading ? '读取中…' : '重试'; }
+    if (this.vm.signingFname === item.fname) { return '签到'; }
+    if (!item.signKnown) { return '重试'; }
     return item.isSigned ? '已签到' : '签到';
   }
 

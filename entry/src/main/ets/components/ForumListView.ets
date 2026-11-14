@@ -16,8 +16,10 @@ import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadC
 import { buildThreadCardMenu } from './ThreadCardMenu';
 import { visibleThreads } from '../model/ThreadBlock';
 import { ThreadBlockStore, threadBlockStore } from '../utils/ThreadBlockStore';
-import { feedImageInfo, formatPostTime } from '../model/HomeFeedPresentation';
+import { feedImageInfo } from '../model/HomeFeedPresentation';
+import { formatTimeText } from '../model/TimeText';
 import { ThreadBrief, threadBriefIdentity } from '../model/ThreadList';
+import { ThreadBriefDataSource } from '../model/ThreadBriefDataSource';
 import { RecommendVM } from '../viewmodel/RecommendVM';
 import { FollowFeedVM } from '../viewmodel/FollowFeedVM';
 import { HotTopicVM } from '../viewmodel/HotTopicVM';
@@ -27,11 +29,10 @@ import { NavigationService } from '../navigation/AppNavigation';
 import { LoginEmptyView } from './LoginEmptyView';
 import { RefreshSpinner, HOME_REFRESH_OFFSET } from './RefreshSpinner';
 import { AuthSession, authSession } from '../auth/AuthSession';
-import { isForumAvatarFetched, putForumAvatar } from '../model/ForumAvatarStore';
+import { getCachedForumAvatarUrl, isForumAvatarFetched, putForumAvatar } from '../model/ForumAvatarStore';
+import { FORUM_AVATAR_URL_TTL_MS } from '../model/CachePolicy';
 import { ForumAvatarQueue } from '../model/ForumAvatarQueue';
-import { TiebaApi, ThreadListResponse } from '../api/TiebaApi';
-import { TiebaDevice, TiebaSession } from '../net/TiebaParams';
-import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { fetchForumAvatarForPage } from '../viewmodel/PageFetch';
 import { BrowseItem, loadBrowseHistory } from '../utils/BrowseHistory';
 import { readStatusBarVp } from '../utils/SafeArea';
 import { hdsEffect } from '@kit.UIDesignKit';
@@ -133,6 +134,9 @@ export struct ForumListView {
   // 顶部频道是 UI 状态，不与 vm.mode（指定吧浏览状态）绑定。
   @Local selectedChannel: string = '推荐';
   private imageScrollers: Map<number, ListScroller> = new Map();
+  /** 卡片流数据源：`LazyForEach` 只认它；整批替换与尾部追加分开通知。 */
+  private recommendSource: ThreadBriefDataSource = new ThreadBriefDataSource();
+  private followSource: ThreadBriefDataSource = new ThreadBriefDataSource();
   /** 对象内补图保持卡片身份；刷新产生的新对象即使同 tid 也必须重新绑定内容。 */
   private cardKeys: WeakMap<ThreadBrief, string> = new WeakMap();
   private nextCardKey: number = 0;
@@ -211,22 +215,14 @@ export struct ForumListView {
       }
     });
 
-    const avatarApi: TiebaApi = new TiebaApi();
-
     void threadBlockStore.load(context);
     this.avatarQueue = new ForumAvatarQueue(
-      async (name: string): Promise<string> => {
-        const device: TiebaDevice = await DeviceIdentity.ensure(context);
-        const session: TiebaSession = authSession.session();
-        const res: ThreadListResponse =
-          await avatarApi.fetchThreadList(device, session, name, 1, 1);
-        hilog.info(0x0, 'TiebaTop', 'AVQ fetch %{public}s: ok=%{public}s', name, String(res.ok));
-        if (!res.ok) {
-          return '';
-        }
-        return res.data.forum.avatar;
-      });
+      (name: string, forumId: number): Promise<string> =>
+        // 双路取图（getforumdetail 优先、frs/page 回退）与设备身份/会话组装见 viewmodel/PageFetch。
+        fetchForumAvatarForPage(context, name, forumId, 'home'));
     this.vm.refreshRecommend(context);
+    /* 数据源可能在组件创建前就已有缓存数据（例如从子页返回），先对齐一次再交给 LazyForEach。 */
+    this.syncFeedSources();
     /*
      * 实测状态栏高度：玻璃头 expandSafeArea 铺进状态栏区后，顶部 padding 需要它来补偿。
      * 拿不到（理论上不会）就保持首帧估计值，玻璃头只是偏差几个像素。
@@ -574,6 +570,21 @@ export struct ForumListView {
     if (item.sourceForumAvatar.length > 0 && fetched) {
       return;
     }
+    /*
+     * 落盘地址在 TTL 内就直接用，不发请求（2026-11-13 方案 2）。
+     * 只有"这一次没有任何可用地址"才需要走网络；地址失效由 ForumAvatarImage 的
+     * onError → forgetCachedForumAvatar 兜底（见 model/ForumAvatarCache）。
+     */
+    if (item.sourceForumAvatar.length === 0) {
+      const cached: string = getCachedForumAvatarUrl(name, Date.now(), FORUM_AVATAR_URL_TTL_MS);
+      if (cached.length > 0) {
+        item.sourceForumAvatar = cached;
+        item.avatarStamp++;
+        this.avatarEpoch++;
+        putForumAvatar(name, cached, item.sourceForumId);
+        return;
+      }
+    }
     this.avatarQueue.enqueue(name, (url: string): void => {
       if (url.length > 0) {
         item.sourceForumAvatar = url;
@@ -582,7 +593,21 @@ export struct ForumListView {
         this.avatarEpoch++;
         hilog.info(0x0, 'TiebaTop', 'AVQ backfilled forum=%{public}s', name);
       }
-    }, !fetched);
+    }, !fetched, item.sourceForumId);
+  }
+
+  /**
+   * 数据一到达就把缺吧头像的卡片批量入队（2026-11-13 提速）。
+   *
+   * 原先只在卡片 `onAppear` 里入队，等于"滑到哪才查哪"：首屏卡片要等布局完成
+   * （真机实测比数据到达晚约 0.5s）才开始请求，冷启动最后一张吧头像约 2.4s 才出现。
+   * 现在整份可见列表逐条过一遍；命中缓存、本次会话已查、在飞、失败冷却的都会被
+   * 队列自身短路，不会重复发请求，真正的新请求仍由队列的并发上限与 FIFO 控制节奏。
+   */
+  private queueMissingAvatars(list: ThreadBrief[]): void {
+    for (let i: number = 0; i < list.length; i++) {
+      this.maybeQueueAvatar(list[i]);
+    }
   }
 
   private openForumPage(name: string): void {
@@ -699,6 +724,25 @@ export struct ForumListView {
     return channel === '关注' ? this.visibleFollowThreads : this.visibleRecommendThreads;
   }
 
+  /**
+   * 把最新可见列表推给数据源。
+   *
+   * 刷新、切频道、屏蔽规则变化都要经过这里 —— `LazyForEach` 只认数据源通知，
+   * 少了这一步就会停在旧的一批（`Repeat` 正是栽在这条上，见 2026-11-13 记录）。
+   */
+  @Monitor('vm.threads', 'followVm.threads', 'blocks.hidden', 'blocks.blockedForums', 'blocks.blockedUsers')
+  syncFeedSources(): void {
+    this.recommendSource.sync(this.visibleRecommendThreads);
+    this.followSource.sync(this.visibleFollowThreads);
+    // 数据到达即入队（不等卡片 onAppear），见 queueMissingAvatars 的说明。
+    this.queueMissingAvatars(this.visibleRecommendThreads);
+    this.queueMissingAvatars(this.visibleFollowThreads);
+  }
+
+  private sourceOf(channel: string): ThreadBriefDataSource {
+    return channel === '关注' ? this.followSource : this.recommendSource;
+  }
+
   @Builder
   FeedList(channel: string) {
     List({ space: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP, scroller: channel === '关注' ? this.followScroller : this.recommendScroller }) {
@@ -709,7 +753,16 @@ export struct ForumListView {
           .height(this.listSpacerH())
       }
 
-      ForEach(this.threadsOf(channel), (item: ThreadBrief) => {
+      /*
+       * 卡片流走 `LazyForEach` + `ThreadBriefDataSource`（虚拟化保留：按可视区 + 预加载区
+       * 创建、滑出回收）。**不能换回 `Repeat`**：2026-11-13 真机 A/B 实测，`Repeat`
+       * （连同去掉 `virtualScroll` 的写法）在刷新整批替换数据后不会重建已实例化的
+       * `ListItem` —— 数据到了、构建跑了，item builder 一次都不执行，屏上停在旧一批。
+       * 数据源把"整批替换"（`onDataReloaded`）与"尾部追加"（`onDataAdd`）分开通知，
+       * 既保证刷新一定重建，又保证触底翻页不把已有卡片顶走。
+       * 键沿用 `cardKey`（对象身份 + 递增号），保证刷新换新对象时能识别为不同项。
+       */
+      LazyForEach(this.sourceOf(channel), (item: ThreadBrief) => {
         ListItem() {
           this.ThreadCard(item)
         }
@@ -718,7 +771,7 @@ export struct ForumListView {
         .onAppear(() => {
           this.maybeQueueAvatar(item);
         })
-      }, (item: ThreadBrief) => this.cardKey(item))
+      }, (item: ThreadBrief): string => this.cardKey(item))
 
       ListItem() {
         this.FeedFooter(channel)
@@ -1127,7 +1180,7 @@ export struct ForumListView {
       authorName: item.authorName, authorAvatar: item.authorAvatar,
       forumName: this.forumOf(item), forumAvatar: this.cardForumAvatar(item, this.avatarEpoch),
       forumAvatarRevision: this.cardForumAvatarRevision(item, this.avatarEpoch),
-      postedTime: formatPostTime(item.postedMs, Date.now()),
+      postedTime: formatTimeText(item.postedMs, Date.now()),
       title: item.title, summary: item.summary,
       isHelp: item.isHelp,
       litType: this.cardLitType,

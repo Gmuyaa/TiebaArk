@@ -8,7 +8,8 @@ import { UploadedPostImage, uploadedImageToken } from '../model/ImageUpload';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { ImagePrepareResult, prepareUploadImage } from '../utils/ImagePrepare';
 import { ImageUploadVM } from './ImageUploadVM';
-import { deleteForumSnapshot } from './ForumSnapshotStore';
+import { deleteForumSnapshot } from '../utils/ForumSnapshotStore';
+import { accountWithPortrait } from './SessionOwner';
 
 export const COMPOSE_TYPES: string[] = ['文章', '帖子', '视频', '求助'];
 
@@ -16,9 +17,6 @@ export const COMPOSE_TYPES: string[] = ['文章', '帖子', '视频', '求助'];
 export const TITLE_MIN_LENGTH: number = 5;
 export const TITLE_MAX_LENGTH: number = 31;
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 /** 未接入发布的选项：发布前必须让用户明确知道会被忽略，不能静默丢弃。 */
 export function unsupportedComposeOptions(draft: ComposeDraft): string[] {
@@ -186,7 +184,7 @@ export class ComposeVM {
     const blocked: string = this.publishBlocked();
     if (blocked.length > 0) { return fail(blocked); }
 
-    const account: string = owner();
+    const account: string = accountWithPortrait();
     if (account.length === 0) { return fail('账号信息未就绪，请稍后重试'); }
     const type: number = this.type;
     const draft: ComposeDraft = this.drafts[type];
@@ -202,7 +200,7 @@ export class ComposeVM {
     const isHide: string = draft.visibility === '个人主页不可见' ? '1' : '0';
     const contentStatement: string = draft.declaration;
     const mine: number = ++this.publishEpoch;
-    const current = (): boolean => this.alive && mine === this.publishEpoch && account === owner();
+    const current = (): boolean => this.alive && mine === this.publishEpoch && account === accountWithPortrait();
 
     this.publishing = true;
     this.publishStep = '';

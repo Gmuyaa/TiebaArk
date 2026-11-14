@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ImageLayoutMode, normalizeImageLayoutMode } from '../../model/ImageLayout';
+import { PreferenceGate } from './PreferenceGate';
 
 const STORE: string = 'tieba_image_layout_prefs';
 const MODE_KEY: string = 'mode';
@@ -34,10 +35,7 @@ export class ImageLayoutStore {
   @Trace mode: ImageLayoutMode = ImageLayoutMode.MODERN;
   @Trace loadError: string = '';
   @Trace saveError: string = '';
-  private loaded: boolean = false;
-  private loading: Promise<void> | undefined = undefined;
-  private writes: Promise<void> = Promise.resolve();
-  private revision: number = 0;
+  private gate: PreferenceGate = new PreferenceGate();
   private persistence: ImageLayoutPersistence;
 
   constructor(persistence: ImageLayoutPersistence = new PreferencesImageLayoutPersistence()) {
@@ -45,30 +43,22 @@ export class ImageLayoutStore {
   }
 
   async load(context?: common.UIAbilityContext): Promise<void> {
-    if (this.loaded) { return; }
-    if (this.loading !== undefined) { return this.loading; }
-    const revision: number = this.revision;
-    const operation: Promise<void> = this.readPreference(context, revision);
-    this.loading = operation;
-    // 在赋值之后清理：存储同步抛错也不能留下一个已完成的 loading，挡住后续重试。
-    try { await operation; }
-    finally { if (this.loading === operation) { this.loading = undefined; } }
-  }
-
-  private async readPreference(context: common.UIAbilityContext | undefined, revision: number): Promise<void> {
-    try {
-      const raw: number | undefined = await this.persistence.read(context);
-      if (revision !== this.revision) { return; }
-      const valid: boolean = raw === ImageLayoutMode.MODERN || raw === ImageLayoutMode.CLASSIC;
-      this.mode = normalizeImageLayoutMode(raw === undefined ? -1 : raw);
-      this.loadError = valid ? '' : '图片排布设置未识别，暂用新版，请重新选择';
-      this.loaded = valid;
-    } catch (_) {
-      if (revision === this.revision) {
-        this.loadError = '图片排布读取失败，暂时保留当前排布';
+    await this.gate.loadOnce(async (revision: number): Promise<void> => {
+      try {
+        const raw: number | undefined = await this.persistence.read(context);
+        if (revision !== this.gate.revision()) { return; }
+        const valid: boolean = raw === ImageLayoutMode.MODERN || raw === ImageLayoutMode.CLASSIC;
+        this.mode = normalizeImageLayoutMode(raw === undefined ? -1 : raw);
+        this.loadError = valid ? '' : '图片排布设置未识别，暂用新版，请重新选择';
+        // 只有读到合法值才算"已加载"：非法值保留重读机会（与原实现一致）。
+        if (valid) { this.gate.markLoaded(); }
+      } catch (_) {
+        if (revision === this.gate.revision()) {
+          this.loadError = '图片排布读取失败，暂时保留当前排布';
+        }
+        hilog.warn(0x0, 'TiebaImageLayout', 'image layout preference load failed');
       }
-      hilog.warn(0x0, 'TiebaImageLayout', 'image layout preference load failed');
-    }
+    });
   }
 
   async setMode(mode: ImageLayoutMode, context?: common.UIAbilityContext): Promise<void> {
@@ -79,18 +69,16 @@ export class ImageLayoutStore {
   /** 即时生效、串行落盘；旧读取与旧写入的结果不得覆盖最新选择或错误。 */
   async retrySave(context?: common.UIAbilityContext): Promise<void> {
     const mode: ImageLayoutMode = this.mode;
-    const revision: number = ++this.revision;
-    this.loaded = true;
+    const revision: number = this.gate.bump();
+    this.gate.markLoaded();
     this.loadError = '';
-    const operation: Promise<void> = this.writes.then(async (): Promise<void> => {
-      await this.persistence.write(mode, context);
-    });
-    this.writes = operation.catch(() => {});
     try {
-      await operation;
-      if (revision === this.revision) { this.saveError = ''; }
+      await this.gate.enqueue(async (): Promise<void> => {
+        await this.persistence.write(mode, context);
+      });
+      if (revision === this.gate.revision()) { this.saveError = ''; }
     } catch (_) {
-      if (revision === this.revision) {
+      if (revision === this.gate.revision()) {
         this.saveError = '图片排布本次已生效，保存失败，重启后可能恢复旧值';
       }
       hilog.warn(0x0, 'TiebaImageLayout', 'image layout preference save failed');

@@ -286,11 +286,12 @@ export class FollowFeedVM {
       source.nextPage = requested + 1;
       for (const item of taken) {
         item.sourceForum = source.name; item.sourceForumAvatar = response.data.forum.avatar;
+        item.sourceForumId = response.data.forum.id;
         batch.seen.add(item.tid);
       }
       batch.pages[index] = taken;
       if (response.data.forum.avatar.trim().length > 0) {
-        putForumAvatar(source.name, response.data.forum.avatar);
+        putForumAvatar(source.name, response.data.forum.avatar, response.data.forum.id);
         markForumAvatarFetched(source.name);
       }
     } catch (err) {

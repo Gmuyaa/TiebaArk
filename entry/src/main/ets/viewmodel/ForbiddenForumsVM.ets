@@ -3,10 +3,8 @@ import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { ForbiddenForum, mergeForbiddenForums } from '../model/ForbiddenForums';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { loggedInSessionKey } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? authSession.sessionKey() : '';
-}
 
 /** 屏蔽吧列表的刷新与分页状态。分页失败不推进页码，重试沿用失败页；停滞与全部加载完成分别处理。 */
 @ObservedV2
@@ -42,13 +40,13 @@ export class ForbiddenForumsVM {
     onSettled: () => void = (): void => {}): Promise<void> {
     if (this.disposed || this.actionBusy) { return; }
     // 账号切换后的续页变成首屏，禁止沿用前一账号列表和页码。
-    if (this.account !== owner()) { more = false; }
+    if (this.account !== loggedInSessionKey()) { more = false; }
 
     if (more && (!this.loaded || !this.hasMore || this.loading || this.loadingMore || this.pagingError.length > 0)) { return; }
-    if (!more && this.loading && this.account === owner()) { return; }
+    if (!more && this.loading && this.account === loggedInSessionKey()) { return; }
     const mine: number = ++this.epoch;
-    const switching: boolean = this.account.length > 0 && this.account !== owner();
-    this.account = owner();
+    const switching: boolean = this.account.length > 0 && this.account !== loggedInSessionKey();
+    this.account = loggedInSessionKey();
     this.error = ''; this.pagingError = '';
     if (this.account.length === 0) {
       this.selecting = false; this.selectedIds = [];
@@ -96,7 +94,7 @@ export class ForbiddenForumsVM {
     } finally {
       if (mine === this.epoch) {
         this.loading = false; this.loadingMore = false;
-        if (this.account !== owner()) {
+        if (this.account !== loggedInSessionKey()) {
           this.items = []; this.loaded = false; this.hasMore = false; this.page = 0; this.stalled = false;
           this.error = '账号已变化，请重新读取'; this.pagingError = '';
         } else if (!this.disposed) { onSettled(); }
@@ -104,10 +102,10 @@ export class ForbiddenForumsVM {
     }
   }
 
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === loggedInSessionKey(); }
   dispose(): void { this.disposed = true; this.epoch++; this.loading = false; this.loadingMore = false; this.cancelPrepared(); }
 
-  ownsCurrentAccount(): boolean { return !this.disposed && this.account.length > 0 && this.account === owner(); }
+  ownsCurrentAccount(): boolean { return !this.disposed && this.account.length > 0 && this.account === loggedInSessionKey(); }
 
   toggleSelection(): void {
     if (this.actionBusy || !this.ownsCurrentAccount()) { return; }
@@ -148,7 +146,7 @@ export class ForbiddenForumsVM {
     const selected: Set<string> = new Set<string>(ids);
     this.prepared = this.items.filter((item: ForbiddenForum): boolean => selected.has(item.id));
     if (this.prepared.length === 0) { this.actionMessage = '请先选择要解除屏蔽的吧'; return false; }
-    this.preparedOwner = owner(); this.preparedCount = this.prepared.length; this.actionBusy = true;
+    this.preparedOwner = loggedInSessionKey(); this.preparedCount = this.prepared.length; this.actionBusy = true;
     return true;
   }
 
@@ -156,7 +154,7 @@ export class ForbiddenForumsVM {
   async prepareAll(context: common.UIAbilityContext): Promise<boolean> {
     if (this.disposed || this.actionBusy || this.loading || this.loadingMore || !this.ownsCurrentAccount()) { return false; }
     this.actionBusy = true; this.actionMessage = '正在读取完整名单…';
-    this.preparedOwner = owner();
+    this.preparedOwner = loggedInSessionKey();
     try {
       const device = await DeviceIdentity.ensure(context);
       let all: ForbiddenForum[] = [];
@@ -186,7 +184,7 @@ export class ForbiddenForumsVM {
   }
 
   private preparedCurrent(): boolean {
-    return !this.disposed && this.preparedOwner.length > 0 && this.preparedOwner === owner();
+    return !this.disposed && this.preparedOwner.length > 0 && this.preparedOwner === loggedInSessionKey();
   }
 
   cancelPrepared(): void {
@@ -251,7 +249,7 @@ export class ForbiddenForumsVM {
       stopReason = (err as Error).message;
     } finally {
       // 保留稳定的行集合直到所有在途请求结束，避免每项成功触发整页重建。
-      if (operationOwner === owner()) {
+      if (operationOwner === loggedInSessionKey()) {
         const removed: ForbiddenForum[] = targets.filter((item: ForbiddenForum): boolean => succeeded.has(item.id));
         if (!this.disposed) {
           this.items = this.items.filter((item: ForbiddenForum): boolean => !succeeded.has(item.id));
@@ -261,7 +259,7 @@ export class ForbiddenForumsVM {
         if (removed.length > 0) {
           try { await onRemoved(removed); } catch (err) { stopReason = '本机记录同步失败，请重新读取'; }
         }
-        if (!this.disposed && operationOwner === owner()) {
+        if (!this.disposed && operationOwner === loggedInSessionKey()) {
           const remaining: number = total - succeeded.size - failed;
           this.actionMessage = failed > 0 ? `已解除 ${succeeded.size} 个，${failed} 个失败：${firstFailure}` : `已解除 ${succeeded.size} 个吧的屏蔽`;
           if (this.stopRequested || stopReason.length > 0) {

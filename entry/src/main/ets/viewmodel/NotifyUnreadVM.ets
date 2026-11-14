@@ -5,8 +5,8 @@ import { NotifyPreviews, NotifyUnreadCounts, NotifyUnreadKind, fanActionPreview,
 import { NotifyKind } from '../model/Notify';
 import { TiebaSession } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { loggedInSessionKey } from './SessionOwner';
 
-function owner(): string { return authSession.isLoggedIn() ? authSession.sessionKey() : ''; }
 
 /** 首页与底栏只读取计数；摘要仅复用用户主动查看的结果，不自动消费列表。 */
 @ObservedV2
@@ -60,7 +60,7 @@ export class NotifyUnreadVM {
 
   /** 调用方已确认首屏成功及自身代次；这里只接收当前会话的真实摘要。 */
   acceptPreview(kind: NotifyUnreadKind, text: string, expectedAccount: string): void {
-    if (this.disposed || expectedAccount.length === 0 || expectedAccount !== owner() || text.length === 0) { return; }
+    if (this.disposed || expectedAccount.length === 0 || expectedAccount !== loggedInSessionKey() || text.length === 0) { return; }
     this.syncAccount();
     if (this.account !== expectedAccount) { return; }
     if (!this.marking && this.refreshRequest !== undefined) {
@@ -81,19 +81,19 @@ export class NotifyUnreadVM {
 
   syncAccount(): void {
     if (this.disposed) { return; }
-    const currentAccount: string = owner();
+    const currentAccount: string = loggedInSessionKey();
     if (this.account === currentAccount) { return; }
     this.clear();
     this.account = currentAccount;
   }
 
   private current(mine: number): boolean {
-    return !this.disposed && mine === this.epoch && this.account === owner();
+    return !this.disposed && mine === this.epoch && this.account === loggedInSessionKey();
   }
 
   /** 用户确认后才消费各类通知；最终以服务端计数读回为准，绝不本地模拟清零。 */
   async markAllRead(context: common.UIAbilityContext, expectedAccount: string): Promise<string> {
-    if (this.disposed || expectedAccount.length === 0 || expectedAccount !== owner()) { return ''; }
+    if (this.disposed || expectedAccount.length === 0 || expectedAccount !== loggedInSessionKey()) { return ''; }
     this.syncAccount();
     if (this.marking) { return ''; }
     const mine: number = ++this.epoch;

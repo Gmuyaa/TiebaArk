@@ -7,7 +7,7 @@ import { authSession } from '../auth/AuthSession';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { loadForumSnapshot, saveForumSnapshot, StoredForumHeader, StoredForumItem,
-  StoredForumSnapshot } from './ForumSnapshotStore';
+  StoredForumSnapshot } from '../utils/ForumSnapshotStore';
 
 const FRESH_MS: number = 30000;
 function account(): string {
@@ -179,6 +179,22 @@ export function cachedForumFollow(name: string, id: number): boolean | undefined
   bind(); const value: ForumSnapshot | undefined = forums.get(name);
   if (value !== undefined && value.response.data.forum.id === id) { return value.response.data.forum.followed; }
   return guide?.items.some((item: FollowForumItem): boolean => item.fid === id && item.fname === name) ? true : undefined;
+}
+
+/**
+ * 关注态这份数据**真正取得**的时刻（毫秒）；0 = 未知（按已过期处理）。
+ *
+ * 为什么要单独取时间：`ForumStateStore` 预热时要用它决定"还能用多久"。
+ * 落盘快照恢复时 `at` 故意记 0（磁盘读不算新鲜，见 `restoreForumCache`），
+ * 真实时刻在 `serverAt`；关注吧列表的真实时刻在 `guideServerAt`。
+ */
+export function cachedForumFollowStamp(name: string, id: number): number {
+  bind(); const value: ForumSnapshot | undefined = forums.get(name);
+  if (value !== undefined && value.response.data.forum.id === id) { return value.serverAt; }
+  const item: FollowForumItem | undefined = guide?.items.find((it: FollowForumItem): boolean =>
+    it.fid === id && it.fname === name);
+  if (item !== undefined) { return guideServerAt; }
+  return 0;
 }
 export function cachedForumMembership(name: string, id: number): ForumMembership | undefined {
   bind(); const value: ForumSnapshot | undefined = forums.get(name);

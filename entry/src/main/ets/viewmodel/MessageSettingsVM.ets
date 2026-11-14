@@ -3,10 +3,8 @@ import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { MessageSettingField, MessageSettings, validMessageSetting } from '../model/MessageSettings';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 @ObservedV2
 export class MessageSettingsVM {
@@ -17,16 +15,16 @@ export class MessageSettingsVM {
   @Trace notice: string = '';
   private epoch: number = 0;
   private disposed: boolean = false;
-  private account: string = owner();
+  private account: string = accountWithPortrait();
   private api: TiebaApi = new TiebaApi();
 
   private current(mine: number): boolean {
-    return !this.disposed && mine === this.epoch && this.account === owner();
+    return !this.disposed && mine === this.epoch && this.account === accountWithPortrait();
   }
 
   async load(context: common.UIAbilityContext): Promise<void> {
     if (this.loading || this.pending || this.disposed) { return; }
-    const nextAccount: string = owner();
+    const nextAccount: string = accountWithPortrait();
     // 「已加载」判据：maskType 有效值 >= 0（未加载/被清空时是 -1）
     const keepOld: boolean = nextAccount.length > 0 && nextAccount === this.account && this.data.maskType >= 0;
     this.account = nextAccount;
@@ -47,13 +45,13 @@ export class MessageSettingsVM {
       if (this.current(mine)) { this.error = '读取消息设置失败，请重试'; }
     } finally {
       if (mine === this.epoch) { this.loading = false; }
-      if (this.account !== owner()) { this.data = new MessageSettings(); this.error = '账号已变化，请重新读取'; }
+      if (this.account !== accountWithPortrait()) { this.data = new MessageSettings(); this.error = '账号已变化，请重新读取'; }
     }
   }
 
   /** 取证后可启用；不乐观假改，写结果未知只读校准，绝不自动重发写请求。 */
   async set(context: common.UIAbilityContext, field: MessageSettingField, value: number): Promise<void> {
-    if (this.pending || this.loading || this.disposed || this.account !== owner() || owner().length === 0) { return; }
+    if (this.pending || this.loading || this.disposed || this.account !== accountWithPortrait() || accountWithPortrait().length === 0) { return; }
     const before: number = field === 'maskType' ? this.data.maskType : this.data.pushType;
     if (!validMessageSetting(field, value) || before < 0 || before === value) { return; }
     this.pending = true;
@@ -90,7 +88,7 @@ export class MessageSettingsVM {
       }
     } finally {
       if (mine === this.epoch) { this.pending = false; }
-      if (this.account !== owner()) { this.data = new MessageSettings(); }
+      if (this.account !== accountWithPortrait()) { this.data = new MessageSettings(); }
     }
   }
 

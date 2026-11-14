@@ -13,6 +13,7 @@ import { FollowForumList } from '../model/FollowForum';
 import { FollowKind, parseFollowWrite } from '../model/FollowOperation';
 import { ForbiddenForums, forbiddenForumsContain, parseForbiddenForums } from '../model/ForbiddenForums';
 import { ForumHeadlineResult, parseForumHeadlineJson } from '../model/ForumHeadline';
+import { recordFetchedForumAvatar } from '../model/ForumAvatarStore';
 import { BawuTeamResult, ForumMemberResult, parseBawuTeam, parseForumMembers } from '../model/ForumMember';
 import { ForumSearchPage } from '../model/ForumSearch';
 import { RawHotTopicResponse, parseHotTopics } from '../model/HotTopic';
@@ -60,11 +61,11 @@ import { PC_SEARCH_REFERER, WebPcSign } from '../net/WebPcSign';
 import { avatarTracePhase, avatarUptimeMs } from '../utils/AvatarTrace';
 import { CryptoUtil, SignParam, SignSalt } from '../utils/CryptoUtil';
 import { decodeUtf8 } from '../utils/TextCodec';
-import { RawForumGuideResponse } from './RawForumGuide';
-import { RawForumSearchResponse } from './RawForumSearch';
-import { RawFrsPage, RawGeneralTabList } from './RawFrsPage';
-import { RawSearchPostResponse } from './RawSearchPost';
-import { RawSubPostPageResponse, RawThreadPage } from './RawThreadPage';
+import { RawForumGuideResponse } from '../model/RawForumGuide';
+import { RawForumSearchResponse } from '../model/RawForumSearch';
+import { RawFrsPage, RawGeneralTabList } from '../model/RawFrsPage';
+import { RawSearchPostResponse } from '../model/RawSearchPost';
+import { RawSubPostPageResponse, RawThreadPage } from '../model/RawThreadPage';
 import { ApiResult } from './ApiResult';
 import {
   ThreadListResponse, ThreadDetailResponse, HotTopicCardResponse, SubPostResponse, StoredThreadsResponse, UserPostsResponse,
@@ -189,12 +190,12 @@ export class ForumSquareResponse extends ApiResult {
 }
 
 export class TiebaApi {
-  /** B-04验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。 */
+  /** B-04验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。未接入生产（建吧链路未接，0 调用方）。 */
   async fetchCreateForumChallenge(device: TiebaDevice, session: TiebaSession): Promise<CreateForumChallengeResponse> {
     const response: CreateForumChallengeResponse = new CreateForumChallengeResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取创建吧验证码'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const userAgent: string = `bdtb for Android ${device.clientVersion}`;
     const signed: SignParam[] = await CryptoUtil.appendSign(CreateForumParams.challenge(device, session), SignSalt.APP);
     // 当前NetWorkCoreByBdHttp.postNetData使用xa.c大写签名。
@@ -290,7 +291,7 @@ export class TiebaApi {
     const response: ImageWatermarkResponse = new ImageWatermarkResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取图片水印设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, ImageWatermarkParams.READ_PATH,
       ImageWatermarkParams.build(device, session), response);
@@ -305,7 +306,7 @@ export class TiebaApi {
     const response: MessageSettingsResponse = new MessageSettingsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取消息设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, MessageSettingsParams.READ_PATH,
       MessageSettingsParams.build(device, session), response);
@@ -326,7 +327,7 @@ export class TiebaApi {
       response.failLocal('未登录或消息设置值无效'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, MessageSettingsParams.WRITE_PATH,
       MessageSettingsParams.build(device, session, field, value), response);
@@ -351,7 +352,7 @@ export class TiebaApi {
       response.failLocal('吧身份无效'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport: HttpResult = await client.postBinary(BawuTeamParams.url(),
       BawuTeamParams.build(device, session, forumId), SelfProfileParams.headers(session));
@@ -383,7 +384,7 @@ export class TiebaApi {
     const response: OfficialMessagesResponse = new OfficialMessagesResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取官方消息设置'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport: HttpResult = await client.postBinary(OfficialMessagesParams.url(),
       OfficialMessagesParams.build(device, session), SelfProfileParams.headers(session));
@@ -397,7 +398,7 @@ export class TiebaApi {
     loadType: number): Promise<VideoFeedResponse> {
     const response: VideoFeedResponse = new VideoFeedResponse();
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     if (!VideoFeedParams.valid(environment, loadType)) { response.failLocal('视频请求参数未确认'); return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const source: string | undefined = await this.postJsonText(client, VideoFeedParams.PATH,
@@ -414,7 +415,7 @@ export class TiebaApi {
     const response: AtCandidatesResponse = new AtCandidatesResponse();
     if (!session.hasBduss() || !validAtKind(kind)) { response.failLocal('未登录或选人类型无效'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, AtCandidatesParams.path(kind),
       AtCandidatesParams.build(device, session, kind, word), response);
@@ -429,7 +430,7 @@ export class TiebaApi {
     const response: PrivacyMarksResponse = new PrivacyMarksResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取隐私标记'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     if (!Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('隐私标记账号参数无效'); return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport = await client.postBinary(PrivacyMarksParams.url(), PrivacyMarksParams.build(device, session, uid),
@@ -448,7 +449,7 @@ export class TiebaApi {
       response.failLocal('登录凭据或隐私标记值无效'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, PrivacyMarksParams.WRITE_PATH,
       PrivacyMarksParams.buildChange(device, session, field, value), response);
@@ -464,7 +465,7 @@ export class TiebaApi {
     const response: ForbiddenForumsResponse = new ForbiddenForumsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取屏蔽吧'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isInteger(page) || page < 1 || page > 2147483647) {
       response.failLocal('屏蔽吧请求参数无效'); return response;
     }
@@ -488,7 +489,7 @@ export class TiebaApi {
       response.failLocal('未取得吧 id，无法屏蔽该吧'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const body: string = SubmitDislikeParams.buildBody(tid, forumId,
       SubmitDislikeParams.DISLIKE_ID_BLOCK_FORUM, SubmitDislikeParams.FROM_FRS);
@@ -540,7 +541,7 @@ export class TiebaApi {
     const response: TailsResponse = new TailsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取小尾巴'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport = await client.postBinary(TailsParams.url(), TailsParams.build(device, session),
       SelfProfileParams.headers(session));
@@ -618,7 +619,7 @@ export class TiebaApi {
     page: number, agreeCursor: number, uid: number = 0): Promise<NotifyResponse> {
     const response: NotifyResponse = new NotifyResponse();
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     if (kind === 'at') {
       const params: SignParam[] = AtMentionsParams.build(device, session, uid, page);
@@ -656,7 +657,7 @@ export class TiebaApi {
       response.failLocal('吧身份无效'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport: HttpResult = await client.postBinary(ForumMemberParams.url(),
       ForumMemberParams.build(device, session, forumId), SelfProfileParams.headers(session));
@@ -678,7 +679,7 @@ export class TiebaApi {
     }
     if (!Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('作者身份无效'); return response; }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const transport: HttpResult = await client.postBinary(AuthorBlockParams.url(blocked !== undefined),
       AuthorBlockParams.build(device, session, uid, blocked), SelfProfileParams.headers(session));
@@ -739,7 +740,7 @@ export class TiebaApi {
       return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     let path: string = '/c/f/forum/getforumdetail';
     if (kind === 'rules') { path = '/c/f/forum/forumRuleDetail'; }
     else if (kind === 'team') { path = '/c/f/forum/getBawuInfo'; }
@@ -758,6 +759,55 @@ export class TiebaApi {
     return response;
   }
 
+  /**
+   * 单个吧的头像读取（用于"手上这份响应没带吧头像"的补取）。
+   *
+   * 已知 fid 时先走 `getforumdetail` —— 响应只有吧信息，比 `rn=1` 的整页 `frs/page`
+   * 轻约 3 倍（2026-11-13 真机 A/B：中位 364ms vs 1066ms，见 `docs/开发记录/2026-11-13-吧头像加载提速.md`）。
+   * 回退 `frs/page` 只有两个条件：详情请求成功却没拿到可用头像、或返回的吧名与请求的不一致
+   * （fid 过期/错配时宁可多查一次，也不能把别的吧的头像贴到这张卡上）。传输层失败**不**回退，
+   * 否则一次超时要等两遍；由调用方的冷却/重试决定后续。
+   *
+   * @param label 只用于日志区分调用点（首页 / 收藏 / 搜帖…），不参与协议。
+   * @returns 服务端当前给的头像完整 URL；空串 = 本次没拿到。
+   */
+  async fetchForumAvatar(device: TiebaDevice, session: TiebaSession, forumName: string,
+    forumId: number = 0, label: string = ''): Promise<string> {
+    const name: string = forumName.trim();
+    if (name.length === 0) {
+      return '';
+    }
+    const startedAt: number = Date.now();
+    if (Number.isSafeInteger(forumId) && forumId > 0) {
+      const detail: DirectoryResponse = await this.fetchDirectory(device, session, 'forum', forumId);
+      const sameForum: boolean = detail.ok && detail.data.forum.name.trim() === name;
+      hilog.info(0x0000, 'TiebaApi',
+        'forum avatar detail %{public}s ok=%{public}s same=%{public}s ms=%{public}d',
+        label, String(detail.ok), String(sameForum), Date.now() - startedAt);
+      if (!detail.ok) {
+        return '';
+      }
+      if (sameForum && detail.data.forum.avatar.trim().length > 0) {
+        const avatar: string = detail.data.forum.avatar;
+        // 顺手记 fid 与"这次确认过"的时刻：别的页面查同一个吧就能直接走轻量端点/落盘地址。
+        recordFetchedForumAvatar(name, avatar, forumId);
+        return avatar;
+      }
+    }
+    const response: ThreadListResponse = await this.fetchThreadList(device, session, name, 1, 1);
+    hilog.info(0x0000, 'TiebaApi', 'forum avatar frs %{public}s ok=%{public}s ms=%{public}d',
+      label, String(response.ok), Date.now() - startedAt);
+    if (!response.ok) {
+      return '';
+    }
+    const avatar: string = response.data.forum.avatar;
+    if (avatar.trim().length > 0) {
+      // 这次只能按吧名查：把响应里的 fid 与时刻记下来，本会话再查这个吧就走轻量端点。
+      recordFetchedForumAvatar(name, avatar, response.data.forum.id);
+    }
+    return avatar;
+  }
+
   async fetchPublicProfile(device: TiebaDevice, session: TiebaSession, uid: number,
     portrait: string, page: number = 1): Promise<PublicProfileResponse> {
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
@@ -766,7 +816,7 @@ export class TiebaApi {
       response.failLocal('未取得用户身份'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const body: Uint8Array = SelfProfileParams.wrapMultipart(
       SelfProfileParams.buildForUser(uid, portrait, device, page));
     const transport: HttpResult = await client.postBinary(
@@ -810,7 +860,7 @@ export class TiebaApi {
     try {
       envelope = JSON.parse(decodeUtf8(transport.bytes)) as RawHotTopicResponse;
     } catch (err) {
-      response.failLocal('热榜响应不是合法 JSON');
+      TiebaApi.failNotJson(response, '热榜');
       return response;
     }
     const code: number = normalizeErrorCode(envelope.error_code);
@@ -847,7 +897,7 @@ export class TiebaApi {
     const text: string = decodeUtf8(transport.bytes);
     let envelope: ApiEnvelope;
     try { envelope = JSON.parse(text) as ApiEnvelope; }
-    catch (_) { response.failLocal('广场响应不是合法JSON'); return response; }
+    catch (_) { TiebaApi.failNotJson(response, '广场'); return response; }
     const code: number = normalizeErrorCode(envelope.error_code);
     if (code !== ERROR_OK) {
       response.failBusiness(code, envelope.error_msg ?? ''); return response;
@@ -888,7 +938,7 @@ export class TiebaApi {
       envelope = JSON.parse(text) as ApiEnvelope;
     } catch (err) {
       const e: Error = err as Error;
-      out.failLocal(`响应不是合法 JSON：${e.message}`);
+      TiebaApi.failNotJsonDetail(out, e.message);
       return undefined;
     }
 
@@ -908,6 +958,22 @@ export class TiebaApi {
     return text;
   }
 
+  /** 本地设备校验失败的统一出口：返回 true 表示已把失败写进结果，调用方直接 return。 */
+  private static failOnCheck(check: string, response: ApiResult): boolean {
+    if (check.length === 0) { return false; }
+    response.failLocal(check);
+    return true;
+  }
+
+  /** 响应体不是合法 JSON 的统一文案（固定来源名）。 */
+  private static failNotJson(out: ApiResult, what: string): void {
+    out.failLocal(`${what}响应不是合法 JSON`);
+  }
+
+  /** 响应体不是合法 JSON，附带解析器原始说明。 */
+  private static failNotJsonDetail(out: ApiResult, detail: string): void {
+    out.failLocal(`响应不是合法 JSON：${detail}`);
+  }
   /** 公共前置校验：设备身份。返回空串表示通过 */
   private static checkDevice(device: TiebaDevice): string {
     if (!device.isUsable()) {
@@ -1140,7 +1206,7 @@ export class TiebaApi {
       response.failLocal('分类参数不完整'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('forum_id', String(forum.id)), new SignParam('forum_name', forum.name),
       new SignParam('tab_id', String(tab.id)), new SignParam('tab_name', tab.name),
@@ -1270,7 +1336,7 @@ export class TiebaApi {
       envelope = JSON.parse(text) as RawForumSearchResponse;
     } catch (err) {
       const e: Error = err as Error;
-      response.failLocal(`响应不是合法 JSON：${e.message}`);
+      TiebaApi.failNotJsonDetail(response, e.message);
       return response;
     }
 
@@ -1375,7 +1441,7 @@ export class TiebaApi {
       envelope = JSON.parse(text) as RawForumGuideResponse;
     } catch (err) {
       const e: Error = err as Error;
-      response.failLocal(`响应不是合法 JSON：${e.message}`);
+      TiebaApi.failNotJsonDetail(response, e.message);
       return response;
     }
 
@@ -1428,7 +1494,7 @@ export class TiebaApi {
       envelope = JSON.parse(text) as RawStoredThreadResponse;
     } catch (err) {
       const e: Error = err as Error;
-      response.failLocal(`响应不是合法 JSON：${e.message}`);
+      TiebaApi.failNotJsonDetail(response, e.message);
       return response;
     }
     const list: StoredThreadList = StoredThreadList.fromRaw(envelope);
@@ -1470,7 +1536,7 @@ export class TiebaApi {
       response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, MyThreadParams.VISIBILITY_PATH,
       MyThreadParams.visibility(device, session, uid, fid, tid, pid, hidden), response);
@@ -1489,7 +1555,7 @@ export class TiebaApi {
       response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, MyThreadParams.DELETE_PATH,
       MyThreadParams.deleteThread(device, session, fid, tid), response);
@@ -1510,7 +1576,7 @@ export class TiebaApi {
       response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
     }
     const check: string = TiebaApi.checkDevice(device);
-    if (check.length > 0) { response.failLocal(check); return response; }
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const text: string | undefined = await this.postJsonText(client, MyThreadParams.DELETE_POST_PATH,
       MyThreadParams.deletePost(device, session, fid, tid, pid, isSubPost), response);

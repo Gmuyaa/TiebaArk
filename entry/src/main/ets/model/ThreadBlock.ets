@@ -22,6 +22,19 @@ export class BlockedUser {
   timeMs: number = 0;
 }
 
+/**
+ * 屏蔽名单落盘的账号作用域由入口层注入。
+ *
+ * 持久化层不该直接 import 认证层（那会让 `utils/` 不再是叶子层）；这里只放形状，
+ * `utils/ThreadBlockStore` 与 `viewmodel/SessionOwner` 共用同一份定义。
+ */
+export interface ThreadBlockScope {
+  /** 账号级键后缀：登录为 uid，未登录为 'anonymous' */
+  owner: string;
+  /** 会话代次：换号或换头像后，旧账号的读取结果要作废 */
+  session: string;
+}
+
 /** 过滤口径：三份清单都由存储层喂进来，本文件只做判定 */
 export class BlockRules {
   /** 已屏蔽的吧名（不带后缀「吧」；服务端列表 + 本机即时记录） */

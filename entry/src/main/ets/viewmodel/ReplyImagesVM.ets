@@ -2,10 +2,8 @@ import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { UploadedPostImage, uploadedImageToken } from '../model/ImageUpload';
 import { ImageUploadVM } from './ImageUploadVM';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 /** 回复框的临时图片附件。仅确认完成的图片进入正文，关闭时停止后续上传。 */
 @ObservedV2
@@ -18,7 +16,7 @@ export class ReplyImagesVM {
   private disposed: boolean = false;
 
   reset(): void {
-    this.cancel(); this.images = []; this.inlineImages = []; this.account = owner(); this.upload.error = '';
+    this.cancel(); this.images = []; this.inlineImages = []; this.account = accountWithPortrait(); this.upload.error = '';
   }
   cancel(): void { this.epoch++; this.upload.cancel(); }
   remove(index: number): void {
@@ -28,10 +26,10 @@ export class ReplyImagesVM {
   }
   async pick(context: common.UIAbilityContext, forumName: string): Promise<UploadedPostImage | undefined> {
     if (this.disposed || this.upload.busy || this.upload.selecting) { return; }
-    if (this.account !== owner()) { this.reset(); }
+    if (this.account !== accountWithPortrait()) { this.reset(); }
     const mine: number = ++this.epoch;
     await this.upload.pickAndUpload(context, forumName);
-    if (this.disposed || mine !== this.epoch || this.account !== owner()) { return; }
+    if (this.disposed || mine !== this.epoch || this.account !== accountWithPortrait()) { return; }
     const image: UploadedPostImage | undefined = this.upload.image;
     if (image === undefined || this.upload.contentToken().length === 0) { return; }
     const snapshot: UploadedPostImage = new UploadedPostImage();
@@ -43,7 +41,7 @@ export class ReplyImagesVM {
   }
   canInline(image: UploadedPostImage): boolean {
     const token: string = uploadedImageToken(image);
-    return !this.disposed && this.account === owner() && this.images.indexOf(image) >= 0 &&
+    return !this.disposed && this.account === accountWithPortrait() && this.images.indexOf(image) >= 0 &&
       token.length > 0 && image.localPreview.length <= 175000 &&
       /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(image.localPreview) &&
       !this.inlineImages.some((item: UploadedPostImage) =>
@@ -69,7 +67,7 @@ export class ReplyImagesVM {
   }
   /** 根据实际图片span计数移除已删除图片；不把手工输入token当图片span。 */
   reconcileInline(counts: Map<string, number>): void {
-    if (this.disposed || this.account !== owner()) { return; }
+    if (this.disposed || this.account !== accountWithPortrait()) { return; }
     const remaining: Map<string, number> = new Map<string, number>(counts);
     const kept: UploadedPostImage[] = [];
     for (const image of this.inlineImages) {
@@ -81,13 +79,13 @@ export class ReplyImagesVM {
   content(text: string): string {
     if (this.disposed) { return ''; }
     if (this.images.length === 0 && this.inlineImages.length === 0) { return text.trim(); }
-    if (this.account !== owner()) { return ''; }
+    if (this.account !== accountWithPortrait()) { return ''; }
     return text.trim() + this.images.map((image: UploadedPostImage) => uploadedImageToken(image)).join('');
   }
   submissionError(text: string, maxLength: number): string {
     if (this.disposed) { return '回复编辑器已关闭'; }
     if (this.upload.busy || this.upload.selecting) { return '请等待图片准备完成，或停止上传'; }
-    if ((this.images.length > 0 || this.inlineImages.length > 0) && this.account !== owner()) { return '账号已变化，请重新选择回复图片'; }
+    if ((this.images.length > 0 || this.inlineImages.length > 0) && this.account !== accountWithPortrait()) { return '账号已变化，请重新选择回复图片'; }
     if ([...this.images, ...this.inlineImages].some((image: UploadedPostImage) => uploadedImageToken(image).length === 0)) {
       return '回复图片信息未确认，请移除后重新选择';
     }

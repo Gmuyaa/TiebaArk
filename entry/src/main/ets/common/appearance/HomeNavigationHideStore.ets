@@ -2,6 +2,7 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { PreferenceGate } from './PreferenceGate';
 
 const STORE: string = 'tieba_home_navigation_prefs';
 const STATUS_KEY: string = 'hide_status_bar';
@@ -20,30 +21,31 @@ export class HomeNavigationHideStore {
   @Trace hideTopNavigation: boolean = true;
   @Trace hideBottomNavigation: boolean = true;
   @Trace saveError: string = '';
-  private loaded: boolean = false;
-  private writes: Promise<void> = Promise.resolve();
+  private gate: PreferenceGate = new PreferenceGate();
+  /** 逐键代次：三项独立记错，保存另一项不能掩盖尚未保存的选择 */
   private revisions: Map<string, number> = new Map<string, number>();
   private failedKeys: Set<string> = new Set<string>();
 
   async load(context: common.UIAbilityContext): Promise<void> {
-    if (this.loaded) {
-      return;
-    }
-    this.loaded = true;
-    const statusRevision: number = this.revisions.get(STATUS_KEY) ?? 0;
-    const topRevision: number = this.revisions.get(TOP_KEY) ?? 0;
-    const bottomRevision: number = this.revisions.get(BOTTOM_KEY) ?? 0;
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
-      const status: boolean = (await store.get(STATUS_KEY, false)) === true;
-      const top: boolean = (await store.get(TOP_KEY, true)) === true;
-      const bottom: boolean = (await store.get(BOTTOM_KEY, true)) === true;
-      if (statusRevision === (this.revisions.get(STATUS_KEY) ?? 0)) { this.hideStatusBar = status; }
-      if (topRevision === (this.revisions.get(TOP_KEY) ?? 0)) { this.hideTopNavigation = top; }
-      if (bottomRevision === (this.revisions.get(BOTTOM_KEY) ?? 0)) { this.hideBottomNavigation = bottom; }
-    } catch (e) {
-      hilog.warn(0x0, 'TiebaNav', 'navigation preferences load failed: %{public}s', String(e));
-    }
+    await this.gate.loadOnce(async (): Promise<void> => {
+      const statusRevision: number = this.revisions.get(STATUS_KEY) ?? 0;
+      const topRevision: number = this.revisions.get(TOP_KEY) ?? 0;
+      const bottomRevision: number = this.revisions.get(BOTTOM_KEY) ?? 0;
+      try {
+        const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
+        const status: boolean = (await store.get(STATUS_KEY, false)) === true;
+        const top: boolean = (await store.get(TOP_KEY, true)) === true;
+        const bottom: boolean = (await store.get(BOTTOM_KEY, true)) === true;
+        if (statusRevision === (this.revisions.get(STATUS_KEY) ?? 0)) { this.hideStatusBar = status; }
+        if (topRevision === (this.revisions.get(TOP_KEY) ?? 0)) { this.hideTopNavigation = top; }
+        if (bottomRevision === (this.revisions.get(BOTTOM_KEY) ?? 0)) { this.hideBottomNavigation = bottom; }
+      } catch (e) {
+        hilog.warn(0x0, 'TiebaNav', 'navigation preferences load failed: %{public}s', String(e));
+      } finally {
+        // 读失败也不重试：与原实现一致。
+        this.gate.markLoaded();
+      }
+    });
   }
 
   async set(part: HomeNavigationPart, enabled: boolean, context: common.UIAbilityContext): Promise<void> {
@@ -71,14 +73,12 @@ export class HomeNavigationHideStore {
   private async saveValue(key: string, enabled: boolean, context: common.UIAbilityContext): Promise<void> {
     const revision: number = (this.revisions.get(key) ?? 0) + 1;
     this.revisions.set(key, revision);
-    const operation: Promise<void> = this.writes.then(async (): Promise<void> => {
-      const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
-      await store.put(key, enabled);
-      await store.flush();
-    });
-    this.writes = operation.catch(() => {});
     try {
-      await operation;
+      await this.gate.enqueue(async (): Promise<void> => {
+        const store: preferences.Preferences = await preferences.getPreferences(context, STORE);
+        await store.put(key, enabled);
+        await store.flush();
+      });
       if (revision === this.revisions.get(key)) { this.failedKeys.delete(key); }
     } catch (e) {
       if (revision === this.revisions.get(key)) { this.failedKeys.add(key); }

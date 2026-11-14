@@ -1,12 +1,16 @@
+/**
+ * @ 候选读取（**未接入生产**：页面侧 0 引用，唯一消费者是 `ohosTest/ets/test/AtCandidatesState.test.ets`）。
+ *
+ * 保留原因：`api/TiebaApi.fetchAtCandidates` 与 `model/AtCandidates` 是将来接「@ 候选面板」的准备代码，
+ * 删掉会同时失去这些原生用例。接线前不要把它当成现网路径。
+ */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { AtCandidate, AtCandidateKind, validAtKind, prepareAtMention } from '../model/AtCandidates';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 @ObservedV2
 export class AtCandidatesVM {
   @Trace items: AtCandidate[] = [];
@@ -28,7 +32,7 @@ export class AtCandidatesVM {
     const query: string = word.trim();
     if (this.loading && this.sameAccount() && this.kind === kind && this.word === query) { return; }
     if (!this.sameAccount()) { this.selected = []; }
-    this.account = owner(); this.kind = kind; this.word = query;
+    this.account = accountWithPortrait(); this.kind = kind; this.word = query;
     const session = authSession.session();
     this.bduss = session.bduss ?? ''; this.stoken = session.stoken ?? '';
     const mine: number = ++this.epoch;
@@ -65,7 +69,7 @@ export class AtCandidatesVM {
   }
   private sameAccount(): boolean {
     const live = authSession.session();
-    return this.account.length > 0 && this.account === owner() &&
+    return this.account.length > 0 && this.account === accountWithPortrait() &&
       this.bduss === (live.bduss ?? '') && this.stoken === (live.stoken ?? '');
   }
   private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.sameAccount(); }

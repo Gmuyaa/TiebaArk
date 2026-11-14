@@ -3,10 +3,8 @@ import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { PrivacyMarkField, PrivacyMarks, validPrivacyMark } from '../model/PrivacyMarks';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 @ObservedV2
 export class PrivacyMarksVM {
@@ -23,8 +21,8 @@ export class PrivacyMarksVM {
   private api: TiebaApi = new TiebaApi();
 
   async load(context: common.UIAbilityContext): Promise<void> {
-    if (this.disposed || this.pending || (this.loading && this.account === owner())) { return; }
-    const nextAccount: string = owner();
+    if (this.disposed || this.pending || (this.loading && this.account === accountWithPortrait())) { return; }
+    const nextAccount: string = accountWithPortrait();
     this.readValid = false;
     const keepOld: boolean = nextAccount.length > 0 && nextAccount === this.account && this.loaded;
     this.account = nextAccount;
@@ -45,7 +43,7 @@ export class PrivacyMarksVM {
     } finally {
       if (mine === this.epoch) {
         this.loading = false;
-        if (this.account !== owner()) {
+        if (this.account !== accountWithPortrait()) {
           // 账号已变化：立即清空旧账号的数据与状态
           this.data = new PrivacyMarks(); this.loaded = false; this.error = '账号已变化，请重新读取';
         }
@@ -53,10 +51,10 @@ export class PrivacyMarksVM {
     }
   }
 
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === accountWithPortrait(); }
   /** 写 UI 未开放；只在当前账号已读且字段已确认时执行一次写和一次校准读。 */
   async set(context: common.UIAbilityContext, field: PrivacyMarkField, value: number): Promise<void> {
-    if (this.disposed || this.loading || this.pending || !this.loaded || !this.readValid || this.account !== owner() || owner().length === 0 ||
+    if (this.disposed || this.loading || this.pending || !this.loaded || !this.readValid || this.account !== accountWithPortrait() || accountWithPortrait().length === 0 ||
       !validPrivacyMark(field, value)) { return; }
     const before: number = field === 'bazhu_show_inside' ? this.data.inside : this.data.outside;
     if ((before !== 1 && before !== 3) || before === value) { return; }
@@ -85,7 +83,7 @@ export class PrivacyMarksVM {
     } finally {
       if (mine === this.epoch) {
         this.pending = false;
-        if (this.account !== owner()) {
+        if (this.account !== accountWithPortrait()) {
           this.data = new PrivacyMarks(); this.loaded = false; this.notice = ''; this.error = '账号已变化，请重新读取';
         }
       }

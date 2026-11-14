@@ -15,7 +15,7 @@ import { TiebaDevice } from '../net/TiebaParams';
 import { authSession } from '../auth/AuthSession';
 import { getForumHeadline, putForumHeadline } from '../model/ForumHeadline';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { FollowReadGuard, seedFollowState } from './FollowActionVM';
+import { applyForumRead, clearFirstPageRead, markFirstPageRead } from './ForumStateStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { preferredForumTabId } from '../model/ForumDefaultTab';
 
@@ -198,8 +198,9 @@ export class ThreadListVM {
     this.errorText = '';
     this.loadMoreError = '';
 
-    const followGuard: FollowReadGuard = new FollowReadGuard();
     const cacheGuard: ForumCacheGuard = new ForumCacheGuard(name);
+    // 首包同时带 `is_like` 与签到段：登记后其它页面（吧头）等这份回包，不再另发 rn=1 请求。
+    markFirstPageRead(name);
 
     try {
       // 首次打开吧页先读本机偏好，避免启动时默认值抢在持久化值前发请求。
@@ -239,9 +240,9 @@ export class ThreadListVM {
       }
 
       publishForumRead(cacheGuard, name, response);
+      applyForumRead(response);
       // 整体替换，触发 @Trace
       if (!currentCategoryOnly) {
-        seedFollowState(followGuard, 'forum', response.data.forum.id, '', name, response.data.forum.followed);
         this.forum = response.data.forum;
       }
       this.page = response.data.page;
@@ -264,6 +265,7 @@ export class ThreadListVM {
       this.errorText = `加载失败：${e.message}`;
     } finally {
       this.loading = false;
+      clearFirstPageRead(name);
     }
   }
 

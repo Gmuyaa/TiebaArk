@@ -13,9 +13,11 @@ import { DeviceIdentity } from '../utils/DeviceIdentity';
 import {
   addBrowseHistory, BrowseItem, clearBrowseHistory, loadBrowseHistory, markBrowseDeleted
 } from '../utils/BrowseHistory';
-import { putForumAvatar } from '../model/ForumAvatarStore';
-import { formatPostTime } from '../model/HomeFeedPresentation';
+import { forgetCachedForumAvatar, getForumAvatarId, putForumAvatar } from '../model/ForumAvatarStore';
+import { backfillForumAvatars, ForumAvatarBackfillPlan, ForumAvatarNeed } from '../utils/ForumAvatarBackfill';
+import { formatTimeText } from '../model/TimeText';
 import { noteContentDeleted } from './ContentDeletionRevision';
+
 
 /** 列表类型（页面路由参数传字符串，这里做归一） */
 export type MyListKind = 'history' | 'fav' | 'reply' | 'thread';
@@ -527,7 +529,7 @@ export class MyListVM {
    */
   static async record(context: common.UIAbilityContext, tid: number, title: string,
     forumName: string, coverUrl: string, forumAvatar: string,
-    isDeleted: boolean = false): Promise<void> {
+    isDeleted: boolean = false, forumId: number = 0): Promise<void> {
     if (tid <= 0) {
       return;
     }
@@ -540,7 +542,8 @@ export class MyListVM {
     item.isDeleted = isDeleted;
     item.timeMs = Date.now();
 
-    putForumAvatar(forumName, forumAvatar);
+    // 顺手记下 fid（只在会话内存）：本页缺图时就能按 ID 走轻量端点，而不是按吧名拉整页。
+    putForumAvatar(forumName, forumAvatar, forumId);
     await addBrowseHistory(context, item);
   }
 
@@ -610,60 +613,76 @@ export class MyListVM {
 
   /** 为缺少吧头像的条目补全头像，优先复用共享缓存；异步回调前检查当前账号与请求代次。 */
   private static readonly MAX_AVATAR_FETCH: number = 20;
-  /** 反查并发（收藏/历史一页 20 条，串行太慢；3 路与 ForumReadCache 的同吧读取一致） */
-  private static readonly AVATAR_CONCURRENCY: number = 3;
-  /** 进程级吧头像缓存：吧名 → 头像 URL（失败不缓存，后续加载可以重试） */
-  private static avatarCache: Map<string, string> = new Map<string, string>();
+
+  /** 正在重取的吧（图片加载失败自愈用，避免同一吧并发重取） */
+  private retrying: Set<string> = new Set<string>();
 
   private async resolveAvatars(context: common.UIAbilityContext): Promise<void> {
-    const todo: string[] = [];
+    const needs: ForumAvatarNeed[] = [];
     for (const item of this.items) {
-      if (item.forumName.length === 0 || item.forumAvatar.length > 0) {
-        continue;
-      }
-      if (MyListVM.avatarCache.has(item.forumName)) {
-        item.forumAvatar = MyListVM.avatarCache.get(item.forumName) ?? '';
-      } else if (todo.length < MyListVM.MAX_AVATAR_FETCH && !todo.includes(item.forumName)) {
-        todo.push(item.forumName);
-      }
+      if (item.forumName.length === 0 || item.forumAvatar.length > 0) { continue; }
+      // 收藏条目自带 fid；历史条目没有，退到会话内记住的映射。都没有就按吧名查。
+      const known: number = item.forumId > 0 ? item.forumId : getForumAvatarId(item.forumName);
+      needs.push(new ForumAvatarNeed(item.forumName, known));
     }
-    if (todo.length === 0) {
+    if (needs.length === 0) {
       this.refreshItems();
       return;
     }
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       const session = authSession.session();
-      let next: number = 0;
-      const worker = async (): Promise<void> => {
-        while (next < todo.length) {
-          if (this.disposed) { return; }
-          const name: string = todo[next++];
-          if (MyListVM.avatarCache.has(name)) { continue; }
-          let avatar: string = '';
-          try {
-            const res = await this.api.fetchThreadList(device, session, name, 1, 1);
-            avatar = res.ok ? res.data.forum.avatar : '';
-            hilog.info(0x0000, 'MyListVM', 'avatar %{public}s ok=%{public}s avatarLen=%{public}d err=%{public}s',
-              name, res.ok ? 'y' : 'n', avatar.length, res.ok ? '' : res.describeFailure());
-          } catch (err) {
-            hilog.info(0x0000, 'MyListVM', 'avatar %{public}s threw %{public}s', name, (err as Error).message);
-          }
-          if (avatar.length > 0) { MyListVM.avatarCache.set(name, avatar); }
-          if (avatar.length > 0) {
-            // 写回全局表：推荐流卡片与其它页面也能白拿这份
-            putForumAvatar(name, avatar);
-            this.applyAvatar(name, avatar);
-          }
-        }
-      };
-      const workers: Promise<void>[] = [];
-      const width: number = Math.min(MyListVM.AVATAR_CONCURRENCY, todo.length);
-      for (let i: number = 0; i < width; i++) { workers.push(worker()); }
-      await Promise.all(workers);
+      const plan: ForumAvatarBackfillPlan = new ForumAvatarBackfillPlan();
+      plan.label = 'MyListVM';
+      // 首屏 20 条以内：与原来的 MAX_AVATAR_FETCH 一致
+      plan.maxFetch = MyListVM.MAX_AVATAR_FETCH;
+      plan.stopped = (): boolean => this.disposed;
+      // getforumdetail 优先、frs/page 回退，收敛在接口层（耗时由那里打点）。
+      plan.fetch = async (name: string, forumId: number): Promise<string> =>
+        this.api.fetchForumAvatar(device, session, name, forumId, 'mylist');
+      plan.apply = (name: string, forumId: number, url: string): void => { this.applyAvatar(name, url); };
+      await backfillForumAvatars(needs, plan);
       this.refreshItems();
     } catch (err) {
       // 设备指纹/会话失败就算了：列表照常显示，头像用首字占位
+    }
+  }
+
+  /**
+   * 图片加载失败后的自愈（方案 2 的兜底）：丢掉落盘 URL 与进程内缓存，重新取一次。
+   *
+   * 落盘 URL 在 TTL 内不请求，但服务端签名可能提前失效；如果失败后不给它一条
+   * "作废并重取"的路，那一行就会一直停在文字兜底（文档 §1.3 记过这个坑）。
+   * 同一吧在途时不重入，避免图片反复失败把请求打爆。
+   */
+  async retryAvatar(context: common.UIAbilityContext, forumName: string): Promise<void> {
+    const name: string = forumName.trim();
+    if (name.length === 0 || this.disposed || this.retrying.has(name)) {
+      return;
+    }
+    this.retrying.add(name);
+    try {
+      forgetCachedForumAvatar(name);
+      let touched: boolean = false;
+      for (const item of this.items) {
+        if (item.forumName === name && item.forumAvatar.length > 0) {
+          item.forumAvatar = '';
+          touched = true;
+        }
+      }
+      if (touched) { this.refreshItems(); }
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      const known: number = getForumAvatarId(name);
+      const avatar: string = await this.api.fetchForumAvatar(device, authSession.session(), name, known, 'mylist-retry');
+      if (this.disposed || avatar.length === 0) {
+        return;
+      }
+      putForumAvatar(name, avatar, known);
+      this.applyAvatar(name, avatar);
+    } catch (err) {
+      hilog.info(0x0000, 'MyListVM', 'avatar retry %{public}s threw %{public}s', name, (err as Error).message);
+    } finally {
+      this.retrying.delete(name);
     }
   }
 
@@ -738,7 +757,7 @@ export class MyListVM {
       row.forumName = it.forumName;
       if (isThread) {
         row.forumId = it.forumId;
-        row.postedTime = formatPostTime(it.createTimeMs, Date.now());
+        row.postedTime = formatTimeText(it.createTimeMs, Date.now());
         row.images = it.images;
         row.originImages = it.originImages;
         row.agreeCount = it.agreeNum;

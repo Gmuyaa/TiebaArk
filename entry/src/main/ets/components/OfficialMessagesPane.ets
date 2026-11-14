@@ -2,12 +2,11 @@
 import { common } from '@kit.AbilityKit';
 import { OfficialMessageSetting, officialMessageStateLabel } from '../model/OfficialMessages';
 import { OfficialMessagesVM } from '../viewmodel/OfficialMessagesVM';
-import { SettingsCard, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SettingsInfoRow } from './SettingsComponents';
+import { PreferencePaneScaffold } from './PreferencePaneScaffold';
 
 @ComponentV2
 export struct OfficialMessagesPane {
-  /** 页面顶栏刷新序号：自增即触发重读（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
   @Local vm: OfficialMessagesVM = new OfficialMessagesVM();
 
   private context(): common.UIAbilityContext {
@@ -22,32 +21,14 @@ export struct OfficialMessagesPane {
     this.vm.dispose();
   }
 
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      this.vm.load(this.context()).then((): void => {
-      });
-    }
-  }
-
   build() {
-    Column() {
-      SettingsNote({ text: '仅查看，暂不支持系统通知。' })
-      SettingsCard({
-        content: (): void => { this.OfficialRows() }
-      })
-      if (this.vm.error.length > 0) {
-        SettingsStatusLine({
-          kind: SettingsStatusKind.ERROR,
-          message: this.vm.error,
-          retryLabel: '重试',
-          onRetry: (): void => {
-            void this.vm.load(this.context());
-          }
-        })
-      }
+    PreferencePaneScaffold({
+      note: '仅查看，暂不支持系统通知。',
+      message: this.vm.error,
+      onRetry: (): void => { void this.vm.load(this.context()); }
+    }) {
+      this.OfficialRows()
     }
-    .width('100%')
   }
 
   @Builder

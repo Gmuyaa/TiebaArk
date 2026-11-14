@@ -6,10 +6,8 @@ import { NotifyCursor, NotifyItem, NotifyKind } from '../model/Notify';
 import { notifyActionPreview } from '../model/NotifyUnread';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { notifyUnreadVM } from './NotifyUnreadVM';
+import { sessionWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.sessionKey()}:${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 
 @ObservedV2
 export class NotifyVM {
@@ -41,9 +39,9 @@ export class NotifyVM {
 
   /** 首次加载 / 下拉刷新：清空重来，页码/游标复位 */
   async refresh(context: common.UIAbilityContext): Promise<void> {
-    if (this.disposed || (this.loading && this.account === owner())) { return; }
-    const changed: boolean = this.account !== owner();
-    this.account = owner();
+    if (this.disposed || (this.loading && this.account === sessionWithPortrait())) { return; }
+    const changed: boolean = this.account !== sessionWithPortrait();
+    this.account = sessionWithPortrait();
     const mine: number = ++this.epoch;
     this.loading = true;
     this.loadingMore = false;
@@ -61,7 +59,7 @@ export class NotifyVM {
   /** 触底加载下一页（reply 推进页码 / agree 推进游标） */
   async loadMore(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed) { return; }
-    if (this.account !== owner()) { await this.refresh(context); return; }
+    if (this.account !== sessionWithPortrait()) { await this.refresh(context); return; }
     if (this.loading || this.loadingMore || !this.hasMore) { return; }
     const mine: number = ++this.epoch;
     this.loadingMore = true;
@@ -146,11 +144,11 @@ export class NotifyVM {
   private keyOf(item: NotifyItem): string {
     return item.key();
   }
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === sessionWithPortrait(); }
   private finish(mine: number): void {
     if (mine !== this.epoch) { return; }
     this.loading = false; this.loadingMore = false;
-    if (this.account !== owner()) {
+    if (this.account !== sessionWithPortrait()) {
       this.items = []; this.hasMore = false; this.loadedOnce = false; this.cursor = new NotifyCursor();
       this.error = '账号已变化，请重新读取'; this.loadMoreError = '';
     }

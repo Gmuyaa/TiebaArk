@@ -1,7 +1,7 @@
 /**
  * 帖子列表的领域模型。
  *
- * 与 `api/RawFrsPage.ets` 的分工：那边照抄服务端字段，这边只保留界面真正要用的、
+ * 与 `model/RawFrsPage.ets` 的分工：那边照抄服务端字段，这边只保留界面真正要用的、
  * 且保证有确定值的信息。转换集中在 `ThreadListResult.fromRaw`，服务端字段缺失时
  * 给安全默认值——这样 UI 层永远不必写 `?? 0` 这类防御代码。
  *
@@ -13,13 +13,14 @@ import {
   RawAbstractItem, RawFeed, RawFeedBizItem, RawFeedBizMap, RawFeedComponent, RawFeedHead, RawFeedItem,
   RawFeedPic, RawFeedSocial, RawFeedTextBlock, RawFeedTextInner, RawForum, RawForumThemeColor,
   RawForumThemeVariant, RawFrsMenu, RawFrsPage, RawFrsTab, RawListUser, RawPage, RawThread
-} from '../api/RawFrsPage';
+} from './RawFrsPage';
 
 import { rememberFeedImage } from './HomeFeedPresentation';
 import { VideoClip, parseVideoClip } from './VideoClip';
 // 卡片流响应里带上来的吧头像顺手灌进全局表（纯逻辑、不 import @kit，Node 可测）
 import { putForumAvatar } from './ForumAvatarStore';
 import { normalizeForumColor } from '../common/appearance/ForumHeroStyle';
+import { wireString } from './Wire';
 
 /** 把 0/1 标志位转成布尔 */
 function flag(value: number | string | undefined): boolean {
@@ -34,9 +35,6 @@ function num(value: number | string | undefined): number {
 }
 
 /** 把可空的字符串转成有默认值的字符串 */
-function str(value: string | undefined): string {
-  return value === undefined ? '' : value;
-}
 
 /** 旧格式 user_list 给的是 portrait 标识，需要拼成可加载的头像地址。 */
 function listPortraitUrl(portrait: string): string {
@@ -53,7 +51,7 @@ function joinAbstract(items: RawAbstractItem[] | undefined): string {
     const item: RawAbstractItem = items[i];
     // JSON 响应可在数组中下发 null；不能让一条异常摘要拖垮整页列表。
     if (item !== undefined && item !== null) {
-      text += str(item.text);
+      text += wireString(item.text);
     }
   }
   return text;
@@ -101,7 +99,7 @@ export class ForumMembership {
     const value: ForumMembership = new ForumMembership();
     if (raw.forum !== undefined && raw.forum !== null) {
       value.level = membershipCount(raw.forum.level_id);
-      value.levelName = str(raw.forum.level_name);
+      value.levelName = wireString(raw.forum.level_name);
       value.currentScore = membershipCount(raw.forum.cur_score);
       value.nextScore = membershipCount(raw.forum.levelup_score);
     }
@@ -172,7 +170,7 @@ export class ThreadBrief {
   /**
    * 回帖数。旧格式取 `reply_num`，新版取 `comment_num`——
    * 两个端点的字段语义**恰好相反**，由 fromRaw 按格式分派时填好，
-   * 见 api/RawFrsPage.ets 头部说明。
+   * 见 model/RawFrsPage.ets 头部说明。
    */
   replyCount: number = 0;
   /** 点赞与分享数；接口未提供时为 0，界面不伪造数据。 */
@@ -258,14 +256,14 @@ export class ThreadListResult {
       if (rawTab === undefined || rawTab === null) {
         continue;
       }
-      const tabUrl: string = str(rawTab.tab_url);
+      const tabUrl: string = wireString(rawTab.tab_url);
       const tabType: number = num(rawTab.net_tab_type);
-      if (num(rawTab.tab_id) <= 0 || str(rawTab.tab_name).length === 0 || tabUrl.length > 0 || tabType === 4) {
+      if (num(rawTab.tab_id) <= 0 || wireString(rawTab.tab_name).length === 0 || tabUrl.length > 0 || tabType === 4) {
         continue;
       }
       const tab: ForumTab = new ForumTab();
       tab.id = num(rawTab.tab_id);
-      tab.name = str(rawTab.tab_name);
+      tab.name = wireString(rawTab.tab_name);
       if (tab.id === 301 && num(rawTab.tab_type) === 12) { tab.name = '精华'; }
       tab.isVideo = tabType === 3 && num(rawTab.tab_type) === 100;
       tab.type = num(rawTab.tab_type);
@@ -294,20 +292,20 @@ export class ThreadListResult {
       result.forum.followed = rawForum.is_like === 1 || rawForum.is_like === '1' ? true :
         (rawForum.is_like === 0 || rawForum.is_like === '0' ? false : undefined);
       result.forum.id = num(rawForum.id);
-      result.forum.name = str(rawForum.name);
+      result.forum.name = wireString(rawForum.name);
       result.forum.threadCount = num(rawForum.thread_num);
       result.forum.postCount = num(rawForum.post_num);
       result.forum.memberCount = num(rawForum.member_num);
-      result.forum.avatar = str(rawForum.avatar);
-      result.forum.category = str(rawForum.first_class);
-      result.forum.slogan = str(rawForum.slogan);
+      result.forum.avatar = wireString(rawForum.avatar);
+      result.forum.category = wireString(rawForum.first_class);
+      result.forum.slogan = wireString(rawForum.slogan);
 
       const themeColor: RawForumThemeColor | undefined = rawForum.theme_color;
       if (themeColor !== undefined && themeColor !== null) {
         const dayTheme: RawForumThemeVariant | undefined = themeColor.day;
         if (dayTheme !== undefined && dayTheme !== null) {
-          result.forum.heroImage = str(dayTheme.pattern_image);
-          result.forum.heroColor = normalizeForumColor(str(dayTheme.common_color));
+          result.forum.heroImage = wireString(dayTheme.pattern_image);
+          result.forum.heroColor = normalizeForumColor(wireString(dayTheme.common_color));
         }
       }
     }
@@ -351,16 +349,16 @@ export class ThreadListResult {
       t.answerIsHighQuality = num(shown.type) === 1;
     }
     t.answerAvatars = (raw.show_user_list ?? []).filter((user: RawListUser): boolean =>
-      user !== null && user !== undefined && str(user.portrait).length > 0)
-      .slice(0, 5).map((user: RawListUser): string => listPortraitUrl(str(user.portrait)));
+      user !== null && user !== undefined && wireString(user.portrait).length > 0)
+      .slice(0, 5).map((user: RawListUser): string => listPortraitUrl(wireString(user.portrait)));
     if (Array.isArray(raw.media)) {
       for (const pic of raw.media) {
         if (pic === undefined || pic === null || num(pic.type) !== 3) { continue; }
-        const url: string = str(pic.src_pic) || str(pic.big_pic) || str(pic.origin_pic);
+        const url: string = wireString(pic.src_pic) || wireString(pic.big_pic) || wireString(pic.origin_pic);
         if (url.length === 0) { continue; }
         t.images.push(url);
         rememberFeedImage(url, num(pic.width), num(pic.height), flag(pic.is_long_pic),
-          str(pic.origin_pic) || str(pic.src_pic));
+          wireString(pic.origin_pic) || wireString(pic.src_pic));
       }
       t.coverImage = t.images.length > 0 ? t.images[0] : '';
     }
@@ -369,12 +367,12 @@ export class ThreadListResult {
     const tid: number = num(raw.tid);
     t.tid = tid === 0 ? num(raw.id) : tid;
 
-    t.title = str(raw.title);
+    t.title = wireString(raw.title);
     t.authorId = num(raw.author_id);
     if (t.authorId === 0) { t.authorId = num(raw.author?.id); }
     const author: RawListUser | undefined = ThreadListResult.userById(users, t.authorId);
-    t.authorName = str(raw.author?.name_show) || str(author?.name_show) || str(raw.author?.name) || str(author?.name);
-    t.authorAvatar = listPortraitUrl(str(raw.author?.portrait) || str(author?.portrait));
+    t.authorName = wireString(raw.author?.name_show) || wireString(author?.name_show) || wireString(raw.author?.name) || wireString(author?.name);
+    t.authorAvatar = listPortraitUrl(wireString(raw.author?.portrait) || wireString(author?.portrait));
     // reply_num 是本端点的真值；万一服务端哪天改成只给 comment_num，这里兜住
     const replies: number = num(raw.reply_num);
     t.replyCount = replies > 0 ? replies : num(raw.comment_num);
@@ -386,7 +384,7 @@ export class ThreadListResult {
       t.agreeCount = num(raw.agree.agree_num);
     }
     t.postedMs = num(raw.create_time) * 1000;
-    t.lastTimeText = str(raw.last_time);
+    t.lastTimeText = wireString(raw.last_time);
     t.lastTimeMs = num(raw.last_time_int) * 1000;
 
     // 摘要优先用 rich_abstract（带结构），退回 abstract
@@ -503,19 +501,22 @@ export class ThreadListResult {
       if (head !== undefined && head !== null) {
         t.authorName = ThreadListResult.headNickname(head);
         if (head.image_data !== undefined && head.image_data !== null) {
-          t.authorAvatar = str(head.image_data.img_url);
+          t.authorAvatar = wireString(head.image_data.img_url);
         }
       }
     }
 
     const avatar: string = ThreadListResult.bizText(feed.business_info, 'forum_avatar', map);
     const forumName: string = ThreadListResult.bizText(feed.business_info, 'forum_name', map);
+    // `forum_id` 与吧头像同在这份 business_info 里：记下来，之后缺图就能按 ID 走轻量端点。
+    const forumId: number = ThreadListResult.bizNumber(feed.business_info, 'forum_id', map);
     if (avatar.length > 0) {
       t.sourceForumAvatar = avatar;
       // 顺带灌进全局表：推荐流（响应里确实没有这个字段）也就能白拿这份
-      if (forumName.length > 0) { putForumAvatar(forumName, avatar); }
+      if (forumName.length > 0) { putForumAvatar(forumName, avatar, forumId); }
     }
     if (t.sourceForum.length === 0 && forumName.length > 0) { t.sourceForum = forumName; }
+    if (t.sourceForumId <= 0 && forumId > 0) { t.sourceForumId = forumId; }
 
     const createdSec: number = ThreadListResult.bizNumber(feed.business_info, 'create_time', map);
     t.postedMs = createdSec * 1000;
@@ -533,11 +534,11 @@ export class ThreadListResult {
           if (pic === undefined || pic === null) {
             continue;
           }
-          const imageUrl: string = str(pic.small_pic_url);
+          const imageUrl: string = wireString(pic.small_pic_url);
           if (imageUrl.length > 0) {
             t.images.push(imageUrl);
             rememberFeedImage(imageUrl, num(pic.width), num(pic.height), pic.is_long_pic === 1,
-              str(pic.origin_pic_url) || str(pic.big_pic_url));
+              wireString(pic.origin_pic_url) || wireString(pic.big_pic_url));
           }
         }
         if (t.images.length > 0) {
@@ -563,7 +564,7 @@ export class ThreadListResult {
         if (item === undefined || item === null || item.key !== key) {
           continue;
         }
-        const raw: string = str(item.value);
+        const raw: string = wireString(item.value);
         if (raw.length > 0) {
           return raw;
         }
@@ -572,11 +573,11 @@ export class ThreadListResult {
     if (map === undefined) {
       return '';
     }
-    if (key === 'forum_avatar') { return str(map.forum_avatar); }
-    if (key === 'forum_name') { return str(map.forum_name); }
-    if (key === 'create_time') { return str(map.create_time); }
-    if (key === 'view_num') { return str(map.view_num); }
-    if (key === 'thread_type') { return str(map.thread_type); }
+    if (key === 'forum_avatar') { return wireString(map.forum_avatar); }
+    if (key === 'forum_name') { return wireString(map.forum_name); }
+    if (key === 'create_time') { return wireString(map.create_time); }
+    if (key === 'view_num') { return wireString(map.view_num); }
+    if (key === 'thread_type') { return wireString(map.thread_type); }
     return '';
   }
 
@@ -638,7 +639,7 @@ export class ThreadListResult {
       return '';
     }
     const inner: RawFeedTextInner | undefined = node.text;
-    return inner === undefined || inner === null ? '' : str(inner.text);
+    return inner === undefined || inner === null ? '' : wireString(inner.text);
   }
 
   /**

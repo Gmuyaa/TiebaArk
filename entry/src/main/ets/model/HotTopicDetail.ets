@@ -2,6 +2,7 @@
 import { cleanSnippet, cleanTitle } from './SearchPost';
 import { ThreadBrief } from './ThreadList';
 import { portraitUrl } from './ThreadDetail';
+import { wireString } from './Wire';
 
 export interface RawHotTopicInfo {
   topic_id?: number | string;
@@ -117,9 +118,6 @@ export class HotTopicDetailPage {
   lastId: string = '';
 }
 
-function text(raw: string | undefined): string {
-  return typeof raw === 'string' ? raw : '';
-}
 
 function count(raw: number | string | undefined, fallback: number = -1): number {
   if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^\d+$/.test(raw))) {
@@ -140,7 +138,7 @@ export function hotTopicErrorCode(raw: number | string | undefined): number | un
 
 /** 仅已验证支持 HTTPS 的贴吧图片域允许由 HTTP 升级；不发送明文图片请求。 */
 export function hotTopicImageUrl(raw: string | undefined): string {
-  let value: string = text(raw).trim();
+  let value: string = wireString(raw).trim();
   if (/^http:\/\/(?:tiebapic\.baidu\.com|imgsa\.baidu\.com|imgsrc\.baidu\.com|himg\.bdimg\.com)\//i.test(value)) {
     value = `https://${value.substring(7)}`;
   }
@@ -169,9 +167,9 @@ export function parseHotTopicInfo(raw: RawHotTopicInfo | undefined,
   if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw) ||
     count(raw.topic_id) !== expectedId || expectedId <= 0) { return undefined; }
   const detail: HotTopicDetail = new HotTopicDetail();
-  detail.title = cleanTitle(text(raw.topic_name)).trim();
+  detail.title = cleanTitle(wireString(raw.topic_name)).trim();
   if (detail.title.length === 0) { return undefined; }
-  detail.description = cleanTitle(text(raw.topic_desc)).trim();
+  detail.description = cleanTitle(wireString(raw.topic_desc)).trim();
   detail.imageUrl = hotTopicImageUrl(raw.topic_pic);
   detail.heat = count(raw.discuss_num);
   detail.discussCount = count(raw.interaction_num_page);
@@ -186,9 +184,9 @@ function parseThread(raw: RawHotTopicThread): ThreadBrief | undefined {
   if (tid <= 0) { return undefined; }
   const item: ThreadBrief = new ThreadBrief();
   item.tid = tid;
-  item.title = cleanTitle(text(raw.title)).trim();
-  item.summary = cleanSnippet(text(raw.abstract)).trim();
-  item.sourceForum = cleanTitle(text(raw.forum_name)).trim();
+  item.title = cleanTitle(wireString(raw.title)).trim();
+  item.summary = cleanSnippet(wireString(raw.abstract)).trim();
+  item.sourceForum = cleanTitle(wireString(raw.forum_name)).trim();
   item.replyCount = count(raw.reply_num);
   item.viewCount = count(raw.view_num);
   item.agreeCount = -1;
@@ -263,8 +261,8 @@ export function applyHotTopicSupplements(items: ThreadBrief[], areas: RawHotTopi
         if (authorId > 0 && authorId === count(raw.author_id, 0)) {
           item.authorId = authorId;
           // 与详情页UserBrief一致，昵称是纯Text内容，不剥除合法的尖括号。
-          item.authorName = text(author.name_show) || text(author.name);
-          const portrait: string = text(author.portrait);
+          item.authorName = wireString(author.name_show) || wireString(author.name);
+          const portrait: string = wireString(author.portrait);
           const directAvatar: string = hotTopicImageUrl(portrait);
           item.authorAvatar = directAvatar.length > 0 ? directAvatar :
             (/^[a-zA-Z0-9._-]+(?:\?t=[a-fA-F0-9]+)?$/.test(portrait) ? portraitUrl(portrait) :
@@ -278,7 +276,7 @@ export function applyHotTopicSupplements(items: ThreadBrief[], areas: RawHotTopi
       const forum: RawHotTopicMobileForum | undefined = raw.forum_info;
       if (forum === null || forum === undefined || typeof forum !== 'object' || Array.isArray(forum)) { continue; }
       // 吧资料必须与当前来源名称一致，不能把作者头像或另一条卡片的吧图移接过来。
-      if (cleanTitle(text(forum.name)).trim() !== item.sourceForum || item.sourceForum.length === 0) { continue; }
+      if (cleanTitle(wireString(forum.name)).trim() !== item.sourceForum || item.sourceForum.length === 0) { continue; }
       const forumId: number = count(forum.id, 0);
       if (forumId > 0) { item.sourceForumId = forumId; }
       const avatar: string = hotTopicImageUrl(forum.avatar);

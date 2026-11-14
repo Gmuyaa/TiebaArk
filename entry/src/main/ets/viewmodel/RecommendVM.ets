@@ -238,7 +238,7 @@ export class RecommendVM {
         threads[i].sourceForumAvatar = response.data.forum.avatar;
       }
       if (response.data.forum.avatar.trim().length > 0) {
-        putForumAvatar(this.mode, response.data.forum.avatar);
+        putForumAvatar(this.mode, response.data.forum.avatar, response.data.forum.id);
         markForumAvatarFetched(this.mode);
       }
       this.threads = mergeThreadPages(this.threads, threads);
@@ -304,7 +304,7 @@ export class RecommendVM {
         threads[i].sourceForumAvatar = this.forum.avatar;
       }
       if (this.forum.avatar.trim().length > 0) {
-        putForumAvatar(name, this.forum.avatar);
+        putForumAvatar(name, this.forum.avatar, this.forum.id);
         markForumAvatarFetched(name);
       }
       this.threads = threads;

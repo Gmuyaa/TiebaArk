@@ -3,9 +3,8 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { authSession } from '../auth/AuthSession';
 import {
-  BlockRules, BlockedUser, HiddenThread, blockedUserUids, emptyRules, mergeBlockedUser,
+  BlockRules, BlockedUser, HiddenThread, ThreadBlockScope, blockedUserUids, emptyRules, mergeBlockedUser,
   mergeHiddenThread, normalizeForumName, normalizeForumNames, normalizeTids, normalizeUids, parseBlockedUsers,
   parseHiddenThreads, removeBlockedUser, removeHiddenThread, serializeBlockedUsers,
   serializeHiddenThreads
@@ -21,8 +20,22 @@ interface RawStringList {
   values?: string[];
 }
 
-function ownerKey(): string {
-  return authSession.isLoggedIn() ? String(authSession.snapshot.uid) : 'anonymous';
+/**
+ * 账号作用域由入口层注入。
+ *
+ * 屏蔽名单是「本机记录」，但要按账号分键；持久化层不该直接 import 认证层（那会让
+ * `utils/` 不再是叶子层）。入口在 `EntryAbility.onCreate` 注入一次，本文件只调用。
+ * 未注入时**不静默回退到匿名键**：那会把匿名名单当成登录用户自己的名单。
+ */
+let scopeProvider: (() => ThreadBlockScope) | undefined = undefined;
+
+/** 由 `EntryAbility.onCreate` 注入；传 undefined 清除（测试用）。 */
+export function setThreadBlockScopeProvider(provider: (() => ThreadBlockScope) | undefined): void {
+  scopeProvider = provider;
+}
+
+function currentScope(): ThreadBlockScope | undefined {
+  return scopeProvider !== undefined ? scopeProvider() : undefined;
 }
 
 /** 账号级键名：换号即换键，绝不跨账号复用一份服务端镜像 */
@@ -75,7 +88,8 @@ export class ThreadBlockStore {
   }
 
   private current(current: string, session: string): boolean {
-    return current === ownerKey() && session === authSession.sessionKey();
+    const scope: ThreadBlockScope | undefined = currentScope();
+    return scope !== undefined && current === scope.owner && session === scope.session;
   }
 
   private syncOwner(current: string): void {
@@ -91,8 +105,14 @@ export class ThreadBlockStore {
   }
 
   private async queueLoad(context: common.UIAbilityContext, refresh: boolean): Promise<void> {
-    const current: string = ownerKey();
-    const session: string = authSession.sessionKey();
+    const scope: ThreadBlockScope | undefined = currentScope();
+    if (scope === undefined) {
+      // 入口没接线时如实报错：读匿名键会把别人的名单当成本账号的。
+      this.readError = '账号状态未就绪，请重新进入页面';
+      return;
+    }
+    const current: string = scope.owner;
+    const session: string = scope.session;
     this.syncOwner(current);
     if (this.loading !== undefined && this.loadingOwner === session) { return this.loading; }
     if (!refresh && this.loaded) { return; }
@@ -145,8 +165,13 @@ export class ThreadBlockStore {
   /** 读改写串行；未读到历史记录时不把当前内存当成完整列表写回。 */
   private async change(context: common.UIAbilityContext, key: string,
     operation: (current: string, session: string) => Promise<boolean>): Promise<void> {
-    const current: string = ownerKey();
-    const session: string = authSession.sessionKey();
+    const scope: ThreadBlockScope | undefined = currentScope();
+    if (scope === undefined) {
+      this.setSaveError(key, '账号状态未就绪，未保存更改。请重新进入页面。');
+      return;
+    }
+    const current: string = scope.owner;
+    const session: string = scope.session;
     this.syncOwner(current);
     await this.enqueue(async (): Promise<void> => {
       if (!this.current(current, session)) { return; }
@@ -175,7 +200,8 @@ export class ThreadBlockStore {
    * 新账号的列表上（下一次进页面 `load` 会把新账号那份读回来）。
    */
   rules(): BlockRules {
-    if (this.owner !== ownerKey()) { return emptyRules(); }
+    const scope: ThreadBlockScope | undefined = currentScope();
+    if (scope === undefined || this.owner !== scope.owner) { return emptyRules(); }
     const rules: BlockRules = new BlockRules();
     // 存储中的吧名已经归一化；再次削尾会让以「吧」结尾的实际吧名失配。
     rules.forums = this.blockedForums.slice();

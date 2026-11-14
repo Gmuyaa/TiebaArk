@@ -1,7 +1,7 @@
 /**
  * 帖子详情的领域模型。
  *
- * 与 `api/RawThreadPage.ets` 的分工：那边照抄服务端字段名，这边只保留界面要用的、
+ * 与 `model/RawThreadPage.ets` 的分工：那边照抄服务端字段名，这边只保留界面要用的、
  * 且有确定值的信息。转换集中在各个 `from*` 静态方法里，服务端缺字段时落默认值，
  * UI 层因此不必写 `?? 0` 这类防御代码。
  *
@@ -15,8 +15,9 @@
 import {
   RawAgree, RawContentItem, RawDetailForum, RawDetailPage, RawInlineSubPost, RawInlineSubPostHolder,
   RawPost, RawSubPost, RawSubPostPage, RawSubPostPageResponse, RawThreadHead, RawThreadPage, RawUser
-} from '../api/RawThreadPage';
+} from './RawThreadPage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { formatTimeText } from './TimeText';
 import { VoiceClip, parseVoiceClip, voiceClipLabel } from './VoiceClip';
 import { VideoClip, parseVideoClip } from './VideoClip';
 
@@ -42,11 +43,6 @@ function userLevel(value: number | string | undefined, unknown: number): number 
 /** 可空字符串 → 字符串 */
 function toStr(value: string | undefined): string {
   return value === undefined ? '' : value;
-}
-
-/** 两位补零。不用 padStart 是为了避免平台实现差异 */
-function pad2(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
 }
 
 export function portraitUrl(portrait: string, revision: number = 0): string {
@@ -136,52 +132,6 @@ export function emojiImageUrl(code: string): string {
     return `https://tb3.bdstatic.com/shoubai_emoji/shoubai_emoji_face_${nn}.webp`;
   }
   return `${EMOJI_SD_BASE}${code}.png`;
-}
-
-/**
- * 楼层时间展示。纯函数，便于在 Node 上固定 now 做断言。
- *
- * 规则：同一天显示 "HH:mm"；同年显示 "M-D HH:mm"；跨年显示 "YYYY-M-D"。
- * 时间戳非法（<=0）时返回空串，界面据此不显示时间。
- */
-export function formatPostTime(ms: number, nowMs: number): string {
-  if (ms <= 0) {
-    return '';
-  }
-  const d: Date = new Date(ms);
-  const now: Date = new Date(nowMs);
-  const sameDay: boolean = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  if (sameDay) {
-    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-  }
-  if (d.getFullYear() === now.getFullYear()) {
-    return `${d.getMonth() + 1}-${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-  }
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
-
-/**
- * 主帖头部的时间文案。
- *
- * 与 `formatPostTime` 的唯一区别：**当天也要带日期**。
- * 回复只给 `HH:mm` 是因为它在对话上下文里，看不出是哪天也不影响阅读；
- * 而主帖头部回答的是"这帖什么时候发的"，光一个 `10:03` 没有信息量。
- * 其余规则（同年 `M-D HH:mm`、跨年带年份）两处保持一致。
- *
- * 时间戳非法（<=0）返回空串，界面据此只显示地区。
- * 纯函数，便于在 Node 上固定 now 做断言。
- */
-export function formatThreadHeadTime(ms: number, nowMs: number): string {
-  if (ms <= 0) {
-    return '';
-  }
-  const d: Date = new Date(ms);
-  const now: Date = new Date(nowMs);
-  if (d.getFullYear() !== now.getFullYear()) {
-    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-  }
-  return `${d.getMonth() + 1}-${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 /**
@@ -1029,7 +979,7 @@ export class PostItem {
     p.floor = toNum(raw.floor);
     p.title = toStr(raw.title);
     p.timeMs = toNum(raw.time) * 1000;
-    p.timeText = formatPostTime(p.timeMs, nowMs);
+    p.timeText = formatTimeText(p.timeMs, nowMs);
     p.author = PostItem.lookupUser(users, toNum(raw.author_id));
     p.contents = ContentPiece.listFromRaw(raw.content);
     const agree = raw.agree;
@@ -1061,7 +1011,7 @@ export class PostItem {
       const s: SubPostItem = new SubPostItem();
       s.pid = toNum(item.id);
       s.timeMs = toNum(item.time) * 1000;
-      s.timeText = formatPostTime(s.timeMs, nowMs);
+      s.timeText = formatTimeText(s.timeMs, nowMs);
       /*
        * 内联楼中楼不带头像/昵称对象，只有 `author_id`；`title` 是原楼层正文摘要
        * （实测形如「回复：xxx」），不能当昵称用。作者仍走本页 `user_list` 查表，
@@ -1417,7 +1367,7 @@ export class SubPostPage {
     const s: SubPostItem = new SubPostItem();
     s.pid = toNum(raw.id);
     s.timeMs = toNum(raw.time) * 1000;
-    s.timeText = formatPostTime(s.timeMs, nowMs);
+    s.timeText = formatTimeText(s.timeMs, nowMs);
     s.author = UserBrief.fromRaw(raw.author);
     const parsed: ReplyTargetParse = parseReplyTarget(ContentPiece.listFromRaw(raw.content));
     s.contents = parsed.contents;

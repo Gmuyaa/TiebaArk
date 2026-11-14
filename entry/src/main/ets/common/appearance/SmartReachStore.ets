@@ -1,13 +1,25 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 
-/** 本机统一握姿开关及各悬浮按钮的独立位置，与账号无关。默认开；坏值回落默认。
- * 仅存开关和归一化坐标，不保存握姿传感器数据。关闭仍可拖拽。
+/** 本机统一握姿开关、各悬浮按钮的显示与独立位置，与账号无关。默认开；坏值回落默认。
+ * 仅存开关、显隐和归一化坐标，不保存握姿传感器数据。关闭自动换边后仍可拖拽。
  * 同步读取防首屏跳位；写入排队防快速操作倒序，失败明确报告会话内生效。
  */
+export enum ForumTabsStyle {
+  /** 常规吸顶：分类栏固定在工具栏下，文字 + 选中下划线 */
+  STICKY = 0,
+  /** 胶囊：跟内容滚，滚到工具栏下沿贴住并换官方材质胶囊 */
+  CAPSULE = 1,
+  /** 悬浮：可拖动的分类浮层 */
+  FLOATING = 2
+}
+
 @ObservedV2
 export class SmartReachStore {
+  /** 首页发帖按钮是否跟随握姿换边；只影响自动换边，按钮是否出现由 `homeComposeVisible` 决定。 */
   @Trace homeComposeEnabled: boolean = true;
+  /** 首页发帖按钮是否渲染（设置 → 外观与布局 → 导航布局 → 悬浮按钮）。与跟随握姿独立。 */
+  @Trace homeComposeVisible: boolean = true;
   @Trace homeXRatio: number = -1;
   @Trace homeYRatio: number = -1;
   @Trace enabled: boolean = true;
@@ -16,7 +28,12 @@ export class SmartReachStore {
   @Trace imageXRatio: number = -1;
   @Trace imageYRatio: number = -1;
   @Trace forumTabsEnabled: boolean = true;
-  @Trace forumTabsFloating: boolean = true;
+  /** 分类栏样式（2026-11-12 三种：常规吸顶 / 胶囊 / 悬浮），默认悬浮与旧行为一致。 */
+  @Trace forumTabsStyle: ForumTabsStyle = ForumTabsStyle.FLOATING;
+  /** 兼容旧调用点：是否悬浮样式（三选一之后 forumTabsFloating 变成派生值）。 */
+  get forumTabsFloating(): boolean {
+    return this.forumTabsStyle === ForumTabsStyle.FLOATING;
+  }
   @Trace xRatio: number = -1;
   @Trace yRatio: number = -1;
   @Trace threadXRatio: number = -1;
@@ -33,6 +50,8 @@ export class SmartReachStore {
       const store = preferences.getPreferencesSync(context, { name: 'tieba_smart_reach_prefs' });
       const homeEnabled = store.getSync('home_compose_enabled', true);
       this.homeComposeEnabled = typeof homeEnabled === 'boolean' ? homeEnabled : true;
+      const homeVisible = store.getSync('home_compose_visible', true);
+      this.homeComposeVisible = typeof homeVisible === 'boolean' ? homeVisible : true;
       const hx = store.getSync('home_compose_x', -1);
       const hy = store.getSync('home_compose_y', -1);
       this.homeXRatio = typeof hx === 'number' && Number.isFinite(hx) && hx >= 0 && hx <= 1 ? hx : -1;
@@ -40,9 +59,16 @@ export class SmartReachStore {
       const enabled = store.getSync('enabled', true);
       this.enabled = typeof enabled === 'boolean' ? enabled : true;
       const tabsEnabled = store.getSync('forum_tabs_enabled', true);
-      const tabsFloating = store.getSync('forum_tabs_floating', true);
       this.forumTabsEnabled = typeof tabsEnabled === 'boolean' ? tabsEnabled : true;
-      this.forumTabsFloating = typeof tabsFloating === 'boolean' ? tabsFloating : true;
+      // 新字段优先；老数据没有 style 时按旧的 forum_tabs_floating 迁移（true=悬浮，false=胶囊）。
+      const tabsStyle = store.getSync('forum_tabs_style', -1);
+      if (typeof tabsStyle === 'number' && tabsStyle >= ForumTabsStyle.STICKY && tabsStyle <= ForumTabsStyle.FLOATING) {
+        this.forumTabsStyle = tabsStyle as ForumTabsStyle;
+      } else {
+        const tabsFloating = store.getSync('forum_tabs_floating', true);
+        this.forumTabsStyle = (typeof tabsFloating === 'boolean' && !tabsFloating)
+          ? ForumTabsStyle.CAPSULE : ForumTabsStyle.FLOATING;
+      }
       const imageEnabled = store.getSync('image_menu_enabled', true);
       const imageLongPress = store.getSync('image_menu_long_press', false);
       this.imageMenuEnabled = typeof imageEnabled === 'boolean' ? imageEnabled : true;
@@ -59,11 +85,15 @@ export class SmartReachStore {
       const threadY = store.getSync('thread_action_y', -1);
       this.threadXRatio = typeof threadX === 'number' && Number.isFinite(threadX) && threadX >= 0 && threadX <= 1 ? threadX : -1;
       this.threadYRatio = typeof threadY === 'number' && Number.isFinite(threadY) && threadY >= 0 && threadY <= 1 ? threadY : -1;
-    } catch (_) { this.status = '偏好读取失败，本次使用默认位置'; }
+    } catch (_) { this.status = '偏好读取失败，本次使用默认显示与位置'; }
   }
 
   async setHomeComposeEnabled(value: boolean, context: common.UIAbilityContext): Promise<void> {
     this.homeComposeEnabled = value; await this.save(context);
+  }
+  /** 只控制首页发帖按钮是否渲染；与握姿总开关、跟随握姿开关互相独立。 */
+  async setHomeComposeVisible(value: boolean, context: common.UIAbilityContext): Promise<void> {
+    this.homeComposeVisible = value; await this.save(context);
   }
   async setHomePosition(x: number, y: number, context: common.UIAbilityContext): Promise<void> {
     this.homeXRatio = Math.max(0, Math.min(1, x));
@@ -87,8 +117,8 @@ export class SmartReachStore {
     await this.save(context);
   }
 
-  async setForumTabsFloating(floating: boolean, context: common.UIAbilityContext): Promise<void> {
-    this.forumTabsFloating = floating;
+  async setForumTabsStyle(style: ForumTabsStyle, context: common.UIAbilityContext): Promise<void> {
+    this.forumTabsStyle = style;
     await this.save(context);
   }
 
@@ -111,6 +141,7 @@ export class SmartReachStore {
 
   private async save(context: common.UIAbilityContext): Promise<void> {
     const homeEnabled = this.homeComposeEnabled;
+    const homeVisible = this.homeComposeVisible;
     const hx = this.homeXRatio;
     const hy = this.homeYRatio;
     const imageEnabled = this.imageMenuEnabled;
@@ -119,7 +150,7 @@ export class SmartReachStore {
     const iy = this.imageYRatio;
     const enabled = this.enabled;
     const tabsEnabled = this.forumTabsEnabled;
-    const tabsFloating = this.forumTabsFloating;
+    const tabsStyle = this.forumTabsStyle;
     const x = this.xRatio;
     const y = this.yRatio;
     const threadX = this.threadXRatio;
@@ -127,6 +158,7 @@ export class SmartReachStore {
     const operation = this.writes.then(async (): Promise<void> => {
       const store = await preferences.getPreferences(context, 'tieba_smart_reach_prefs');
       await store.put('home_compose_enabled', homeEnabled);
+      await store.put('home_compose_visible', homeVisible);
       await store.put('home_compose_x', hx);
       await store.put('home_compose_y', hy);
       await store.put('image_menu_enabled', imageEnabled);
@@ -135,7 +167,7 @@ export class SmartReachStore {
       await store.put('image_menu_y', iy);
       await store.put('enabled', enabled);
       await store.put('forum_tabs_enabled', tabsEnabled);
-      await store.put('forum_tabs_floating', tabsFloating);
+      await store.put('forum_tabs_style', tabsStyle);
       await store.put('refresh_x', x);
       await store.put('refresh_y', y);
       await store.put('thread_action_x', threadX);
@@ -144,7 +176,7 @@ export class SmartReachStore {
     });
     this.writes = operation.catch(() => {});
     try { await operation; }
-    catch (_) { throw new Error('智感握姿偏好保存失败，本次生效，重启后可能恢复旧值'); }
+    catch (_) { throw new Error('悬浮按钮偏好保存失败，本次生效，重启后可能恢复旧值'); }
   }
 }
 

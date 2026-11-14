@@ -1,4 +1,5 @@
-import { cachedForumMembership, cachedFollowForums, confirmForumSign, forumReadFresh, readFollowForumsShared, readForumShared, restoreForumCache } from './ForumReadCache';
+import { cachedForumMembership, cachedFollowForums, forumReadFresh, readFollowForumsShared, readForumShared, restoreForumCache } from './ForumReadCache';
+import { applyFollowGuide, applyForumRead, confirmSign, forumIdentity, forumSignDay } from './ForumStateStore';
 
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
@@ -77,6 +78,7 @@ export class FollowVM {
       if (!this.currentExperience(request)) { return; }
       const response = await readForumShared(context, request.item.fname, request.item.fid, request.force);
       if (!this.currentExperience(request)) { return; }
+      applyForumRead(response);
       const matches: boolean = response.ok && response.data.forum.id === request.item.fid;
       this.forums = this.forums.map((value: FollowForumItem): FollowForumItem => {
         if (value.fname !== request.item.fname || value.fid !== request.item.fid) { return value; }
@@ -141,6 +143,8 @@ export class FollowVM {
       }
       const response = await readFollowForumsShared(context, force);
       if (!this.currentRead(mine, account)) { return; }
+      // 一份关注吧列表覆盖所有已关注吧的签到/等级：先回填身份状态，页面之间从此同源。
+      applyFollowGuide(response);
       this.forums = cachedFollowForums() ?? response.items;
       this.loadedOnce = true;
     } catch (err) {
@@ -152,6 +156,29 @@ export class FollowVM {
         if (!this.disposed && account !== signOwner()) { this.forums = []; this.loadedOnce = false; this.errorText = '账号已变化，请重新读取'; }
       }
     }
+  }
+
+  /**
+   * 按身份状态校正列表里的签到标记（不发网络）。
+   * 用于吧页/吧资料签到成功后马上回到"进吧"列表看到一致结果；
+   * 只采纳今天的已知值，跨日旧值不沿用。
+   */
+  syncFromStore(): void {
+    if (this.disposed || this.readAccount !== signOwner()) { return; }
+    const day: string = forumSignDay();
+    let changed: boolean = false;
+    const next: FollowForumItem[] = this.forums.map((item: FollowForumItem): FollowForumItem => {
+      if (item.fid <= 0) { return item; }
+      const identity = forumIdentity(item.fid, item.fname);
+      if (!identity.signKnown(day)) { return item; }
+      const signed: boolean = identity.signed === true;
+      if (item.signKnown && item.isSigned === signed) { return item; }
+      const out: FollowForumItem = FollowForumItem.copy(item);
+      out.isSigned = signed; out.signKnown = true;
+      changed = true;
+      return out;
+    });
+    if (changed) { this.forums = next; }
   }
 
   /**
@@ -184,7 +211,7 @@ export class FollowVM {
       }
       // 成功（含"其实已签过"的 160002）：把该项标记为已签到——
       // forumGuide 的 is_sign 实测可能是过期值，以签到端点的裁决为准
-      confirmForumSign(item.fname, response.stats, item.fid);
+      confirmSign(item.fid, item.fname, response.stats);
       const updated: FollowForumItem[] = [];
       for (const f of this.forums) {
         if (f.fname === item.fname) {
@@ -330,7 +357,7 @@ export class FollowVM {
           confirmedCount++;
           if (!item.signed) { failed++; continue; }
           success++;
-          confirmForumSign(target.fname, item.stats, target.fid);
+          confirmSign(target.fid, target.fname, item.stats);
           this.experienceVersions.set(target.fname, (this.experienceVersions.get(target.fname) ?? 0) + 1);
           this.forums = this.forums.map((value: FollowForumItem): FollowForumItem => {
             if (value.fid !== target.fid) { return value; }

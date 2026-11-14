@@ -26,6 +26,7 @@ import { ScanPage } from './ScanPage';
 import { VideoFeedPage } from './VideoFeedPage';
 import { ComposePage } from './ComposePage';
 import { HomeComposeButton } from '../components/HomeComposeButton';
+import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
 import { MyListPage } from './MyListPage';
 import { HotTopicPage } from './HotTopicPage';
 import { UserPage } from './UserPage';
@@ -149,6 +150,7 @@ struct Index {
   @Local homeSelectedChannel: string = '推荐';
   /** HDS builder 的显式响应桥：同时覆盖冷启动异步读偏好与设置页即时切换。 */
   @Local topNavPreferences: HomeTopNavStore = homeTopNavStore;
+  @Local smartReachPreferences: SmartReachStore = smartReachStore;
   @Local visualPreferences: VisualThemeStore = visualThemeStore;
   @Local homeTopNavRowH: number = 54;
   @Local homeTopNavStyle: HomeTopNavStyle = homeTopNavStore.style;
@@ -427,7 +429,9 @@ struct Index {
       [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(AppTheme.BG)
       // 看图时保留材质按钮，由上层 Viewer 覆盖；关图不重新创建阴影承载层。
-      if (this.currentIndex === 0 && this.homeNavVisible) {
+      // 发帖按钮显隐读偏好（设置 → 外观与布局 → 导航布局 → 悬浮按钮）；隐藏时必须真正卸载，
+      // 才能停掉握姿订阅与待换边定时器。
+      if (this.currentIndex === 0 && this.homeNavVisible && this.smartReachPreferences.homeComposeVisible) {
         HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
           topInset: this.homeStatusBarH + this.homeTopNavRowH,
           active: this.pageVisible && this.viewerUrls.length === 0,

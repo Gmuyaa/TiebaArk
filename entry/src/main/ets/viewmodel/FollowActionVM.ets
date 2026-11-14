@@ -1,4 +1,3 @@
-import { confirmForumFollow, invalidateForumRead, readForumShared } from './ForumReadCache';
 import { FOLLOW_ACTION_CACHE_ENTRIES } from '../model/CachePolicy';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -8,6 +7,16 @@ import { FollowKind } from '../model/FollowOperation';
 import { profilePortrait } from '../model/PageDirectory';
 import { TiebaDevice } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+
+/**
+ * 用户关注关系的共享实例（粉丝/关注列表、用户主页、帖子作者入口）。
+ *
+ * 2026-11-13（1.0.268）：**吧的关注关系已迁到 `ForumStateStore`**（与今日签到、等级经验
+ * 同一份实例，见该模块注释）。这里只保留用户关注，避免"这个吧是否关注"同时存在两套缓存。
+ * `kind === 'forum'` 分支保留类型但不再有调用方，`followAction('forum', …)` 不要再用；
+ * 真要再写吧关注请用 `components/ForumFollowButton`（走 `ForumStateStore`）。
+ * `toggle()` 里加了显式拒绝，误接时给出可读失败而不是静默走旧协议。
+ */
 
 /** 账号隔离，不将凭据作为缓存键；返回旧页面也共享已确认的关系。 */
 function accountKey(): string {
@@ -80,10 +89,6 @@ export class FollowActionVM {
 
   private async read(device: TiebaDevice, context: common.UIAbilityContext, sequence: number = this.sequence): Promise<boolean | undefined> {
     const session = authSession.session();
-    if (this.kind === 'forum') {
-      const response = await readForumShared(context, this.name, this.id, this.verifying);
-      return response.ok && response.data.forum.id === this.id ? response.data.forum.followed : undefined;
-    }
     const response = await this.api.fetchPublicProfile(device, session, this.id, this.portrait);
     if (!response.ok || !this.current() || sequence !== this.sequence) { return undefined; }
     if (this.portrait.length === 0) { this.portrait = profilePortrait(response.data.portrait); }
@@ -150,15 +155,15 @@ export class FollowActionVM {
   }
 
   private notifyChanged(context: common.UIAbilityContext): void {
-    if (this.kind === 'forum') { followChanges.forums++; } else { followChanges.users++; }
+    followChanges.users++;
     void authSession.refreshProfile(context);
   }
 
   async toggle(context: common.UIAbilityContext): Promise<string> {
+    if (this.kind === 'forum') { return '吧关注请使用吧关注按钮'; }
     if (this.pending || this.loading || this.self || !this.current()) { return ''; }
     if (!authSession.isLoggedIn()) { return '需要登录后才能关注'; }
     if (!this.known) { return this.load(context); }
-    if (this.kind === 'forum') { invalidateForumRead(this.name); }
     this.pending = true;
     this.verifying = false;
     this.verificationError = '';
@@ -199,7 +204,6 @@ export class FollowActionVM {
       this.following = target;
       this.known = true;
       this.readAt = Date.now();
-      if (this.kind === 'forum') { confirmForumFollow(this.name, this.id, target); }
       hilog.info(0x0000, 'FollowActionVM', 'write confirmed kind=%{public}s ms=%{public}d',
         this.kind, Date.now() - started);
       this.notifyChanged(context);

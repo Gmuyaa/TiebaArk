@@ -12,6 +12,8 @@ export enum SettingsPane {
   TOP_NAV = 3,
   /** 关于贴吧Ark（只读版本信息与项目链接） */
   ABOUT = 4,
+  /** 吧页分类栏样式（常规吸顶 / 胶囊 / 悬浮 三选一） */
+  FORUM_TABS_STYLE = 6,
 
   DARK_MODE = 5,
 
@@ -139,10 +141,15 @@ export interface SettingsState {
   /** 全应用统一智感握姿偏好，默认开。 */
   smartReach?: boolean;
   homeComposeSmartReach?: boolean;
+  /** 首页发帖按钮是否显示（导航布局 → 悬浮按钮）；与握姿总开关、跟随握姿互不影响。 */
+  homeComposeVisible?: boolean;
   imageMenuSmartReach?: boolean;
   imageMenuLongPress?: boolean;
   forumTabsSmartReach?: boolean;
   forumTabsFloating?: boolean;
+  /** 分类栏样式（ForumTabsStyle：0 常规吸顶 / 1 胶囊 / 2 悬浮）与展示文案 */
+  forumTabsStyle?: number;
+  forumTabsStyleLabel?: string;
 
   cacheLabel: string;
 }
@@ -153,8 +160,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.222';
-export const SETTINGS_VERSION_CODE: string = '2611074';
+export const SETTINGS_APP_VERSION: string = '1.0.271';
+export const SETTINGS_VERSION_CODE: string = '2611123';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -247,10 +254,11 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
       return [
         paneEntry('home_top_nav_style', '首页顶栏样式', state.topNavLabel.trim(), SettingsPane.TOP_NAV),
         paneEntry('action_bar_style', '帖子页底栏样式', state.actionBarLabel.trim(), SettingsPane.ACTION_BAR),
-        switchEntry('forum_tabs_floating', '悬浮分类胶囊', state.forumTabsFloating ?? true),
+        paneEntry('forum_tabs_style', '分类栏样式', state.forumTabsStyleLabel ?? '悬浮', SettingsPane.FORUM_TABS_STYLE),
         switchEntry('hide_status_bar', '隐藏状态栏', state.hideStatusBar),
         switchEntry('hide_top_navigation', '隐藏顶部导航栏', state.hideTopNavigation),
-        switchEntry('hide_bottom_navigation', '隐藏底部导航栏', state.hideBottomNavigation)
+        switchEntry('hide_bottom_navigation', '隐藏底部导航栏', state.hideBottomNavigation),
+        switchEntry('home_compose_visible', '显示首页发帖按钮', state.homeComposeVisible ?? true)
       ];
     case SettingsPane.INTERACTION:
       return [
@@ -340,6 +348,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '帖子页底栏样式';
     case SettingsPane.TOP_NAV:
       return '首页顶栏样式';
+    case SettingsPane.FORUM_TABS_STYLE:
+      return '分类栏样式';
     case SettingsPane.IMAGE_MENU:
       return '看图菜单显示方式';
     case SettingsPane.IMAGE_LAYOUT:
@@ -416,6 +426,7 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
     case SettingsPane.FORUM_LEVEL:
       return SettingsPane.APPEARANCE;
     case SettingsPane.TOP_NAV:
+    case SettingsPane.FORUM_TABS_STYLE:
     case SettingsPane.ACTION_BAR:
       return SettingsPane.NAVIGATION_LAYOUT;
     case SettingsPane.MATERIAL:
@@ -472,6 +483,7 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.HDS_MATERIAL:
     case SettingsPane.ACTION_BAR:
     case SettingsPane.TOP_NAV:
+    case SettingsPane.FORUM_TABS_STYLE:
     case SettingsPane.DARK_MODE:
     case SettingsPane.FONT_SIZE:
     case SettingsPane.FORUM_LEVEL:

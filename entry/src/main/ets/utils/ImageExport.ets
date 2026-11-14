@@ -9,12 +9,6 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { systemShare } from '@kit.ShareKit';
-import { HttpClient, HttpResult } from '../net/HttpClient';
-
-/** 贴吧图片 CDN 与主站同一套 UA 约定（空 UA 会被拦） */
-const IMAGE_UA: string = 'bdtb for Android 12.64.1.1';
-/** 单张图上限（防呆）：超过就不下载，直接如实报错 */
-const MAX_IMAGE_BYTES: number = 24 * 1024 * 1024;
 
 /** 从 URL 推断扩展名；未知按 jpg（贴吧图床绝大多数是 jpg） */
 export function imageExtension(url: string): string {
@@ -33,26 +27,6 @@ export function imageFileName(url: string, index: number): string {
   const ext: string = imageExtension(url);
   const stamp: number = Date.now();
   return `tieba_${stamp}_${index}.${ext}`;
-}
-
-/** 下载图片字节；HTTP 非 200、空响应、超限都按失败抛出 */
-export async function fetchImageBytes(url: string): Promise<Uint8Array> {
-  if (url.length === 0) {
-    throw new Error('图片地址为空');
-  }
-  const client: HttpClient = new HttpClient();
-  client.userAgent = IMAGE_UA;
-  const result: HttpResult = await client.get(url);
-  if (!result.ok) {
-    throw new Error(result.error.length > 0 ? result.error : `下载失败（HTTP ${result.code}）`);
-  }
-  if (result.bytes.length === 0) {
-    throw new Error('下载内容为空');
-  }
-  if (result.bytes.length > MAX_IMAGE_BYTES) {
-    throw new Error('图片过大，暂不支持导出');
-  }
-  return result.bytes;
 }
 
 export function writeImageToCache(context: common.Context, bytes: Uint8Array, fileName: string): string {

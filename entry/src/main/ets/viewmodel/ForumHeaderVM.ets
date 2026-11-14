@@ -1,28 +1,25 @@
-import { cachedForumId, cachedForumFollow, cachedForumMembership, confirmForumSign, forumReadFresh, readForumShared, readFollowForumsShared, restoreForumCache } from './ForumReadCache';
+import { cachedForumId, restoreForumCache } from './ForumReadCache';
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
-import { ForumMembership } from '../model/ThreadList';
-import { FollowForumItem, FollowForumList } from '../model/FollowForum';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
-import { followAction, FollowActionVM } from './FollowActionVM';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ForumIdentity, ensureForumIdentity, forumIdentity, forumSignDay, registerForumAlias, signForum,
+  toggleForumFollow } from './ForumStateStore';
 
 function ownerKey(): string {
   return authSession.forumCacheSessionKey();
 }
-/** 贴吧签到按北京时间换日，不能复用昨天的已签到状态。 */
-export function forumSignDay(): string {
-  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
 
+/**
+ * 吧头：简介与公开计数属于本页，关注关系/今日签到/等级经验只读 `ForumStateStore`。
+ *
+ * 2026-11-13（1.0.268）：不再自己维护"已关注的关注态"和"今天的签到态"，也不再单独发
+ * rn=1 的首页请求——那些状态由吧页首包与关注吧列表回填到身份实例上，本 VM 只做转发与
+ * 按钮文案。页面实例重建（返回再进）不会再触发重复读取。
+ */
 @ObservedV2
 export class ForumHeaderVM {
-  @Trace follow: FollowActionVM = new FollowActionVM('forum', 0, '', '');
-  @Trace membership: ForumMembership = new ForumMembership();
-  @Trace reading: boolean = false;
-  @Trace signing: boolean = false;
-  @Trace errorText: string = '';
+  @Trace identity: ForumIdentity = new ForumIdentity();
   @Trace introduction: string = '';
   @Trace introductionError: string = '';
   @Trace introductionLoading: boolean = false;
@@ -34,9 +31,6 @@ export class ForumHeaderVM {
   private forumId: number = 0;
   private forumName: string = '';
   private owner: string = '';
-  private sequence: number = 0;
-  private readDay: string = '';
-  private confirmedDay: string = '';
   private disposed: boolean = false;
 
   async initialize(context: common.UIAbilityContext, id: number, name: string): Promise<void> {
@@ -47,51 +41,34 @@ export class ForumHeaderVM {
       await this.ensureMembership(context);
       return;
     }
-    ++this.sequence;
     ++this.introductionSequence;
     this.disposed = false;
     this.forumId = id;
     this.forumName = name;
     this.owner = owner;
-    this.readDay = '';
-    this.confirmedDay = '';
-    this.membership = new ForumMembership();
-    this.reading = false;
-    this.signing = false;
-    this.errorText = '';
     this.introduction = '';
     this.introductionError = '';
     this.introductionLoading = false;
     this.publicMemberCount = -1;
     this.publicThreadCount = -1;
     this.introductionLoaded = false;
-    this.follow = followAction('forum', id, '', name);
+    // 身份实例跨页面存活：同一账号同一个吧再进时直接复用已确认的关注/签到态。
+    this.identity = forumIdentity(id, name);
     if (id <= 0 || name.length === 0) { return; }
-    const cached = cachedForumMembership(name, id);
-    if (cached !== undefined) {
-      this.membership = cached;
-      if (cached.signed !== undefined) { this.readDay = forumSignDay(); }
-    }
-    const following = cachedForumFollow(name, id);
-    if (following !== undefined && !this.follow.known) { this.follow.acceptRead(following); }
-    await this.follow.load(context);
-    if (owner !== this.owner || owner !== ownerKey() || this.disposed) { return; }
+    registerForumAlias(id, name);
     await this.ensureMembership(context);
   }
 
   dispose(): void {
     this.disposed = true;
-    ++this.sequence;
     ++this.introductionSequence;
-    this.reading = false;
-    this.signing = false;
     this.introductionLoading = false;
   }
 
   /** 简介是公共资料，未登录也可读取；切吧、切账号和销毁后的响应不得回填。 */
   async ensureIntroduction(context: common.UIAbilityContext, retry: boolean = false): Promise<void> {
     if (this.disposed || this.forumId <= 0 || this.owner !== ownerKey() ||
-      !this.follow.known ||
+      !this.followKnown() ||
       this.introductionLoading || (this.introductionLoaded && !retry)) { return; }
     const sequence: number = ++this.introductionSequence;
     const id: number = this.forumId;
@@ -119,182 +96,57 @@ export class ForumHeaderVM {
     }
   }
 
-  private current(sequence: number, day: string): boolean {
-    return !this.disposed && sequence === this.sequence && this.owner.length > 0 &&
-      this.owner === ownerKey() && day === forumSignDay() && this.follow.known && this.follow.following;
-  }
-
   /** 首次只在已确认关注后读取；关注写请求中的乐观状态不会触发签到。 */
   async ensureMembership(context: common.UIAbilityContext, retry: boolean = false): Promise<void> {
-    if (this.disposed || this.owner.length === 0 || this.owner !== ownerKey() || this.forumId <= 0 ||
-      !this.follow.known || !this.follow.following || this.follow.pending || this.reading || this.signing) { return; }
-    const day: string = forumSignDay();
-    const confirmedContinuous: number = this.confirmedDay === day ? this.membership.continuousCount : -1;
-    const confirmedTotal: number = this.confirmedDay === day ? this.membership.totalCount : -1;
-    const cached = cachedForumMembership(this.forumName, this.forumId);
-    if (cached !== undefined) {
-      if (!(cached.continuousCount >= 0)) { cached.continuousCount = confirmedContinuous; }
-      if (!(cached.totalCount >= 0)) { cached.totalCount = confirmedTotal; }
-      this.membership = cached;
-    }
-    if (!retry && forumReadFresh(this.forumName) && cached?.signed !== undefined) {
-      this.readDay = day; return;
-    }
-    if (!retry && this.readDay === day && this.errorText.length > 0) { return; }
-    if (this.readDay.length > 0 && this.readDay !== day) { this.membership.signed = undefined; }
-    const sequence: number = ++this.sequence;
-    this.reading = true;
-    this.errorText = '';
-    try {
-      const device = await DeviceIdentity.ensure(context);
-      if (!this.current(sequence, day)) { return; }
-      const response = await readForumShared(context, this.forumName, this.forumId, retry);
-      if (!this.current(sequence, day)) { return; }
-      if (!response.ok || response.data.forum.id !== this.forumId) {
-        this.errorText = response.ok ? '吧信息不匹配，请重试' : response.describeFailure();
-        this.readDay = day;
-        return;
-      }
-      if (response.data.forum.followed !== undefined) { this.follow.acceptRead(response.data.forum.followed); }
-      if (!this.follow.following) { return; }
-      const membership: ForumMembership = cachedForumMembership(this.forumName, this.forumId) ?? response.data.membership;
-      // FRS JSON 有时省略签到段，复用已验证的 forumGuide 只读链路。
-      if (membership.signed === undefined || (retry && response.data.membership.signed === undefined)) {
-        if (authSession.session().tbs.length === 0) {
-          const result = await authSession.refreshTbs(context);
-          if (!this.current(sequence, day)) { return; }
-          if (!result.ok) {
-            this.membership = membership;
-            this.errorText = result.message;
-            this.readDay = day;
-            return;
-          }
-        }
-        const seen: Set<number> = new Set<number>();
-        for (let page: number = 1; page <= 10; page++) {
-          let guide: FollowForumList;
-          if (page === 1) { guide = await readFollowForumsShared(context, retry); }
-          else {
-            const response = await this.api.fetchFollowForums(authSession.session(), page, 50);
-            if (!this.current(sequence, day)) { return; }
-            if (!response.ok) { this.errorText = response.describeFailure(); break; }
-            guide = response.data;
-          }
-          if (!this.current(sequence, day)) { return; }
-          const item: FollowForumItem | undefined = guide.items.find((value: FollowForumItem): boolean =>
-            value.fid === this.forumId);
-          if (item !== undefined) {
-            if (membership.level < 0 && item.level > 0) { membership.level = item.level; }
-            if (item.signKnown) { membership.signed = item.isSigned; }
-            if (item.continuousCount >= 0) { membership.continuousCount = item.continuousCount; }
-            if (item.totalCount >= 0) { membership.totalCount = item.totalCount; }
-            break;
-          }
-          const before: number = seen.size;
-          for (const value of guide.items) { seen.add(value.fid); }
-          if (!guide.hasMore || seen.size === before) { break; }
-        }
-      }
-      // 本次签到的业务成功优先于 forumGuide 可能过期的 is_sign。
-      if (this.confirmedDay === day) {
-        membership.signed = true;
-        // 当天已确认的计数不被后续缺字段响应抹掉；有新值仍按服务端值更新。
-        if (!(membership.continuousCount >= 0)) { membership.continuousCount = confirmedContinuous; }
-        if (!(membership.totalCount >= 0)) { membership.totalCount = confirmedTotal; }
-      }
-      this.membership = membership;
-      this.readDay = day;
-      hilog.info(0x0000, 'ForegroundRefresh', 'forum state applied sign=%{public}d',
-        membership.signed === undefined ? -1 : (membership.signed ? 1 : 0));
-      if (membership.signed === undefined && this.errorText.length === 0) {
-        this.errorText = '签到状态暂未获取，请重试';
-      }
-    } catch (err) {
-      if (this.current(sequence, day)) {
-        this.errorText = '吧等级和签到状态读取失败，请重试';
-        this.readDay = day;
-      }
-    } finally {
-      if (sequence === this.sequence) { this.reading = false; }
-    }
+    if (this.disposed || this.owner !== ownerKey() || this.forumId <= 0) { return; }
+    await ensureForumIdentity(context, this.forumId, this.forumName, retry);
   }
+
+  followKnown(): boolean { return this.identity.known(); }
+  follows(): boolean { return this.identity.follows(); }
+  followPending(): boolean { return this.identity.pending; }
 
   /** 只有已确认关注才切换为签到；关注提交中的乐观值仍属于关注操作。 */
   buttonIsSign(): boolean {
-    return this.follow.known && this.follow.following && !this.follow.pending;
+    return this.identity.known() && this.identity.follows() && !this.identity.pending;
   }
 
   buttonBusy(): boolean {
-    return this.follow.loading || this.follow.pending || (this.follow.verifying && !this.follow.known) ||
-      this.reading || this.signing;
+    return this.identity.reading || this.identity.signing || this.identity.pending ||
+      (this.identity.verifying && !this.identity.known());
   }
 
   /** 完成外观只使用今日已确认的签到状态，跨日旧缓存不能显示为已签到。 */
   buttonCompleted(): boolean {
-    return this.buttonIsSign() && this.readDay === forumSignDay() && this.membership.signed === true;
+    return this.identity.completed(forumSignDay());
   }
 
+  /** 进行中只由按钮内的转圈表示，文案保持状态本身（2026-11-13 持有者要求去掉「…中…」字样）。 */
   buttonLabel(): string {
-    if (this.follow.pending) { return '关注中…'; }
-    if ((this.follow.loading && !this.follow.known) || (this.reading && this.membership.signed === undefined)) { return '读取中…'; }
-    if (this.follow.verifying && !this.follow.known) { return '核对中…'; }
-    if (!this.follow.known) { return '重试'; }
-    if (!this.follow.following) { return '关注'; }
-    if (this.signing) { return '签到中…'; }
-    if (this.readDay !== forumSignDay() || this.membership.signed === undefined) { return '重试'; }
-    return this.membership.signed ? '已签到' : '签到';
+    const value: ForumIdentity = this.identity;
+    if (!value.known()) { return '重试'; }
+    if (value.pending) { return value.follows() ? '已关注' : '关注'; }
+    if (!value.follows()) { return '关注'; }
+    if (!value.signKnown(forumSignDay())) { return '重试'; }
+    return value.signed === true ? '已签到' : '签到';
   }
 
   async activate(context: common.UIAbilityContext): Promise<string> {
-    if (this.disposed || this.owner !== ownerKey() || this.follow.pending || this.follow.loading ||
-      this.reading || this.signing) { return ''; }
-    if (this.follow.verifying && !this.follow.known) { return ''; }
-    if (!this.follow.known || !this.follow.following) {
-      const message: string = await this.follow.toggle(context);
-      await this.ensureMembership(context);
+    if (this.disposed || this.owner !== ownerKey()) { return ''; }
+    const value: ForumIdentity = this.identity;
+    if (value.pending || value.reading || value.signing ||
+      (value.verifying && !value.known())) { return ''; }
+    if (!value.known() || !value.follows()) {
+      const message: string = await toggleForumFollow(context, this.forumId, this.forumName);
+      if (!value.known()) { await this.ensureMembership(context); }
       return message;
     }
-    if (this.readDay !== forumSignDay() || this.membership.signed === undefined) {
-      await this.ensureMembership(context, true);
-      return this.errorText;
-    }
-    if (this.membership.signed) { return '今天已经签过啦'; }
-    const sequence: number = ++this.sequence;
     const day: string = forumSignDay();
-    this.signing = true;
-    try {
-      if (authSession.session().tbs.length === 0) {
-        const result = await authSession.refreshTbs(context);
-        if (!this.current(sequence, day)) { return ''; }
-        if (!result.ok) { return result.message; }
-      }
-      const device = await DeviceIdentity.ensure(context);
-      if (!this.current(sequence, day)) { return ''; }
-      const response = await this.api.signForum(device, authSession.session(), this.forumName);
-      if (!this.current(sequence, day)) { return ''; }
-      if (!response.ok) { return response.describeFailure(); }
-      confirmForumSign(this.forumName, response.stats, this.forumId);
-      this.confirmedDay = day;
-      const membership: ForumMembership = new ForumMembership();
-      membership.level = this.membership.level;
-      membership.levelName = this.membership.levelName;
-      membership.currentScore = this.membership.currentScore;
-      membership.nextScore = this.membership.nextScore;
-      membership.missedDays = this.membership.missedDays;
-      membership.continuousCount = response.stats.continuousCount >= 0 ?
-        response.stats.continuousCount : this.membership.continuousCount;
-      membership.totalCount = response.stats.totalCount >= 0 ?
-        response.stats.totalCount : this.membership.totalCount;
-      membership.signed = true;
-      this.membership = membership;
-      this.readDay = day;
-      this.errorText = '';
-      return response.alreadySigned ? '今天已经签过啦' :
-        (response.bonusPoint.length > 0 ? `签到成功 +${response.bonusPoint} 经验` : '签到成功');
-    } catch (err) {
-      return this.current(sequence, day) ? '签到失败，请重试' : '';
-    } finally {
-      if (sequence === this.sequence) { this.signing = false; }
+    if (!value.signKnown(day)) {
+      await ensureForumIdentity(context, this.forumId, this.forumName, true);
+      return value.error;
     }
+    if (value.signed === true) { return '今天已经签过啦'; }
+    return await signForum(context, this.forumId, this.forumName);
   }
 }

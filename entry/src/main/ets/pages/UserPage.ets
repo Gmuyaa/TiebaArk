@@ -14,7 +14,7 @@ import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
 import { ImageViewer } from '../components/ImageViewer';
 import { ImageTransitionSource, closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
-import { formatPostTime } from '../model/HomeFeedPresentation';
+import { formatTimeText } from '../model/TimeText';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
 import { profilePortrait } from '../model/PageDirectory';
 import { ContentPiece, portraitUrl } from '../model/ThreadDetail';
@@ -296,7 +296,7 @@ export struct UserPage {
       authorName: item.authorName || this.name(),
       authorAvatar: item.authorPortrait.length > 0 ? portraitUrl(item.authorPortrait) : this.avatarUrl(),
       forumName: item.forumName, forumAvatar: this.vm.postForumAvatars.get(item.forumId) || '',
-      postedTime: formatPostTime(item.createTimeMs, Date.now()),
+      postedTime: formatTimeText(item.createTimeMs, Date.now()),
       title: item.title, summary: item.content, contentPieces: item.pieces,
       onActivateContent: (piece: ContentPiece): void => { openContentPiece(piece, this.getUIContext()); },
       agreeCount: item.agreeNum, replyCount: item.replyNum, shareCount: item.shareNum,

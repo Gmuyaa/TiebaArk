@@ -1,9 +1,11 @@
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectoryResponse, PublicProfileResponse, TiebaApi, UserPostsResponse } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { UserPostItem, mergeUserReplies } from '../model/MyContent';
 import { ProfileForum, UserProfileInfo, avatarIdentity } from '../model/UserProfile';
-import { TiebaDevice } from '../net/TiebaParams';
+import { backfillForumAvatars, ForumAvatarBackfillPlan, ForumAvatarNeed } from '../utils/ForumAvatarBackfill';
+import { TiebaDevice, TiebaSession } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { FollowReadGuard, seedFollowState } from './FollowActionVM';
 
@@ -95,37 +97,41 @@ export class UserPageVM {
     await this.load(context);
   }
 
-  /** 头像分批并发补齐，不阻塞吧名展示；失败保留文字回退，刷新时可重试。 */
+  /**
+   * 「关注吧」头像补齐：缓存 / TTL / 并发 / 回写全部交给 `utils/ForumAvatarBackfill`，
+   * 这里只提供「按吧 ID 走目录接口取图」与「取到后替换行对象」。
+   * 失败保留文字回退、刷新可重试；换请求代次后不再上屏。
+   */
   private async loadForumAvatars(device: TiebaDevice, request: number): Promise<void> {
-    const pending: ProfileForum[] = this.forums.filter((forum: ProfileForum) =>
+    const pending: ProfileForum[] = this.forums.filter((forum: ProfileForum): boolean =>
       forum.id > 0 && forum.avatar.length === 0);
-    const session = authSession.session();
-    let next: number = 0;
-    const worker = async (): Promise<void> => {
-      while (request === this.request && next < pending.length) {
-        const forum: ProfileForum = pending[next++];
-        try {
-          const response: DirectoryResponse = await this.api.fetchDirectory(device, session, 'forum', forum.id);
-          if (!response.ok || response.data.forum.avatar.length === 0) { continue; }
-          this.forumAvatars.set(forum.id, response.data.forum.avatar);
-          if (request !== this.request) { return; }
-          // 替换行对象与数组，让纯模型字段的异步更新被页面观察到。
-          this.forums = this.forums.map((row: ProfileForum): ProfileForum => {
-            if (row.id !== forum.id) { return row; }
-            const updated: ProfileForum = new ProfileForum();
-            updated.id = row.id;
-            updated.name = row.name;
-            updated.avatar = response.data.forum.avatar;
-            return updated;
-          });
-        } catch (err) {
-          // 单个头像失败不应把已经读到的关注吧列表变成失败页。
-        }
-      }
+    if (pending.length === 0) { return; }
+    const session: TiebaSession = authSession.session();
+    const needs: ForumAvatarNeed[] = pending.map((forum: ProfileForum): ForumAvatarNeed =>
+      new ForumAvatarNeed(forum.name, forum.id));
+    const plan: ForumAvatarBackfillPlan = new ForumAvatarBackfillPlan();
+    plan.label = 'UserPageVM';
+    plan.stopped = (): boolean => request !== this.request;
+    plan.fetch = async (_name: string, forumId: number): Promise<string> => {
+      const response: DirectoryResponse = await this.api.fetchDirectory(device, session, 'forum', forumId);
+      return response.ok ? response.data.forum.avatar : '';
     };
-    const workers: Promise<void>[] = [];
-    for (let i: number = 0; i < Math.min(4, pending.length); i++) { workers.push(worker()); }
-    await Promise.all(workers);
+    plan.apply = (_name: string, forumId: number, url: string): void => {
+      this.forumAvatars.set(forumId, url);
+      this.applyForumAvatar(forumId, url);
+    };
+    await backfillForumAvatars(needs, plan);
+  }
+  /** 替换该吧的行对象与数组，让纯模型字段的异步更新被页面观察到。 */
+  private applyForumAvatar(forumId: number, avatarUrl: string): void {
+    this.forums = this.forums.map((row: ProfileForum): ProfileForum => {
+      if (row.id !== forumId) { return row; }
+      const updated: ProfileForum = new ProfileForum();
+      updated.id = row.id;
+      updated.name = row.name;
+      updated.avatar = avatarUrl;
+      return updated;
+    });
   }
 
   async load(context: common.UIAbilityContext, more: boolean = false): Promise<void> {
@@ -184,33 +190,32 @@ export class UserPageVM {
     }
   }
 
+  /**
+   * 「帖子栏」吧头像补齐：同一套共享编排；取到一张就发布一次
+   * （尾部慢请求不能拖住已经拿到的首屏头像）。
+   */
   private async loadPostForumAvatars(device: TiebaDevice, request: number): Promise<void> {
     // 切回帖子栏时先展示当前 VM 已知的头像，不等其他吧的补图请求。
     this.postForumAvatars = new Map<number, string>(this.forumAvatars);
-    const ids: number[] = [];
+    const session: TiebaSession = authSession.session();
+    const needs: ForumAvatarNeed[] = [];
     for (const item of this.items) {
-      if (item.forumId > 0 && !ids.includes(item.forumId) && !this.forumAvatars.has(item.forumId)) {
-        ids.push(item.forumId);
-      }
+      if (item.forumId <= 0 || this.forumAvatars.has(item.forumId)) { continue; }
+      needs.push(new ForumAvatarNeed(item.forumName, item.forumId));
     }
-    const session = authSession.session();
-    let next: number = 0;
-    const worker = async (): Promise<void> => {
-      while (request === this.request && next < ids.length) {
-        const id: number = ids[next++];
-        try {
-          const response: DirectoryResponse = await this.api.fetchDirectory(device, session, 'forum', id);
-          if (request !== this.request) { return; }
-          if (response.ok && response.data.forum.avatar.length > 0) {
-            this.forumAvatars.set(id, response.data.forum.avatar);
-            // 每张成功就发布；尾部慢请求不能拖住已经拿到的首屏头像。
-            this.postForumAvatars = new Map<number, string>(this.forumAvatars);
-          }
-        } catch (err) {
-          // 头像读取失败保留共享卡片的文字兜底。
-        }
-      }
+    if (needs.length === 0) { return; }
+    const plan: ForumAvatarBackfillPlan = new ForumAvatarBackfillPlan();
+    plan.label = 'UserPageVM/post';
+    plan.stopped = (): boolean => request !== this.request;
+    plan.fetch = async (_name: string, forumId: number): Promise<string> => {
+      const response: DirectoryResponse = await this.api.fetchDirectory(device, session, 'forum', forumId);
+      return response.ok ? response.data.forum.avatar : '';
     };
-    await Promise.all([worker(), worker()]);
-  }
-}
+    // 每张成功就发布；尾部慢请求不能拖住已经拿到的首屏头像。
+    plan.apply = (_name: string, forumId: number, url: string): void => {
+      this.forumAvatars.set(forumId, url);
+      this.postForumAvatars = new Map<number, string>(this.forumAvatars);
+    };
+    await backfillForumAvatars(needs, plan);
+  }}
+

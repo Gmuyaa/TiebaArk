@@ -2,12 +2,11 @@
 import { common } from '@kit.AbilityKit';
 import { privacyMarkLabel } from '../model/PrivacyMarks';
 import { PrivacyMarksVM } from '../viewmodel/PrivacyMarksVM';
-import { SettingsCard, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SettingsInfoRow } from './SettingsComponents';
+import { PreferencePaneScaffold } from './PreferencePaneScaffold';
 
 @ComponentV2
 export struct PrivacyMarksPane {
-  /** 页面顶栏刷新序号：自增即触发重读（初值 0 不触发） */
-  @Param refreshSeq: number = 0;
   @Local vm: PrivacyMarksVM = new PrivacyMarksVM();
 
   private context(): common.UIAbilityContext {
@@ -22,32 +21,16 @@ export struct PrivacyMarksPane {
     this.vm.dispose();
   }
 
-  @Monitor('refreshSeq')
-  onRefreshRequested(): void {
-    if (this.refreshSeq > 0) {
-      this.vm.load(this.context()).then((): void => {
-      });
-    }
-  }
-
   build() {
-    Column() {
-      SettingsCard({
-        content: (): void => { this.MarkRows() }
-      })
-      if (this.vm.error.length > 0) {
-        SettingsStatusLine({
-          kind: SettingsStatusKind.ERROR,
-          message: this.vm.error,
-          retryLabel: '重试',
-          onRetry: (): void => {
-            void this.vm.load(this.context());
-          }
-        })
-      }
-      SettingsNote({ text: '仅查看标记显示状态，不代表吧务权限。' })
+    PreferencePaneScaffold({
+      note: '仅查看标记显示状态，不代表吧务权限。',
+      noteAfter: true,
+
+      message: this.vm.error,
+      onRetry: (): void => { void this.vm.load(this.context()); }
+    }) {
+      this.MarkRows()
     }
-    .width('100%')
   }
 
   @Builder

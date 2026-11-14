@@ -1,4 +1,4 @@
-import { RawContentItem } from '../api/RawThreadPage';
+import { RawContentItem } from './RawThreadPage';
 
 /** 当前 APK gn7.g(10)→512→TbRichTextVoiceInfo；资源标识不等于音频 URL。 */
 export class VoiceClip {

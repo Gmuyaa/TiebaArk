@@ -15,7 +15,7 @@ import { SearchResultVM } from '../viewmodel/SearchResultVM';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { TopLabelItem } from '../components/TopLabelItem';
 import { openUserByIdentity } from '../navigation/UserNavigation';
-import { formatPostTime } from '../model/HomeFeedPresentation';
+import { formatTimeText } from '../model/TimeText';
 import { AppTheme } from '../theme/Theme';
 import { SearchPageHeader } from '../components/SearchPageHeader';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
@@ -94,7 +94,7 @@ export struct SearchResultPage {
 
   private resultTimeText(item: SearchPostItem): string {
     // 全站统一格式（今年 `MM-DD HH:mm` / 往年 `YYYY-MM-DD`），与首页同一函数
-    return formatPostTime(item.timeMs, Date.now());
+    return formatTimeText(item.timeMs, Date.now());
   }
 
   private goBack(): void {

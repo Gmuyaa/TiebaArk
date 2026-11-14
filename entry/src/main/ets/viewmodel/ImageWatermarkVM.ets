@@ -2,10 +2,8 @@ import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { TiebaApi } from '../api/TiebaApi';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
+import { accountWithPortrait } from './SessionOwner';
 
-function owner(): string {
-  return authSession.isLoggedIn() ? `${authSession.snapshot.uid}:${authSession.snapshot.portrait}` : '';
-}
 @ObservedV2
 export class ImageWatermarkVM {
   @Trace type: number = -1;
@@ -16,11 +14,11 @@ export class ImageWatermarkVM {
   private epoch: number = 0;
   private disposed: boolean = false;
   private api: TiebaApi = new TiebaApi();
-  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === owner(); }
+  private current(mine: number): boolean { return !this.disposed && mine === this.epoch && this.account === accountWithPortrait(); }
 
   async load(context: common.UIAbilityContext): Promise<void> {
-    if (this.disposed || (this.loading && this.account === owner())) { return; }
-    const nextAccount: string = owner();
+    if (this.disposed || (this.loading && this.account === accountWithPortrait())) { return; }
+    const nextAccount: string = accountWithPortrait();
     const keepOld: boolean = nextAccount.length > 0 && nextAccount === this.account && this.loaded;
     this.account = nextAccount; const mine: number = ++this.epoch;
     this.loaded = keepOld; this.error = ''; this.loading = false;
@@ -38,7 +36,7 @@ export class ImageWatermarkVM {
     finally {
       if (mine === this.epoch) {
         this.loading = false;
-        if (!this.disposed && this.account !== owner()) {
+        if (!this.disposed && this.account !== accountWithPortrait()) {
           // 账号已变化：立即清空旧账号的数据与状态
           this.type = -1; this.loaded = false; this.error = '账号已变化，请重新读取';
         }

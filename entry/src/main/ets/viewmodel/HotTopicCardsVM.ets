@@ -1,6 +1,7 @@
 /** 当前话题列表缺失信息的两槽补取；不持久化，回写保留卡片对象。 */
 import { HotTopicCardInfo } from '../model/HotTopicCard';
 import { ThreadBrief } from '../model/ThreadList';
+import { InflightQueue } from '../model/InflightQueue';
 
 export type HotTopicCardFetcher = (tid: number) => Promise<HotTopicCardInfo | undefined>;
 
@@ -10,8 +11,7 @@ export class HotTopicCardsVM {
   private fetcher: HotTopicCardFetcher | undefined = undefined;
   private current: ThreadBrief[] = [];
   private attempted: Set<ThreadBrief> = new Set();
-  private queue: ThreadBrief[] = [];
-  private inflight: number = 0;
+  private queue: InflightQueue<ThreadBrief> = new InflightQueue<ThreadBrief>(2);
   private epoch: number = 0;
 
   reset(fetcher?: HotTopicCardFetcher): void {
@@ -19,7 +19,7 @@ export class HotTopicCardsVM {
     this.fetcher = fetcher;
     this.current = [];
     this.attempted = new Set();
-    this.queue = [];
+    this.queue.clear();
   }
 
   sync(items: ThreadBrief[]): void {
@@ -42,7 +42,7 @@ export class HotTopicCardsVM {
     }
     if (changed) { this.revision++; }
     const retained: Set<ThreadBrief> = new Set(items);
-    this.queue = this.queue.filter((item: ThreadBrief): boolean => retained.has(item));
+    this.queue.retain((item: ThreadBrief): boolean => retained.has(item));
     const attempted: Set<ThreadBrief> = new Set();
     for (const item of this.attempted) {
       if (retained.has(item)) { attempted.add(item); }
@@ -51,7 +51,7 @@ export class HotTopicCardsVM {
     for (const item of items) {
       if (this.fetcher !== undefined && !this.attempted.has(item) && this.needsSupplement(item)) {
         this.attempted.add(item);
-        this.queue.push(item);
+        this.queue.enqueue(item);
       }
     }
     this.pump();
@@ -64,14 +64,21 @@ export class HotTopicCardsVM {
   }
 
   private pump(): void {
-    while (this.inflight < 2 && this.queue.length > 0 && this.fetcher !== undefined) {
-      const item: ThreadBrief = this.queue.shift()!;
-      if (!this.needsSupplement(item)) { continue; }
-      const fetcher: HotTopicCardFetcher = this.fetcher;
-      const epoch: number = this.epoch;
-      this.inflight++;
-      void this.fetch(item, fetcher, epoch);
-    }
+    this.queue.pump(
+      (): boolean => this.fetcher !== undefined,
+      (): ThreadBrief | undefined => {
+        // 跳过已被其它来源补齐的项：取出来直接丢弃，不占用并发槽。
+        while (true) {
+          const item: ThreadBrief | undefined = this.queue.takeFirst();
+          if (item === undefined) { return undefined; }
+          if (this.needsSupplement(item)) { return item; }
+        }
+      },
+      async (item: ThreadBrief): Promise<void> => {
+        const fetcher: HotTopicCardFetcher | undefined = this.fetcher;
+        if (fetcher === undefined) { return; }
+        await this.fetch(item, fetcher, this.epoch);
+      });
   }
 
   private async fetch(item: ThreadBrief, fetcher: HotTopicCardFetcher, epoch: number): Promise<void> {
@@ -103,9 +110,6 @@ export class HotTopicCardsVM {
       this.revision++;
     } catch (_) {
       // 补充失败仍保留原列表；显式刷新创建的新对象可以重试，不冒充零或加载成功。
-    } finally {
-      this.inflight--;
-      this.pump();
     }
   }
 }

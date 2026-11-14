@@ -438,3 +438,15 @@ export function formatCount(value: number): string {
   }
   return String(value);
 }
+
+/**
+ * 吧页「关注 / 帖子」数量：<1000 原样、1000–9999 用 k、≥10000 用 w，均保留一位小数。
+ * 与 `formatCount` 分开：那个是用户资料的三格数字（万 单位、无 k 档），这里是吧头摘要。
+ * 取整向下（Math.floor），避免 9999 显示成 "10.0k"、99999 显示成 "10.0w"。
+ */
+export function formatForumCount(value: number): string {
+  if (value < 0) { return '--'; }
+  if (value < 1000) { return String(value); }
+  if (value < 10000) { return `${(Math.floor(value / 100) / 10).toFixed(1)}k`; }
+  return `${(Math.floor(value / 1000) / 10).toFixed(1)}w`;
+}

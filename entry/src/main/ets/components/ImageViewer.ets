@@ -18,12 +18,12 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { KeyCode } from '@ohos.multimodalInput.keyCode';
 import {
-  fetchImageBytes,
   imageFileName,
   saveImageToGallery,
   shareImageFile,
   writeImageToCache
 } from '../utils/ImageExport';
+import { fetchImageBytes } from '../net/ImageDownload';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import {
   SrStatus, SR_BUTTON_BASE, SR_BUTTON_ICON, SR_BUTTON_INSET, SR_BUTTON_MARGIN, SR_BUTTON_TOUCH,
