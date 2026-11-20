@@ -1,7 +1,7 @@
 import { VisualTheme } from '../common/appearance/VisualTheme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 
-/** 主题资源角色；数组与枚举顺序对应，中性角色留空并使用调用方的经典资源。 */
+/** 主题资源角色；下标顺序必须与各主题色数组一致。页面前景类角色没有主题色时留空，由调用方传经典资源。 */
 export enum ThemeColorRole {
   ACCENT,
   ACCENT_LIGHT,
@@ -55,11 +55,9 @@ export enum ThemeColorRole {
   MEDIA_ACCENT,
   HOME_TOP_BACKDROP,
   HOME_TOP_BACKDROP_CLEAR,
-  /** 首页发帖按钮的沉浸光感着色：当前强调色不透明，随八套主题各自走；深浅同色。 */
   COMPOSE_TINT
 }
 
-/** 雾松：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const PINE_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_pine_accent'), // ACCENT
   $r('app.color.theme_pine_accent_light'), // ACCENT_LIGHT
@@ -116,7 +114,6 @@ const PINE_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_pine_compose_tint'), // COMPOSE_TINT
 ];
 
-/** 烟紫：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const LILAC_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_lilac_accent'), // ACCENT
   $r('app.color.theme_lilac_accent_light'), // ACCENT_LIGHT
@@ -173,7 +170,6 @@ const LILAC_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_lilac_compose_tint'), // COMPOSE_TINT
 ];
 
-/** 砂陶：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const CLAY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_clay_accent'), // ACCENT
   $r('app.color.theme_clay_accent_light'), // ACCENT_LIGHT
@@ -230,7 +226,6 @@ const CLAY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_clay_compose_tint'), // COMPOSE_TINT
 ];
 
-/** 晴空：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const SKY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_sky_accent'), // ACCENT
   $r('app.color.theme_sky_accent_light'), // ACCENT_LIGHT
@@ -287,7 +282,6 @@ const SKY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_sky_compose_tint'), // COMPOSE_TINT
 ];
 
-/** 莓果：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const BERRY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_berry_accent'), // ACCENT
   $r('app.color.theme_berry_accent_light'), // ACCENT_LIGHT
@@ -344,7 +338,6 @@ const BERRY_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_berry_compose_tint'), // COMPOSE_TINT
 ];
 
-/** 橘光：固定资源标识可复用；主题选择必须在 getter 调用时读取。 */
 const ORANGE_COLORS: Array<Resource | undefined> = [
   $r('app.color.theme_orange_accent'), // ACCENT
   $r('app.color.theme_orange_accent_light'), // ACCENT_LIGHT
@@ -427,7 +420,8 @@ function isClassicSurface(role: ThemeColorRole): boolean {
   }
 }
 
-/** 经典与纸境保留原配色；六色只切换局部强调，不改变页面背景或布局。 */
+/** 经典与纸境保留原配色；六色只切换局部强调，不改变页面背景或布局。
+ *  资源标识固定可复用，所以主题选择必须在 getter 调用时读取，不能在模块加载期求值。 */
 export function themeResource(classic: Resource, paper: Resource, role: ThemeColorRole): Resource {
   const theme: VisualTheme = visualThemeStore.theme;
   if (theme !== VisualTheme.CLASSIC && theme !== VisualTheme.PAPER && isClassicSurface(role)) {

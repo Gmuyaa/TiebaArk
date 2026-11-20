@@ -20,7 +20,7 @@ export class ForumLevelStore {
       } catch (_) {
         // 本次会话保留当前偏好。
       } finally {
-        // 读失败也不重试：与原实现一致（原实现在 await 之前就置 loaded）。
+        // 读失败也不重试：直接标记已加载，避免反复读盘。
         this.gate.markLoaded();
       }
     });

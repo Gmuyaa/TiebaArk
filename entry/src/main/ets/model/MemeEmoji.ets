@@ -5,11 +5,9 @@ import { UploadedPostImage, uploadedImageToken } from './ImageUpload';
 export class MemePicItem {
   /** 贴吧图床图片全局 ID —— 收藏的本质是引用它 */
   picId: string = '';
-  /** 原图 URL */
   picUrl: string = '';
   /** 原图宽（发帖 token 要写进串里） */
   width: number = 0;
-  /** 原图高 */
   height: number = 0;
   /** 缩略图 URL（面板显示用；响应可能缺，缺则回落 picUrl） */
   thumbnail: string = '';

@@ -1,16 +1,9 @@
 /**
- * 贴吧 Protobuf wire format 读写原语。
+ * 贴吧 Protobuf wire format 读写原语。手写而非用现成库：ArkTS 无反射，官方运行时与 Wire 类代码生成不可用。
  *
- * 为什么手写而不用现成库：
- * - ArkTS 无反射，protobuf 官方运行时与 Wire 类代码生成方案在此不可用
- * - 贴吧接口只用到 wire format 的一个子集，手写可精确控制且便于用真实样本回归
- *
- * 设计约定：
- * - 只有本文件触碰字节级读写，上层 Proto 类只声明字段编号并调用这里的方法
- * - 所有越界与非法编码统一抛 ProtoError，由协议层转为业务错误，不向上冒泡崩溃
- * - 读取端不做字段名推断；字段编号的具体依据由上层模型与参数类记录。
- *   已复核部分使用固定基准客户端的反编译 wire 类（`@ProtoField(tag = N)`，
- *   基准包 22.11.1.0）；开源参考与尚待补证部分见 `THIRD_PARTY_NOTICES.md`。
+ * 只有本文件触碰字节级读写，上层 Proto 类只声明字段编号并调用这里；越界与非法编码统一抛 `ProtoError`，
+ * 由协议层转为业务错误。字段编号依据由上层模型与参数类记录，已复核部分取自基准包 22.11.1.0 的反编译 wire 类
+ * （`@ProtoField(tag = N)`），开源参考与待补证部分见 `THIRD_PARTY_NOTICES.md`。
  */
 
 import { decodeUtf8, encodeUtf8 } from '../utils/TextCodec';
@@ -34,15 +27,11 @@ export class ProtoError extends Error {
 
 const VARINT_MAX_BYTES: number = 10;
 
-/**
- * 写入端。按字段逐个 append，最后 toUint8Array() 取结果。
- * 内部缓冲按需倍增，避免每次写入都重新分配。
- */
+/** 写入端：按字段逐个 append，最后 `toUint8Array()` 取结果；内部缓冲按需倍增。 */
 export class ProtoWriter {
   private buffer: Uint8Array = new Uint8Array(256);
   private pos: number = 0;
 
-  /** 当前已写入的字节数 */
   get length(): number {
     return this.pos;
   }
@@ -67,12 +56,10 @@ export class ProtoWriter {
     this.pos += 1;
   }
 
-  /** 写入 tag：field_number 左移 3 位后与 wire type 做或运算 */
   writeTag(fieldNumber: number, wireType: WireType): void {
     this.writeUint64(BigInt(fieldNumber) * BigInt(8) + BigInt(wireType));
   }
 
-  /** varint 编码，最多 10 字节 */
   writeUint64(value: bigint): void {
     if (value < BigInt(0)) {
       throw new ProtoError('varint cannot encode a negative value; use writeSint64 for signed');
@@ -92,7 +79,6 @@ export class ProtoWriter {
     throw new ProtoError('varint exceeds 10 bytes');
   }
 
-  /** zigzag 编码，用于 sint32/sint64 */
   writeSint64(value: bigint): void {
     const zigzag: bigint = (value << BigInt(1)) ^ (value >> BigInt(63));
     this.writeUint64(zigzag);
@@ -109,7 +95,6 @@ export class ProtoWriter {
     }
   }
 
-  /** int64 字段 */
   writeInt64(fieldNumber: number, value: bigint): void {
     this.writeTag(fieldNumber, WireType.VARINT);
     if (value < BigInt(0)) {
@@ -119,18 +104,15 @@ export class ProtoWriter {
     }
   }
 
-  /** bool 字段 */
   writeBool(fieldNumber: number, value: boolean): void {
     this.writeInt32(fieldNumber, value ? 1 : 0);
   }
 
-  /** string 字段，UTF-8 编码后按 length-delimited 写入 */
   writeString(fieldNumber: number, value: string): void {
     const bytes: Uint8Array = encodeUtf8(value);
     this.writeBytes(fieldNumber, bytes);
   }
 
-  /** bytes 字段 */
   writeBytes(fieldNumber: number, value: Uint8Array): void {
     this.writeTag(fieldNumber, WireType.LENGTH_DELIMITED);
     this.writeUint64(BigInt(value.length));
@@ -139,15 +121,10 @@ export class ProtoWriter {
     this.pos += value.length;
   }
 
-  /** 嵌套消息字段：先写入已序列化的子消息 */
   writeMessage(fieldNumber: number, value: Uint8Array): void {
     this.writeBytes(fieldNumber, value);
   }
 
-  /**
-   * fixed32 字段：定长 4 字节，小端序。
-   * 与 skipField 的 FIXED32 分支对称——读端能跳过，写端就必须能写出。
-   */
   writeFixed32(fieldNumber: number, value: number): void {
     this.writeTag(fieldNumber, WireType.FIXED32);
     this.ensureCapacity(4);
@@ -159,7 +136,6 @@ export class ProtoWriter {
     this.pos += 4;
   }
 
-  /** fixed64 字段：定长 8 字节，小端序 */
   writeFixed64(fieldNumber: number, value: bigint): void {
     this.writeTag(fieldNumber, WireType.FIXED64);
     this.ensureCapacity(8);
@@ -177,16 +153,7 @@ export class ProtoWriter {
   }
 }
 
-/**
- * 读取端。构造时给定完整响应体，按字段推进。
- *
- * 使用方式：
- *   const reader = new ProtoReader(bytes);
- *   while (reader.hasMore()) {
- *     const field = reader.readTag();
- *     switch (field) { ... }
- *   }
- */
+/** 读取端：构造时给定完整响应体，按字段推进。 */
 export class ProtoReader {
   private buf: Uint8Array;
   private pos: number = 0;
@@ -283,7 +250,6 @@ export class ProtoReader {
     return (v >> BigInt(1)) ^ -(v & BigInt(1));
   }
 
-  /** fixed32 字段：定长 4 字节，小端序，按无符号数返回 */
   readFixed32(): number {
     this.require(4);
     const p: number = this.pos;
@@ -292,7 +258,6 @@ export class ProtoReader {
       | (this.buf[p + 3] << 24)) >>> 0;
   }
 
-  /** fixed64 字段：定长 8 字节，小端序，用 bigint 保精度 */
   readFixed64(): bigint {
     this.require(8);
     const p: number = this.pos;
@@ -304,7 +269,6 @@ export class ProtoReader {
     return out;
   }
 
-  /** 读取 length-delimited 的原始字节 */
   readBytes(): Uint8Array {
     const len: number = Number(this.readVarint());
     if (len < 0) {
@@ -316,17 +280,13 @@ export class ProtoReader {
     return out;
   }
 
-  /** 读取嵌套消息，返回其原始字节，交由对应的 Proto 类再解析 */
   readMessageBytes(): Uint8Array {
     return this.readBytes();
   }
 
   /**
-   * 读取嵌套消息并返回一个零拷贝的子读取器——解析嵌套消息的推荐入口。
-   *
-   * 必须用这个方法而不是自己算偏移：readTag() 之后的 position 指向的是
-   * 长度前缀，直接 fromSlice(position, len) 会从长度字节本身开始解析，
-   * 导致整个子消息错位。fromSlice 只适合调用方已确知载荷起点的场景。
+   * 读取嵌套消息并返回零拷贝的子读取器——解析嵌套消息的推荐入口。
+   * readTag() 之后的 position 指向长度前缀，自己 `fromSlice(position, len)` 会从长度字节开始解析而错位。
    */
   readMessageView(): ProtoReader {
     const len: number = Number(this.readVarint());
@@ -339,7 +299,6 @@ export class ProtoReader {
     return view;
   }
 
-  /** 读取 string */
   readString(): string {
     return decodeUtf8(this.readBytes());
   }

@@ -75,7 +75,6 @@ export class NotifyVM {
     }
   }
 
-  /** 发一次请求并合并结果；返回"是否真的拿到了新条目" */
   private async fetch(context: common.UIAbilityContext, mine: number, replace: boolean,
     request: NotifyCursor): Promise<boolean> {
     const previewAccount: string = authSession.isLoggedIn() ? authSession.sessionKey() : '';

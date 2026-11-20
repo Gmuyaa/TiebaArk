@@ -3,10 +3,9 @@ import { PostItem } from './ThreadDetail';
 /**
  * 楼层列表的增量数据源。
  *
- * 为什么不用 `@Trace` 数组整体替换：那样每次追加一页都要重建整段列表，List 需要
- * 重新测量所有子项的高度，滚动位置会跟着动（表现为"新内容加载后当前页被顶走"）。
- * `LazyForEach` + `onDataAdd` 只告诉列表"末尾多了 N 项"，已有项保持原位，
- * 这是 ArkUI 维护滚动位置的标准做法。
+ * 不能退回 `@Trace` 数组整体替换：那样每次追加一页都要重建整段列表，List 重新测量所有
+ * 子项高度，滚动位置会跟着动。`LazyForEach` + `onDataAdd` 只告诉列表「末尾多了 N 项」，
+ * 已有项保持原位，这是 ArkUI 维护滚动位置的标准做法。
  */
 export class FloorDataSource implements IDataSource {
   private items: PostItem[] = [];

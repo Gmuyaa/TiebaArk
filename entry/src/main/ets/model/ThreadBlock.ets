@@ -39,9 +39,7 @@ export interface ThreadBlockScope {
 export class BlockRules {
   /** 已屏蔽的吧名（不带后缀「吧」；服务端列表 + 本机即时记录） */
   forums: string[] = [];
-  /** 已拉黑的用户 uid */
   uids: number[] = [];
-  /** 本机隐藏的帖子 tid */
   tids: number[] = [];
 }
 
@@ -90,7 +88,6 @@ export function normalizeForumNames(names: string[]): string[] {
   return result;
 }
 
-/** uid 清单：只留正整数，去重 */
 export function normalizeUids(uids: number[]): number[] {
   const result: number[] = [];
   for (const uid of uids) {
@@ -100,7 +97,6 @@ export function normalizeUids(uids: number[]): number[] {
   return result;
 }
 
-/** tid 清单：只留正整数，去重 */
 export function normalizeTids(tids: number[]): number[] {
   const result: number[] = [];
   for (const tid of tids) {
@@ -253,7 +249,6 @@ export function mergeBlockedUser(before: BlockedUser[], incoming: BlockedUser): 
   return result;
 }
 
-/** 解除后从本机名单里删掉 */
 export function removeBlockedUser(before: BlockedUser[], uid: number): BlockedUser[] {
   const result: BlockedUser[] = [];
   for (const item of before) {
@@ -262,7 +257,6 @@ export function removeBlockedUser(before: BlockedUser[], uid: number): BlockedUs
   return result;
 }
 
-/** 过滤口径要的 uid 清单 */
 export function blockedUserUids(items: BlockedUser[]): number[] {
   const uids: number[] = [];
   for (const item of items) { uids.push(item.uid); }

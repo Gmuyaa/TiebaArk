@@ -40,12 +40,9 @@ export struct ThreadPreviewCard {
   @Param isGood: boolean = false;
   @Param isHelp: boolean = false;
   /**
-   * 点光源**受光**类型（`PointLightIlluminatedType`）。默认 NONE = 不受光。
-   *
-   * 官方语义：受光端只写 `illuminatedType`，光源由别处的 `pointLight({ options })` 提供，
-   * 光会照到周围标记为可受光的组件上。默认值必须是 NONE——本组件有 6 处调用，
-   * 只有首页试验入口显式开启，其他页面行为不变。
-   * 约束：受光组件若设置了 border 的颜色和宽度，会覆盖掉点光源效果（见 build 末尾那条 border）。
+   * 点光源受光类型（`PointLightIlluminatedType`），默认 NONE = 不受光。官方语义：受光端只写 `illuminatedType`，
+   * 光源由别处的 `pointLight({ options })` 提供。默认必须是 NONE —— 本组件有 6 处调用，只有首页入口显式开启。
+   * 约束：受光组件若设置了 border 的颜色和宽度，会覆盖掉点光源效果。
    */
   @Param litType: hdsEffect.PointLightIlluminatedType = hdsEffect.PointLightIlluminatedType.NONE;
   @Local actionState: ThreadCardActionState = new ThreadCardActionState();

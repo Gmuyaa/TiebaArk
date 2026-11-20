@@ -1,3 +1,8 @@
+/**
+ * 吧读取缓存：内存表 + 按账号分键的落盘快照，供「进吧先显示上次内容」。
+ * 新鲜期内不重复请求，落盘快照只作展示（`restoreForumCache` 读盘不算新数据）；
+ * 换号清空；「今日已签」是单调事实，由 `confirmForumSign` 记下后不再重读。
+ */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi, ThreadListResponse } from '../api/TiebaApi';
 import { ForumMembership } from '../model/ThreadList';
@@ -72,7 +77,7 @@ function store(urgent: boolean = false): void {
     hasMore: guide?.hasMore ?? false, items, headers }, urgent);
 }
 
-/** Called after a stable UID is known; disk reads never make data fresh. */
+/** 在知道稳定 UID 之后调用；磁盘读不算新鲜数据。 */
 export function restoreForumCache(context: common.UIAbilityContext): void {
   bind();
   const uid: number = authSession.forumCacheUid();
@@ -182,11 +187,9 @@ export function cachedForumFollow(name: string, id: number): boolean | undefined
 }
 
 /**
- * 关注态这份数据**真正取得**的时刻（毫秒）；0 = 未知（按已过期处理）。
- *
- * 为什么要单独取时间：`ForumStateStore` 预热时要用它决定"还能用多久"。
- * 落盘快照恢复时 `at` 故意记 0（磁盘读不算新鲜，见 `restoreForumCache`），
- * 真实时刻在 `serverAt`；关注吧列表的真实时刻在 `guideServerAt`。
+ * 关注态这份数据**真正取得**的时刻（毫秒）；0 = 未知（按已过期处理）。`ForumStateStore` 预热用它
+ * 决定“还能用多久”。落盘快照恢复时 `at` 故意记 0（见 `restoreForumCache`），真实时刻在 `serverAt`；
+ * 关注吧列表的真实时刻在 `guideServerAt`。
  */
 export function cachedForumFollowStamp(name: string, id: number): number {
   bind(); const value: ForumSnapshot | undefined = forums.get(name);
@@ -215,6 +218,7 @@ export function cachedForumMembership(name: string, id: number): ForumMembership
   if (confirmedSigns.get(name) === forumCacheDay()) { out.signed = true; }
   return out;
 }
+/** 共享读取：新鲜期内直接返回内存或落盘值，`force` 才发请求；同吧并发合并为一次。 */
 export async function readForumShared(context: common.UIAbilityContext, name: string,
   id: number, force: boolean = false): Promise<ThreadListResponse> {
   restoreForumCache(context);
@@ -264,6 +268,7 @@ export function cachedFollowForums(): FollowForumItem[] | undefined {
     return out;
   });
 }
+/** 关注吧列表的共享读取，规则同 `readForumShared`。 */
 export async function readFollowForumsShared(context: common.UIAbilityContext, force: boolean = false): Promise<FollowForumList> {
   restoreForumCache(context);
   bind();
@@ -343,6 +348,7 @@ export function invalidateForumRead(name: string): void {
   if (value !== undefined) { value.at = 0; }
   reads.delete(name); guideAt = 0; guideRead = undefined;
 }
+/** 记录「今日已签」这一单调事实，并让本吧的读缓存失效。 */
 export function confirmForumSign(name: string, stats: SignStats = new SignStats(), id: number = 0): void {
   invalidateForumRead(name); confirmedSigns.set(name, forumCacheDay());
   let value: ForumSnapshot | undefined = forums.get(name);
@@ -379,7 +385,7 @@ export function confirmForumSign(name: string, stats: SignStats = new SignStats(
   fetchedAt = Date.now(); store(true);
 }
 
-/** A confirmed write replaces the relationship before any older read can publish. */
+/** 已确认的写先于任何更旧的读取生效。 */
 export function confirmForumFollow(name: string, id: number, following: boolean): void {
   invalidateForumRead(name);
   let value: ForumSnapshot | undefined = forums.get(name);

@@ -11,16 +11,11 @@ import {
 const DOMAIN: number = 0x0000;
 const TAG: string = 'TiebaFontSize';
 
-/** 持久化存储与键名 */
 const STORE: string = 'tieba_font_size_prefs';
 const KEY_PREF: string = 'pref';
 const KEY_CUSTOM_SIZE: string = 'customSize';
 
-/**
- * 全局单例：App 内只有一个"字体大小"偏好。
- *
- * 读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。
- */
+/** 全局单例。读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。 */
 @ObservedV2
 export class FontSizeScaleStore {
   /** 用户偏好：跟随系统或自定义。 */
@@ -29,20 +24,18 @@ export class FontSizeScaleStore {
   @Trace saveError: string = '';
 
   /**
-   * 系统当前字体缩放比（`onFontSizeScaleUpdated` 持续刷新；跟随系统档用它）。
-   *
-   * `@Trace`：暂无 UI 读它，但保留可观测性（后续若做"当前系统字号"展示直接可用）。
+   * 系统当前字体缩放比（`onFontSizeScaleUpdated` 持续刷新），跟随系统档用它。
+   * `@Trace` 暂无 UI 读，保留可观测性。
    */
   @Trace systemScale: number = 1.0;
 
   private loaded: boolean = false;
 
   /**
-   * 启动时**同步**读偏好并立即应用（首帧前）。
-   *
-   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛
-   * "context is invalid"，所以**调用方要传真实 UIAbilityContext**（`EntryAbility.onCreate`）。
-   * ⚠️ 任何一步失败都保持默认（跟随系统）：读不出偏好 = 老用户行为不变。
+   * 启动时同步读偏好并立即应用（首帧前）。
+   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛 "context is invalid"，
+   * 调用方要传真实 UIAbilityContext（`EntryAbility.onCreate`）。
+   * ⚠️ 任何一步失败都保持默认（跟随系统）。
    */
   load(context: common.UIAbilityContext): void {
     if (this.loaded) {
@@ -69,10 +62,8 @@ export class FontSizeScaleStore {
   }
 
   /**
-   * 设置偏好（设置页唯一入口）：改状态 → 应用 → 落盘。
-   *
-   * 先改状态再落盘（同 `ThemeModeStore.setMode`）：界面立刻响应，落盘失败也不回滚。
-   * `setFontSizeScale` 是同步调用；全站字号重算与页面重绘由框架负责。
+   * 设置页唯一入口：改状态 → 应用 → 落盘。先改状态再落盘（同 `ThemeModeStore.setMode`），
+   * 界面立刻响应，落盘失败不回滚。
    */
   setPref(pref: FontSizePref, context: common.UIAbilityContext): void {
     const next: FontSizePref = normalizeFontSizePref(pref as number);
@@ -167,10 +158,7 @@ export class FontSizeScaleStore {
   }
 
   /**
-   * 把偏好应用到应用级字体缩放比。
-   *
    * 跟随系统档 = 钉在 `systemScale`（实时值）；自定义 = 基准字号 / 16。
-   * 全站 fp 字号 = 设计值 × 缩放比，重算与重绘由框架负责。
    */
   private apply(context: common.UIAbilityContext): void {
     const scale: number = fontSizeScaleOf(this.pref, this.systemScale, this.customSize);
@@ -181,11 +169,9 @@ export class FontSizeScaleStore {
     }
   }
 
-  /** 日志用的一行摘要 */
   describe(): string {
     return `${this.pref}(${fontSizeLabel(this.pref)}), customSize=${this.customSize}, systemScale=${String(this.systemScale)}`;
   }
 }
 
-/** 全局单例：App 内只有一个字体大小偏好 */
 export const fontScaleStore: FontSizeScaleStore = new FontSizeScaleStore();

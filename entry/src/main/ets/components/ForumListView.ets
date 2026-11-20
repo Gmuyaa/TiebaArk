@@ -24,6 +24,7 @@ import { RecommendVM } from '../viewmodel/RecommendVM';
 import { FollowFeedVM } from '../viewmodel/FollowFeedVM';
 import { HotTopicVM } from '../viewmodel/HotTopicVM';
 import { HotTopicItem, hotDiscussLabel } from '../model/HotTopic';
+import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
 import { AppTheme } from '../theme/Theme';
 import { NavigationService } from '../navigation/AppNavigation';
 import { LoginEmptyView } from './LoginEmptyView';
@@ -55,11 +56,8 @@ const PREFETCH_ITEMS: number = 5;
 const REFRESH_ECHO_MS: number = 300;
 
 /**
- * 下拉刷新触发门槛 / 刷新稳态下压带高（vp）。
- *
- * 两个含义共用同一个值不是巧合：`refreshOffset` 就是框架为指示器让出的那条带的
- * 高度；当前共享门槛为 96vp（与吧资料页一致），悬浮圆圈跟随此带高居中。
- * 因此 **转圈要画在这条带的正中** —— 起点 = 玻璃头下沿，见 `FeedRefreshOverlay`。
+ * 下拉刷新触发门槛 / 刷新稳态下压带高（vp）= 96（与吧资料页一致）。`refreshOffset` 就是框架为指示器让出的
+ * 那条带的高度，所以悬浮圆圈必须画在这条带正中（起点 = 玻璃头下沿，见 `FeedRefreshOverlay`）。
  */
 const REFRESH_OFFSET_VP: number = HOME_REFRESH_OFFSET;
 
@@ -82,8 +80,7 @@ export struct ForumListView {
   }
   @Param topNavigationRowHeight: number = 54;
   /**
-   * 帖子卡片的点光源**受光**类型，默认 NONE（不受光）。
-   * 试验入口在首页；其他调用方不传即保持原样。
+   * 帖子卡片的点光源受光类型，默认 NONE；其他调用方不传即保持原样。
    */
   @Param cardLitType: hdsEffect.PointLightIlluminatedType = hdsEffect.PointLightIlluminatedType.NONE;
   @Param topNavigationHidden: boolean = false;
@@ -163,8 +160,8 @@ export struct ForumListView {
   aboutToDisappear(): void {
     this.imageScrollers.clear();
   }
-  @Event onOpenImages: (urls: string[], index: number) => void =
-    (_urls: string[], _index: number): void => {};
+  @Event onOpenImages: (urls: string[], index: number, images?: ViewerImage[]) => void =
+    (_urls: string[], _index: number, _images?: ViewerImage[]): void => {};
 
   private imageScroller(tid: number): ListScroller {
     let scroller: ListScroller | undefined = this.imageScrollers.get(tid);
@@ -173,7 +170,8 @@ export struct ForumListView {
   }
 
   private openFeedImages(images: string[], index: number): void {
-    this.onOpenImages(images.map((url: string): string => feedImageInfo(url).origin || url), index);
+    this.onOpenImages(images.map((url: string): string => feedImageInfo(url).origin || url), index,
+      viewerImagesForFeed(images));
   }
 
   private channelSwiper: SwiperController = new SwiperController();
@@ -182,13 +180,11 @@ export struct ForumListView {
   private scrollDistance: number = 0;
   private suppressScrollUntil: number = 0;
   /**
-   * 列表触到末缘后锁存：松手后的弹簧回程（Fling 负增量）不算上滑信号，
-   * 否则每次滑到底回弹都会把收起的导航栏弹回来。手指重新按下才解锁。
+   * 列表触到末缘后锁存：松手后的弹簧回程（Fling 负增量）不算上滑信号，否则每次滑到底回弹都会把收起的导航栏弹回来。
    */
   private endEdgeLatch: boolean = false;
   /**
-   * 状态栏高度（vp，运行时实测，39 仅为首帧估计值）。
-   * 玻璃头要向上铺进状态栏区（expandSafeArea TOP），扩展后组件顶边到 y=0，
+   * 状态栏高度（vp，运行时读出，39 仅为首帧估计值）。玻璃头 expandSafeArea 铺进状态栏区后顶边到 y=0，
    * 内部必须用这个高度做 padding 补偿，搜索框才不会被压进状态栏。
    */
   @Local statusBarH: number = 39;
@@ -224,8 +220,7 @@ export struct ForumListView {
     /* 数据源可能在组件创建前就已有缓存数据（例如从子页返回），先对齐一次再交给 LazyForEach。 */
     this.syncFeedSources();
     /*
-     * 实测状态栏高度：玻璃头 expandSafeArea 铺进状态栏区后，顶部 padding 需要它来补偿。
-     * 拿不到（理论上不会）就保持首帧估计值，玻璃头只是偏差几个像素。
+     * 读状态栏高度：玻璃头 expandSafeArea 铺进状态栏区后，顶部 padding 需要它来补偿；拿不到就保持首帧估计值。
      */
     readStatusBarVp(context).then((vp: number) => {
       this.statusBarH = vp;
@@ -305,9 +300,8 @@ export struct ForumListView {
     this.selectedChannel = '';
     this.onChannelChanged('');
     /*
-     * 指定吧浏览态落在**推荐页**（与 `channelIndex()` 的兜底口径一致）：显式把 Swiper
-     * 拨回推荐，否则从「热榜」进吧时页面会停在热榜页、而 VM 已经装的是该吧的帖子。
-     * 走控制器（无动画）—— `.index()` 已不绑，见 `channelSwiper` 处的说明。
+     * 指定吧浏览态落在推荐页（与 `channelIndex()` 的兜底口径一致）：必须显式把 Swiper 拨回推荐，
+     * 否则从「热榜」进吧时页面会停在热榜页、而 VM 已经装的是该吧的帖子。走控制器而非 `.index()`（见 `channelSwiper`）。
      */
     this.channelSwiper.changeIndex(1, false);
     this.vm.openForum(this.hostContext(), target);
@@ -339,9 +333,8 @@ export struct ForumListView {
   }
 
   /**
-   * 只同步标签（顶栏选中态），**不碰数据** —— 给 `Swiper.onAnimationStart` 用：
-   * 翻页动画一开始标签就切过去，`onChange`（动画结束后）再走完整的 `selectChannel`。
-   * 两者都会写 `selectedChannel`，重复写同值是幂等的。
+   * 只同步标签（顶栏选中态），不碰数据 —— 给 `Swiper.onAnimationStart` 用：翻页动画一开始标签就切过去，
+   * `onChange`（动画结束后）再走完整的 `selectChannel`；两者重复写同值是幂等的。
    */
   private syncChannelLabel(index: number): void {
     const channel: FeedChannel | undefined = CHANNELS[index];
@@ -446,9 +439,8 @@ export struct ForumListView {
     this.refreshing = true;
     try {
       /*
-       * 官方流短时刷新常返回**同一批 tid**（TD-37 实测），而列表 ForEach key=tid
-       * —— 同内容刷新时界面零变化，用户会以为"下拉没生效"。刷新后 tid 集合
-       * 没变就给一句提示，让"刷新发生过"可见；变了自然有新卡片上屏，不多嘴。
+       * 官方流短时刷新常返回同一批 tid，而列表 key=tid —— 同内容刷新时界面零变化，用户会以为"下拉没生效"。
+       * 刷新后 tid 集合没变就给一句提示，让"刷新发生过"可见；变了自然有新卡片上屏，不多嘴。
        */
       const before: number[] = this.vm.threads.map((t: ThreadBrief) => t.tid);
       await this.vm.refresh(this.hostContext());
@@ -526,10 +518,8 @@ export struct ForumListView {
   }
 
   /**
-   * 错误页的"重新加载"按**当前频道**重试。
-   *
-   * 写成按频道分发而不是给 `ErrorView` 传回调：@Builder 的参数是值语义，
-   * 传闭包既无先例也没必要 —— 重试目标本来就只有"当前这一屏"一个答案。
+   * 错误页的"重新加载"按当前频道重试。写成按频道分发而不是给 `ErrorView` 传回调：@Builder 参数是值语义，
+   * 传闭包既无先例也没必要 —— 重试目标只有"当前这一屏"一个答案。
    */
   private retryCurrent(): void {
     if (this.selectedChannel === '关注') {
@@ -571,9 +561,8 @@ export struct ForumListView {
       return;
     }
     /*
-     * 落盘地址在 TTL 内就直接用，不发请求（2026-11-13 方案 2）。
-     * 只有"这一次没有任何可用地址"才需要走网络；地址失效由 ForumAvatarImage 的
-     * onError → forgetCachedForumAvatar 兜底（见 model/ForumAvatarCache）。
+     * 落盘地址在 TTL 内就直接用，不发请求。只有"这一次没有任何可用地址"才走网络；地址失效由
+     * ForumAvatarImage 的 onError → forgetCachedForumAvatar 兜底（见 model/ForumAvatarCache）。
      */
     if (item.sourceForumAvatar.length === 0) {
       const cached: string = getCachedForumAvatarUrl(name, Date.now(), FORUM_AVATAR_URL_TTL_MS);
@@ -597,12 +586,9 @@ export struct ForumListView {
   }
 
   /**
-   * 数据一到达就把缺吧头像的卡片批量入队（2026-11-13 提速）。
-   *
-   * 原先只在卡片 `onAppear` 里入队，等于"滑到哪才查哪"：首屏卡片要等布局完成
-   * （真机实测比数据到达晚约 0.5s）才开始请求，冷启动最后一张吧头像约 2.4s 才出现。
-   * 现在整份可见列表逐条过一遍；命中缓存、本次会话已查、在飞、失败冷却的都会被
-   * 队列自身短路，不会重复发请求，真正的新请求仍由队列的并发上限与 FIFO 控制节奏。
+   * 数据一到达就把缺吧头像的卡片批量入队。只在卡片 `onAppear` 里入队等于"滑到哪才查哪"，
+   * 首屏卡片要等布局完成才开始请求；这里整份可见列表逐条过一遍，命中缓存/已查/在飞/失败冷却的都由
+   * 队列自身短路，节奏仍由队列的并发上限与 FIFO 控制。
    */
   private queueMissingAvatars(list: ThreadBrief[]): void {
     for (let i: number = 0; i < list.length; i++) {
@@ -675,8 +661,7 @@ export struct ForumListView {
   }
 
   /**
-   * 首页顶部由 Root HdsNavigation 绘制频道与搜索；这里仅占同高空间，
-   * onAreaChange 实测 headerH，驱动列表首位占位项（见 FeedList）。
+   * 首页顶部由 Root HdsNavigation 绘制频道与搜索，这里仅占同高空间，onAreaChange 读出 headerH 驱动列表首位占位项。
    * 页面根忽略顶部安全区，本层仍用 statusBarH+8 避开状态栏。
    */
   @Builder
@@ -725,10 +710,8 @@ export struct ForumListView {
   }
 
   /**
-   * 把最新可见列表推给数据源。
-   *
-   * 刷新、切频道、屏蔽规则变化都要经过这里 —— `LazyForEach` 只认数据源通知，
-   * 少了这一步就会停在旧的一批（`Repeat` 正是栽在这条上，见 2026-11-13 记录）。
+   * 把最新可见列表推给数据源。刷新、切频道、屏蔽规则变化都要经过这里 —— `LazyForEach` 只认数据源通知，
+   * 少了这一步就会停在旧的一批（`Repeat` 正是栽在这条上，见 `FeedList` 的说明）。
    */
   @Monitor('vm.threads', 'followVm.threads', 'blocks.hidden', 'blocks.blockedForums', 'blocks.blockedUsers')
   syncFeedSources(): void {
@@ -754,13 +737,10 @@ export struct ForumListView {
       }
 
       /*
-       * 卡片流走 `LazyForEach` + `ThreadBriefDataSource`（虚拟化保留：按可视区 + 预加载区
-       * 创建、滑出回收）。**不能换回 `Repeat`**：2026-11-13 真机 A/B 实测，`Repeat`
-       * （连同去掉 `virtualScroll` 的写法）在刷新整批替换数据后不会重建已实例化的
-       * `ListItem` —— 数据到了、构建跑了，item builder 一次都不执行，屏上停在旧一批。
-       * 数据源把"整批替换"（`onDataReloaded`）与"尾部追加"（`onDataAdd`）分开通知，
-       * 既保证刷新一定重建，又保证触底翻页不把已有卡片顶走。
-       * 键沿用 `cardKey`（对象身份 + 递增号），保证刷新换新对象时能识别为不同项。
+       * 卡片流走 `LazyForEach` + `ThreadBriefDataSource`（按可视区 + 预加载区创建、滑出回收）。
+       * **不能换回 `Repeat`**：刷新整批替换数据后它不会重建已实例化的 `ListItem` —— 数据到了、构建跑了，
+       * item builder 一次都不执行，屏上停在旧一批。数据源把"整批替换"（`onDataReloaded`）与"尾部追加"
+       * （`onDataAdd`）分开通知，既保证刷新重建，又保证触底翻页不把已有卡片顶走。
        */
       LazyForEach(this.sourceOf(channel), (item: ThreadBrief) => {
         ListItem() {
@@ -827,8 +807,7 @@ export struct ForumListView {
   }
 
   /**
-   * 触底（或点页脚重试）分发。与 `retryCurrent` 同一模式：@Builder 的参数是值语义，
-   * 传闭包既无先例也没必要 —— 翻页目标本来就只有"当前这一屏"一个答案。
+   * 触底（或点页脚重试）分发。与 `retryCurrent` 同一模式：@Builder 参数是值语义，传闭包既无先例也没必要。
    */
   private loadMoreFor(channel: string, retry: boolean = false): void {
     if (channel === '关注') {
@@ -873,7 +852,7 @@ export struct ForumListView {
     return channel === '热榜' ? this.hotRefreshing : this.refreshing;
   }
 
-  /** 推荐频道（原 `FeedWithRefresh` 的推荐侧；含"搜索进吧"后的指定吧浏览态） */
+  /** 推荐频道；含"搜索进吧"后的指定吧浏览态 */
   @Builder
   RecommendFeed() {
     Stack({ alignContent: Alignment.TopStart }) {
@@ -977,8 +956,7 @@ export struct ForumListView {
   }
 
   /**
-   * Swiper 可能预建邻页，因此首次进入关注由 selectChannel 发起加载；
-   * 登录页返回时本视图重新出现，再由 onAppear 发起加载。
+   * Swiper 可能预建邻页，首次进入关注由 selectChannel 发起加载；登录页返回时本视图重新出现，再由 onAppear 发起。
    * VM 的 loading 守卫负责避免两条路径重复请求。
    */
   @Builder

@@ -10,15 +10,10 @@ import {
 const DOMAIN: number = 0x0000;
 const TAG: string = 'TiebaThemeMode';
 
-/** 持久化存储与键名 */
 const STORE: string = 'tieba_theme_prefs';
 const KEY_PREF: string = 'pref';
 
-/**
- * 全局单例：App 内只有一个"深色模式"偏好。
- *
- * 读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。
- */
+/** 全局单例。读取失败保留默认；写入失败保持本次效果，并向设置页提供错误与重试。 */
 @ObservedV2
 export class ThemeModeStore {
   /** 用户偏好（三态）。`@Trace` → 设置页弹层勾选态自动跟随 */
@@ -26,11 +21,8 @@ export class ThemeModeStore {
   @Trace saveError: string = '';
 
   /**
-   * 当前**生效**的深浅色（true = 深色）。
-   *
-   * `$r` 资源引用不经过它（资源匹配是系统机制）；它只服务于**拿不到资源匹配结果**的
-   * 少量调用方：EntryAbility 的系统栏内容色、以及任何 string-only 的 API。
-   * `@Trace`：跟随系统切换时 EntryAbility 之外的 V2 组件也能读到新值。
+   * 当前生效的深浅色（true = 深色）。`$r` 资源引用不走它（资源匹配是系统机制），
+   * 它只服务于拿不到资源匹配结果的调用方：EntryAbility 的系统栏内容色与 string-only API。
    */
   @Trace isDark: boolean = false;
 
@@ -45,11 +37,10 @@ export class ThemeModeStore {
   }
 
   /**
-   * 启动时**同步**读偏好并立即应用（首帧前）。
-   *
-   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛
-   * "context is invalid"，所以**调用方要传真实 UIAbilityContext**（`EntryAbility.onCreate`）。
-   * ⚠️ 任何一步失败都保持默认（跟随系统）：读不出偏好 = 老用户行为不变。
+   * 启动时同步读偏好并立即应用（首帧前）。
+   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛 "context is invalid"，
+   * 调用方要传真实 UIAbilityContext（`EntryAbility.onCreate`）。
+   * ⚠️ 任何一步失败都保持默认（跟随系统）。
    */
   load(context: common.UIAbilityContext): void {
     if (this.loaded) {
@@ -72,10 +63,8 @@ export class ThemeModeStore {
   }
 
   /**
-   * 设置偏好（设置页唯一入口）：改状态 → 应用 → 落盘。
-   *
-   * 先改状态再落盘（同 `MaterialManager.setMode`）：界面立刻响应，落盘失败也不回滚。
-   * `setColorMode` 是同步调用；资源重匹配与页面重绘由框架负责。
+   * 设置页唯一入口：改状态 → 应用 → 落盘。先改状态再落盘（同 `MaterialManager.setMode`），
+   * 界面立刻响应，落盘失败不回滚。
    */
   setMode(pref: ThemeModePref, context: common.UIAbilityContext): void {
     const next: ThemeModePref = normalizeThemeModePref(pref as number);
@@ -180,11 +169,9 @@ export class ThemeModeStore {
     }
   }
 
-  /** 日志用的一行摘要 */
   describe(): string {
     return `${this.pref}(${themeModeLabel(this.pref)}), isDark=${String(this.isDark)}`;
   }
 }
 
-/** 全局单例：App 内只有一个深色模式偏好 */
 export const themeModeStore: ThemeModeStore = new ThemeModeStore();

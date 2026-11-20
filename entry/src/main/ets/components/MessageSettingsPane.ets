@@ -8,7 +8,6 @@ import {
 
 @ComponentV2
 export struct MessageSettingsPane {
-  /** 进入「官方账号消息提醒」独立页（换页由页面负责） */
   @Event onOpenOfficial: () => void = (): void => {};
   @Local vm: MessageSettingsVM = new MessageSettingsVM();
 

@@ -525,7 +525,7 @@ export function imageFadeDuration(): number {
 export function imageLayerRetentionTransition(): TransitionEffect {
   const duration: number = Math.max(imageSharedDuration(), imageFadeDuration());
   if (duration === 0) { return TransitionEffect.IDENTITY; }
-  // IDENTITY 和 opacity(1) 都不会产生实际动画；与 1 保持足够差值，避免被浮点近似跳过。
+  // IDENTITY 与 opacity(1) 都不产生实际动画；0.998 与 1 的差值足够大，不会被浮点近似跳过。
   // 只让容器变化 0.2% 的透明度来保持存续，真正的淡出由独立黑底和非共享图片负责。
   return TransitionEffect.opacity(0.998).animation({ duration: duration, curve: Curve.Linear });
 }

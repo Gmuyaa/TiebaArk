@@ -9,7 +9,6 @@ const TAG: string = 'CacheClean';
 /** 导出缓存目录（与 `utils/ImageExport.ets` 的 `writeImageToCache` 同一路径） */
 const EXPORT_DIR_NAME: string = 'export';
 
-/** 一次清理的结果 */
 export class ClearResult {
   /** 成功删除的文件数 */
   cleared: number = 0;
@@ -58,6 +57,7 @@ function entrySize(path: string): number {
   }
 }
 
+/** 只统计导出缓存，不删除；`ok=false` 表示目录读取失败，不能当作空目录。 */
 export function measureExportCache(context: common.Context): CacheMeasure {
   const dir: string = exportDir(context);
   const listed: ListResult = listEntries(dir);
@@ -86,13 +86,10 @@ export function measureExportCache(context: common.Context): CacheMeasure {
 }
 
 /**
- * 清掉 `cacheDir/export` 里的文件（**目录本身保留**，下次导出还要用）。
+ * 清掉 `cacheDir/export` 里的文件（目录本身保留，下次导出还要用）。
  *
- * 逐个删而不是整目录删：整目录删在部分场景下会连带清掉系统对缓存目录的索引，
- * 且失败时无法定位到具体文件。
- *
- * 子目录（正常情况下不存在）也会尝试删，删不掉就计进 `failed` —— 如实上报，
- * 不为了"看起来全清干净"而跳过它们。
+ * 逐个删而不是整目录删：整目录删在部分场景下会连带清掉系统对缓存目录的索引，失败时也无法定位到具体文件。
+ * 子目录删不掉就计进 `failed` —— 如实上报，不为了"看起来全清干净"而跳过它们。
  */
 export function clearExportCache(context: common.Context): ClearResult {
   const result: ClearResult = new ClearResult();

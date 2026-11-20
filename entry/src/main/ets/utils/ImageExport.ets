@@ -29,6 +29,7 @@ export function imageFileName(url: string, index: number): string {
   return `tieba_${stamp}_${index}.${ext}`;
 }
 
+/** 写入导出缓存并返回文件路径；缓存清理进行中或文件名非法会抛错，写入前按预算裁剪。 */
 export function writeImageToCache(context: common.Context, bytes: Uint8Array, fileName: string): string {
   if (cacheMaintenance.busy) { throw new Error('正在清理缓存，请稍后重试'); }
   if (!isCacheEntryName(fileName)) { throw new Error('导出文件名无效'); }

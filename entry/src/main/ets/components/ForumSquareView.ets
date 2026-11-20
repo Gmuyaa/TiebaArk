@@ -1,3 +1,7 @@
+/**
+ * 吧广场：一级/二级分类、吧列表分页与关注按钮。数据与分页在 `ForumSquareVM`，
+ * 换号即重置；分类切换要同时把两级列表滚回顶部。
+ */
 import { common } from '@kit.AbilityKit';
 import { ForumSquareVM } from '../viewmodel/ForumSquareVM';
 import { SquareCategory, SquareForum } from '../model/ForumSquare';

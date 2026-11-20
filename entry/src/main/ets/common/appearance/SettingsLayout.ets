@@ -21,11 +21,8 @@ export class SettingsLayout {
   static readonly PAGE_GUTTER: number = 16;
   /** 设置内容到底后的底部间距；覆盖手势区并让末卡圆角完整可见。 */
   static readonly PAGE_BOTTOM_GAP: number = 32;
-  /** 卡片圆角（旧值 10；关于页曾写死 16，一并统一到这里）。 */
   static readonly CARD_RADIUS: number = 20;
-  /** 卡片之间的竖向间距。 */
   static readonly GROUP_GAP: number = 24;
-  /** 分组标题与其下第一张卡片的间距。 */
   static readonly GROUP_TITLE_GAP: number = 8;
 
   static readonly ROW_GAP: number = 10;
@@ -33,7 +30,7 @@ export class SettingsLayout {
   // ── 行 ────────────────────────────────────────────────────────────────
 
   static readonly ROW_MIN_H: number = 60;
-  /** 带说明的设置行最小高度（与单行同为 60vp，必要时由内容顶高）。 */
+  /** 带说明的设置行最小高度，必要时由内容顶高 */
   static readonly ROW_MIN_H_TALL: number = 60;
 
   static readonly ACCOUNT_ROW_MIN_H: number = 72;
@@ -44,13 +41,10 @@ export class SettingsLayout {
   static readonly ROW_PAD_V: number = 10;
 
   // ── 文字（fp） ────────────────────────────────────────────────────────
-  /** 顶栏标题字号。 */
   static readonly TITLE_SIZE: number = 22;
-  /** 设置名称。 */
   static readonly LABEL_SIZE: number = 16;
-  /** 右侧状态值。 */
   static readonly VALUE_SIZE: number = 14;
-  /** 辅助说明（副标题、分组标题、影响说明、结果行）。 */
+  /** 辅助说明（副标题、分组标题、影响说明、结果行） */
   static readonly SUB_SIZE: number = 13;
 
   // ── 图标 ──────────────────────────────────────────────────────────────
@@ -63,7 +57,7 @@ export class SettingsLayout {
   static readonly CHEVRON_INSET: number = 4;
 
   // ── 弹层 ──────────────────────────────────────────────────────────────
-  /** 弹层宽度（旧值 156；大字号下不得截断或挤压选项）。 */
+  /** 弹层宽度；大字号下不得截断或挤压选项 */
   static readonly POPUP_W: number = 200;
   static readonly POPUP_RADIUS: number = 16;
   static readonly POPUP_ROW_H: number = 48;
@@ -72,7 +66,7 @@ export class SettingsLayout {
   static readonly POPUP_LABEL_SIZE: number = 16;
   static readonly POPUP_LINE_H: number = 1;
   static readonly POPUP_LINE_INSET: number = 18;
-  /** 弹层顶边与被点行的间距（参考图实测为 0：与卡片底边齐平）。 */
+  /** 弹层顶边与被点行的间距；0 = 与卡片底边齐平 */
   static readonly POPUP_TARGET_SPACE: number = 0;
 
   // ── 顶栏 ──────────────────────────────────────────────────────────────
@@ -82,17 +76,13 @@ export class SettingsLayout {
   static readonly NAV_GLASS_START: number = 8;
   static readonly NAV_GLASS_FULL: number = 40;
 
-  /** 玻璃开关按钮直径（返回按钮）。 */
   static readonly NAV_BUTTON_SIZE: number = 40;
-  /** 返回按钮左边距。 */
   static readonly NAV_BUTTON_MARGIN_L: number = 12;
 }
 
 /**
- * 估算一段文字在当前字号下的宽度（vp）。
- *
- * 只用于**版式决策**（摘要放行右还是名称下方），不用于精确布局；
- * 因此按"东文 1em、西文 0.56em"的近似即可，不需要字体度量。
+ * 估算一段文字在当前字号下的宽度（vp），只用于版式决策（摘要放行右还是名称下方），不用于精确布局：
+ * 因此东文 1em、西文 0.56em 的近似足够，不取字体度量。
  */
 export function estimateTextWidth(text: string, fontSize: number): number {
   let width: number = 0;

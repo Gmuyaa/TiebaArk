@@ -49,10 +49,7 @@ export function buttonDockBounds(kind: FloatingButtonKind, width: number, height
     floatingBounds(width, height, top);
 }
 
-/** 触控区居中。原为 32（四角刚好落在 48vp 圆面内），但按住边缘稍偏就落空、
- * 拖拽起不来（2026-11-10 持有者反馈），提到 40：边长 +25%、面积 +56%，
- * 允许四角略微伸出视觉圆面换取按压容错。
- */
+/** 触控区居中，边长取 `min(直径, 40)`：四角可略伸出视觉圆面，换取按压与拖拽的容错。 */
 export function floatingButtonHitRegion(diameter: number, x: number = 0, y: number = 0): FloatingButtonHitRegion {
   const size: number = Math.min(diameter, 40);
   const inset: number = (diameter - size) / 2;

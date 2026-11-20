@@ -1,5 +1,9 @@
 
 
+/**
+ * 设置里的屏蔽管理面板：拉黑的用户与隐藏的帖子；解除拉黑走服务端写接口并读回核对，
+ * 失败时如实提示，不在本地直接抹掉一行。数据在 `utils/ThreadBlockStore`。
+ */
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { AppTheme } from '../theme/Theme';

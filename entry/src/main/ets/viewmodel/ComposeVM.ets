@@ -21,13 +21,13 @@ export const TITLE_MAX_LENGTH: number = 31;
 /** 未接入发布的选项：发布前必须让用户明确知道会被忽略，不能静默丢弃。 */
 export function unsupportedComposeOptions(draft: ComposeDraft): string[] {
   const list: string[] = [];
-  // 话题、展示范围、内容声明都已接入发布参数，不再列在这里
+    // 话题、展示范围、内容声明已接入发布参数，不列在这里。
   if (draft.mood.length > 0) { list.push(`心情（${draft.mood}）`); }
   return list;
 }
 /**
- * 组装正文：文字在前，已上传图片的 `#(pic,<id>,<w>,<h>)` 逐行追加在后。
- * 这是官方客户端的正文形态（见 `model/ImageUpload.ets` 的 `uploadedImageToken`）。
+ * 组装正文：文字在前，已上传图片的 `#(pic,<id>,<w>,<h>)` 逐行追加在后。这是官方客户端的正文形态
+ * （见 `model/ImageUpload.ets` 的 `uploadedImageToken`）。
  */
 export function composeBodyContent(body: string, images: UploadedPostImage[]): string {
   const text: string = body.trim();
@@ -41,13 +41,10 @@ export function composeBodyContent(body: string, images: UploadedPostImage[]): s
 }
 
 /**
- * 话题不能只发 `topic_id`，还要以 `#话题名#` 文本出现在帖子里。
- *
- * 取证：官方 PC 发帖页的话题是编辑器里的内联 chip（`innerText = "#" + name + "#"`），
- * 提交体只带正文、不带任何话题 id；话题联想接口 `/c/f/recommend/getSugTopic_pc` 里
- * 「常用话题」项的 `topic_id` 直接就是 `"0"`（只有名字）。说明服务端按 `#名字#` 认话题，
- * id 只是辅助关联，缺文本时整条话题被忽略。
- * 用户已经在标题或正文里手打过同一个话题就不重复插。
+ * 话题不能只发 `topic_id`，还要以 `#话题名#` 文本出现在帖子里。取证：官方 PC 发帖页的话题是编辑器
+ * 里的内联 chip（`innerText = "#" + name + "#"`），提交体只带正文、不带话题 id；话题联想接口
+ * `/c/f/recommend/getSugTopic_pc` 里「常用话题」项的 `topic_id` 直接就是 `"0"`。服务端按 `#名字#`
+ * 认话题，缺文本时整条被忽略。用户已在标题或正文里手打过同一个话题就不重复插。
  */
 export function composeBodyWithTopic(body: string, title: string, topic: string): string {
   // 选项写入的是纯名字，但用户手打过 `#名字#` 形态的也一并容错
@@ -144,9 +141,8 @@ export class ComposeVM {
   }
 
   /**
-   * 发布前的本地校验；返回空串表示可以发。
-   *
-   * 这里只挡**确定发不出去或会违背用户意图**的情况，不预先猜测服务端风控。
+   * 发布前的本地校验；返回空串表示可以发。只挡**确定发不出去或会违背用户意图**的情况，
+   * 不预先猜测服务端风控。
    */
   publishBlocked(): string {
     const draft: ComposeDraft = this.draft;
@@ -165,9 +161,8 @@ export class ComposeVM {
 
   /**
    * 发布：校验 → 逐张上传图片 → 拼正文 → 提交 `/c/c/thread/add` → 成功后清空草稿与吧缓存。
-   *
-   * 图片是**串行**上传的：任一张失败就整体中止且已选图片保留，用户可重试；
-   * 不并发上传是为了和回复框同一套顺序语义，也避免多张同时失败后分不清哪张缺。
+   * 图片是**串行**上传的：任一张失败就整体中止且已选图片保留，用户可重试；不并发是为了和回复框
+   * 同一套顺序语义，也避免多张同时失败后分不清哪张缺。
    */
   async publish(context: common.UIAbilityContext): Promise<ComposePublishResult> {
     const result: ComposePublishResult = new ComposePublishResult();

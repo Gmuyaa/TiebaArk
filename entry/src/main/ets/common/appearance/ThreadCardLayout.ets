@@ -6,13 +6,13 @@ export class ThreadCardLayout {
   static readonly BOTTOM_PADDING: number = 12;
   static readonly SECTION_GAP: number = 10;
   /**
-   * 标题 → 摘要的行盒间距。标题与正文各自的行盒上下都留白，行盒间距按 SECTION_GAP 给会
-   * 让标题与摘要的墨迹间距明显大于摘要与图片（真机 19.7vp 对 13.1vp）；收到 4vp 后两者一致。
+   * 标题 → 摘要的行盒间距。标题与正文的行盒上下都自带留白，按 SECTION_GAP 给会让标题与摘要的
+   * 墨迹间距明显大于摘要与图片；收到 4vp 后两者一致。
    */
   static readonly TITLE_BODY_GAP: number = 4;
   static readonly AVATAR_SIZE: number = 36;
   static readonly AUTHOR_SIZE: number = 14;
-  /** 2026-10-25 起标题比正文大一号，正文尺寸保持不变。 */
+  /** 标题比正文大一号，正文尺寸不动 */
   static readonly TITLE_SIZE: number = 17;
   static readonly TITLE_LINE: number = 26;
   static readonly BODY_SIZE: number = 16;
@@ -24,7 +24,7 @@ export class ThreadCardLayout {
   /** 卡片外距 8vp + 内距 4vp，与首页频道行的 12vp 边界一致。 */
   static readonly METRIC_SIDE_PADDING: number = 4;
   /**
-   * 帖子卡片列表的竖向间距（2026-11-09 持有者定：6 处列表统一 12vp）。
+   * 帖子卡片列表的竖向间距（6 处列表统一 12vp）。
    * 敦煌纸境是紧贴连排，两处信息流由调用方保留 0，不套这个值。
    */
   static readonly LIST_GAP: number = 12;

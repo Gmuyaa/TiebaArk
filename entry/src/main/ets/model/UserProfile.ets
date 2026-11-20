@@ -16,11 +16,8 @@ export function avatarIdentity(portrait: string): string {
 
 /** `/c/u/user/profile` 的 `user.user_growth` 段 */
 interface RawUserGrowth {
-  /** 成长等级 */
   level_id?: number | string;
-  /** 当前成长值 */
   score?: number | string;
-  /** 升级所需成长值 */
   target_score?: number | string;
   /** T 豆 */
   tmoney?: number | string;
@@ -38,6 +35,9 @@ interface RawSelfUser {
   total_agree_num?: number | string;
   tb_age?: string;
   tieba_uid?: string;
+  sex?: number | string;
+  gender?: number | string;
+  ip_address?: string;
   user_growth?: RawUserGrowth;
 }
 
@@ -91,32 +91,36 @@ export class UserProfileInfo {
   followed: boolean = false;
   intro: string = '';
   forums: ProfileForum[] = [];
-  /** 账号 uid（数字）。0 表示未知 */
+  /** 账号 uid（数字），0 表示未知 */
   uid: number = 0;
-  /** 用户名（@名）。未设置时为空串 */
   userName: string = '';
-  /** 昵称。未设置时为空串 */
+  /**
+   * 贴吧号（`User.tieba_uid`，字段 120）。
+   *
+   * **与 `uid` 是两套编号**：`uid` 是客户端/协议用的数字 id，贴吧号是官方 App
+   * 「贴吧ID」里显示的那个（未设置时为空串）。界面要按官方口径显示时用它。
+   */
+  tiebaUid: string = '';
   nickName: string = '';
   /** 头像 hash（需经 `portraitUrl()` 拼成完整 URL） */
   portrait: string = '';
-  /** 关注的用户数 */
   concernNum: number = 0;
-  /** 粉丝数 */
   fansNum: number = 0;
-  /** 成长等级 */
   levelId: number = 0;
-  /** 当前成长值 */
   levelScore: number = 0;
-  /** 升级所需成长值 */
   levelTargetScore: number = 0;
-  /** 发帖数 */
   postNum: number = 0;
-  /** 获赞数 */
   totalAgreeNum: number = 0;
 
   likeForumNum: number = 0;
 
   tbAge: string = '';
+
+  /** 性别：1 男、2 女、0 未提供。取 `User.sex`，缺失时用 `User.gender` 兜底；0 不显示。 */
+  sex: number = 0;
+
+  /** IP 归属地（如「江苏」），服务端未给时为空串。 */
+  ipAddress: string = '';
 
   /** 是否至少拿到了一项可用资料。全空说明两个接口都没成功，界面应显示占位而非一堆 0 */
   hasAny(): boolean {
@@ -163,12 +167,14 @@ export function parseSelfProfile(jsonText: string): UserProfileInfo {
   out.postNum = toNum(user.post_num);
   out.totalAgreeNum = toNum(user.total_agree_num);
   out.tbAge = toStr(user.tb_age);
-  /** tieba_uid 仅在非空时采用，避免覆盖已有标识。 */
+  // 性别有两套同名口径（sex / gender），谁给了非 0 用谁；都为 0 就是服务端没提供。
+  const sex: number = toNum(user.sex);
+  out.sex = sex > 0 ? sex : toNum(user.gender);
+  out.ipAddress = toStr(user.ip_address);
+  // tieba_uid 是另一套编号（与 User.id 完全不同），只存进 tiebaUid；
+  // **绝不能回填 uid** —— 否则「用户 ID」会变成贴吧号，拿去当查询参数会命中别的用户。
   const tiebaUid: string = toStr(user.tieba_uid);
-  if (tiebaUid.length > 0 && out.uid === 0) {
-    // tieba_uid 是**另一套**编号（实测 ≠ user.id），**不能**当 uid 用
-    out.uid = toNum(tiebaUid);
-  }
+  if (tiebaUid.length > 0) { out.tiebaUid = tiebaUid; }
 
   const growth: RawUserGrowth | undefined = user.user_growth;
   if (growth !== undefined && growth !== null) {
@@ -179,7 +185,7 @@ export function parseSelfProfile(jsonText: string): UserProfileInfo {
   return out;
 }
 
-/** 个人资料 protobuf 响应解析。早期公开协议参考包含 aiotieba，初始版本与提交未留存；当前字段及嵌套结构另经官方 DEX 注解核对，后续核对不替代历史来源或授权。 */
+/** 个人资料 protobuf 响应解析。字段与嵌套结构经官方 DEX 注解核对；历史协议参考含 aiotieba（Unlicense）。 */
 
 /** `ProfileResIdl` 顶层 */
 const RES_ERROR: number = 1;
@@ -191,7 +197,7 @@ const DATA_USER_AGREE: number = 14;
 const AGREE_TOTAL: number = 1;
 /** `Error` 消息里的错误码 */
 const ERROR_ERRNO: number = 1;
-/** `User` 当前读取的字段号已直接复核基准 APK 的 DEX 注解；早期参考版本仍未定位。 */
+/** `User` 的字段号直接复核基准 APK 的 DEX 注解。 */
 const U_ID: number = 2;
 const U_NAME: number = 3;
 const U_NAME_SHOW: number = 4;
@@ -199,8 +205,8 @@ const U_PORTRAIT: number = 5;
 /**
  * `my_like_num` —— **关注的吧总数**。
  *
- * 这才是"关注吧"那一格的正确来源：`likeForum`(47) 那个 repeated 列表**会分页**
- * （实测某账号 `my_like_num=7` 而列表只回了 6 条），拿条目数当总数会少。
+ * 这才是"关注吧"那一格的正确来源：`likeForum`(47) 那个 repeated 列表**会分页**，
+ * 拿条目数当总数会少。
  */
 const U_MY_LIKE_NUM: number = 33;
 const U_FANS: number = 30;
@@ -210,11 +216,19 @@ const U_TB_AGE: number = 38;
 const U_LIKE_FORUM: number = 47;
 const U_TIEBA_UID: number = 120;
 const U_GROWTH: number = 137;
+/** `sex`：1 男、2 女、0 未设置 */
+const U_SEX: number = 32;
+/** `gender`：与 `sex` 同义的第二套字段，部分响应只填这一个 */
+const U_GENDER: number = 42;
+/** `ip_address`：IP 归属地（省市简称），只在服务端开放时才有值 */
+const U_IP_ADDRESS: number = 127;
 /** `User.UserGrowth` */
 const GROWTH_LEVEL: number = 1;
 
 /** 读取 `User` 消息并填充 `out`。未知字段一律 `skipField()`，不能读串位。 */
 function readUserMessage(r: ProtoReader, out: UserProfileInfo): void {
+  let sex: number = 0;
+  let gender: number = 0;
   while (r.hasMore()) {
     const f: number = r.readTag();
     if (f === U_ID) {
@@ -235,6 +249,12 @@ function readUserMessage(r: ProtoReader, out: UserProfileInfo): void {
       out.postNum = r.readInt32();
     } else if (f === U_TB_AGE) {
       out.tbAge = r.readString();
+    } else if (f === U_SEX) {
+      sex = r.readInt32();
+    } else if (f === U_GENDER) {
+      gender = r.readInt32();
+    } else if (f === U_IP_ADDRESS) {
+      out.ipAddress = r.readString();
     } else if (f === U_MY_LIKE_NUM) {
       // "关注吧"总数走这个字段：`likeForum` 列表会分页，条目数 ≠ 总数
       out.likeForumNum = r.readInt32();
@@ -251,8 +271,8 @@ function readUserMessage(r: ProtoReader, out: UserProfileInfo): void {
     } else if (f === 34) {
       out.intro = r.readString();
     } else if (f === U_TIEBA_UID) {
-      // 新版贴吧号本项目暂不使用（未设置时为空串）；读掉即可，别读串位
-      r.readString();
+      // 贴吧号（官方 App「贴吧ID」显示的那串）；未设置时为空串，读掉也要留着
+      out.tiebaUid = r.readString();
     } else if (f === U_GROWTH) {
       const g: ProtoReader = r.readMessageView();
       while (g.hasMore()) {
@@ -267,6 +287,7 @@ function readUserMessage(r: ProtoReader, out: UserProfileInfo): void {
       r.skipField();
     }
   }
+  out.sex = sex > 0 ? sex : gender;
 }
 
 /**
@@ -350,7 +371,7 @@ export function parseProtoErrorno(bytes: Uint8Array): number {
 /**
  * 解析 `GET /f/user/json_userinfo` 的响应。
  *
- * 注意 `open_uid` 实测是**字符串**，`user_name_show` 才是昵称（没有 `nickname` 键）。
+ * 注意 `open_uid` 是**字符串**，`user_name_show` 才是昵称（没有 `nickname` 键）。
  */
 export function parseUserInfo(jsonText: string): UserProfileInfo {
   const out: UserProfileInfo = new UserProfileInfo();
@@ -398,12 +419,15 @@ export function mergeProfile(primary: UserProfileInfo, fallback: UserProfileInfo
   out.totalAgreeNum = primary.totalAgreeNum > 0 ? primary.totalAgreeNum : fallback.totalAgreeNum;
   out.likeForumNum = primary.likeForumNum > 0 ? primary.likeForumNum : fallback.likeForumNum;
   out.tbAge = primary.tbAge.length > 0 ? primary.tbAge : fallback.tbAge;
+  out.sex = primary.sex > 0 ? primary.sex : fallback.sex;
+  out.ipAddress = primary.ipAddress.length > 0 ? primary.ipAddress : fallback.ipAddress;
+  // 贴吧号（tieba_uid）只有 protobuf 通道给得出，合并时不能丢
+  out.tiebaUid = primary.tiebaUid.length > 0 ? primary.tiebaUid : fallback.tiebaUid;
   out.intro = primary.intro.length > 0 ? primary.intro : fallback.intro;
   out.forums = primary.forums.length > 0 ? primary.forums : fallback.forums;
   return out;
 }
 
-/** 主标题按昵称、用户名、兜底文案依次选择。 */
 export function displayName(profile: UserProfileInfo, fallback: string): string {
   if (profile.nickName.length > 0) {
     return profile.nickName;
@@ -414,8 +438,11 @@ export function displayName(profile: UserProfileInfo, fallback: string): string 
   return fallback;
 }
 
-/** 账号标识优先显示贴吧号，缺失时回退数字 uid；均缺失则返回空串。 */
+/** 账号标识优先显示贴吧号（官方 App「贴吧ID」口径），缺失时回退用户名、再回退数字 uid。 */
 export function accountIdText(profile: UserProfileInfo): string {
+  if (profile.tiebaUid.length > 0) {
+    return profile.tiebaUid;
+  }
   if (profile.userName.length > 0) {
     return profile.userName;
   }

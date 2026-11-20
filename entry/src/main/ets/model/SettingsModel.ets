@@ -59,7 +59,10 @@ export enum SettingsPane {
   POSTING = 37,
   NAVIGATION_LAYOUT = 38,
   MATERIAL_EFFECTS = 39,
-  IMAGE_LAYOUT = 40
+  IMAGE_LAYOUT = 40,
+  IMAGE_QUALITY_WIFI = 41,
+  IMAGE_QUALITY_MOBILE = 42,
+  GIF_AUTOPLAY = 43
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -78,13 +81,10 @@ export enum SettingsEntryKind {
 export const SETTINGS_ACTION_LOGIN: string = 'login';
 export const SETTINGS_ACTION_LOGOUT: string = 'logout';
 
-/** 一行 */
 export interface SettingsEntry {
   /** 稳定标识：ForEach 的 key + 点击分发 */
   key: string;
-  /** 左侧主标签 */
   label: string;
-  /** 右侧值文字；空串 = 不显示 */
   value: string;
   /**
    * 副标题（可选）：渲染在标签下方的一行小灰字，**用于需要解释代价的行**
@@ -104,7 +104,6 @@ export interface SettingsEntry {
   checked?: boolean;
 }
 
-/** 一张卡片 */
 export interface SettingsGroup {
   key: string;
   /** 分组标题（「使用体验」这类）：**只是标题，不是中转页**，所以由模型给、页面照画 */
@@ -119,9 +118,7 @@ export interface SettingsState {
   /** 当前沉浸光感档位文案（`modeLabel` 的结果，由页面传入） */
   materialLabel: string;
   hdsMaterialLabel?: string;
-  /** 当前操作栏样式文案 */
   actionBarLabel: string;
-  /** 当前首页顶栏样式文案 */
   topNavLabel: string;
 
   darkModeLabel: string;
@@ -134,8 +131,9 @@ export interface SettingsState {
   hideStatusBar: boolean;
   hideTopNavigation: boolean;
   hideBottomNavigation: boolean;
-  /** A-08 低流量模式：不自动加载图片（列表、正文图集、视频流；本机偏好） */
-  lowFlow: boolean;
+  imageQualityWifiLabel?: string;
+  imageQualityMobileLabel?: string;
+  gifAutoPlayLabel?: string;
 
   superResolution: boolean;
   /** 全应用统一智感握姿偏好，默认开。 */
@@ -154,18 +152,16 @@ export interface SettingsState {
   cacheLabel: string;
 }
 
-/** 关于页里的一行「名 —— 值」 */
 export interface SettingsAboutItem {
   label: string;
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.271';
-export const SETTINGS_VERSION_CODE: string = '2611123';
+export const SETTINGS_APP_VERSION: string = '1.0.272';
+export const SETTINGS_VERSION_CODE: string = '2611124';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
-/** 内部：造一个入口行 */
 function paneEntry(key: string, label: string, value: string, pane: SettingsPane): SettingsEntry {
   return {
     key: key, label: label, value: value, kind: SettingsEntryKind.PANE,
@@ -241,7 +237,11 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
         paneEntry('forum_default_tab', '进吧默认分区', state.forumDefaultTabLabel,
           SettingsPane.FORUM_DEFAULT_TAB),
         paneEntry('image_layout', '图片排布', state.imageLayoutLabel ?? '新版', SettingsPane.IMAGE_LAYOUT),
-        switchEntry('low_flow', '低流量模式', state.lowFlow, true, '列表与正文不自动加载图片'),
+        paneEntry('image_quality_wifi', '图片质量（Wi-Fi）', state.imageQualityWifiLabel ?? '原图',
+          SettingsPane.IMAGE_QUALITY_WIFI),
+        paneEntry('image_quality_mobile', '图片质量（移动数据）', state.imageQualityMobileLabel ?? '高清',
+          SettingsPane.IMAGE_QUALITY_MOBILE),
+        paneEntry('gif_autoplay', '动图自动播放', state.gifAutoPlayLabel ?? '仅 Wi-Fi', SettingsPane.GIF_AUTOPLAY),
         paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
         switchEntry('super_resolution', '显示超分按钮', state.superResolution)
       ];
@@ -301,7 +301,7 @@ export function settingsEntryRenderKey(entry: SettingsEntry): string {
  *
  * 为什么分组层也要带上 —— 外层 `ForEach` 复用分组节点时，`Card(entries)` 这个
  * item builder 同样不会重跑，内层 `ForEach` 就没机会看到新的 `entries`
- * （实测：只改内层 key 无效，因为"重新执行"这一步在更外层就被拦掉了）。
+ * （只改内层 key 无效，因为"重新执行"这一步在更外层就被拦掉了）。
  */
 export function settingsGroupRenderKey(group: SettingsGroup): string {
   return `${group.key}#${group.entries.map(settingsEntryRenderKey).join(',')}`;
@@ -354,6 +354,12 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '看图菜单显示方式';
     case SettingsPane.IMAGE_LAYOUT:
       return '图片排布';
+    case SettingsPane.IMAGE_QUALITY_WIFI:
+      return '图片质量（Wi-Fi）';
+    case SettingsPane.IMAGE_QUALITY_MOBILE:
+      return '图片质量（移动数据）';
+    case SettingsPane.GIF_AUTOPLAY:
+      return '动图自动播放';
     case SettingsPane.FORUM_DEFAULT_TAB:
       return '进吧默认分区';
     case SettingsPane.DARK_MODE:
@@ -435,6 +441,9 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
     case SettingsPane.FORUM_DEFAULT_TAB:
     case SettingsPane.IMAGE_MENU:
     case SettingsPane.IMAGE_LAYOUT:
+    case SettingsPane.IMAGE_QUALITY_WIFI:
+    case SettingsPane.IMAGE_QUALITY_MOBILE:
+    case SettingsPane.GIF_AUTOPLAY:
       return SettingsPane.BROWSING;
     case SettingsPane.MOTION:
       return SettingsPane.INTERACTION;
@@ -490,6 +499,9 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.IMAGE_MENU:
     case SettingsPane.FORUM_DEFAULT_TAB:
     case SettingsPane.IMAGE_LAYOUT:
+    case SettingsPane.IMAGE_QUALITY_WIFI:
+    case SettingsPane.IMAGE_QUALITY_MOBILE:
+    case SettingsPane.GIF_AUTOPLAY:
       return SettingsPanePresentation.POPUP;
     case SettingsPane.ABOUT:
     case SettingsPane.NONE:
@@ -513,11 +525,9 @@ export function settingsPageTitle(pane: SettingsPane): string {
 
 // ── 弹层里的选项 ─────────────────────────────────────────────────────────
 
-/** 弹层里的一行选项 */
 export interface SettingsOptionItem {
   /** 稳定标识（ForEach 的 key） */
   key: string;
-  /** 档位名（弹层里唯一必有的文字） */
   label: string;
   /** 是否是当前生效的那一项（右侧打勾） */
   selected: boolean;
@@ -536,7 +546,6 @@ export function buildOptions(labels: string[], currentIndex: number, keyPrefix: 
   return items;
 }
 
-/** 关于页里的版本与平台信息。 */
 export function aboutItems(): SettingsAboutItem[] {
   return [
     { label: '版本', value: SETTINGS_APP_VERSION },
@@ -545,11 +554,7 @@ export function aboutItems(): SettingsAboutItem[] {
   ];
 }
 
-/**
- * 数据说明。写得越具体越好 —— 这是对使用者的透明承诺。
- *
- * 登录功能上线后必须同步：原文写的是"不包含账号体系"，已经不成立了。
- */
+/** 数据说明，对使用者的透明承诺：写得越具体越好。 */
 export function aboutNotes(): string[] {
   return [
     '设备标识：应用在本机生成并保存匿名设备标识，用于构造贴吧客户端请求；请求中的设备信息会发送至贴吧服务端。',

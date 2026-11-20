@@ -33,15 +33,16 @@ import { UserPage } from './UserPage';
 import { DirectoryPage } from './DirectoryPage';
 import { ForumMemberPage } from './ForumMemberPage';
 import { NotifyListPage } from './NotifyListPage';
+import { ChatPage } from './ChatPage';
 import {
-  AppRoute, ForumPageParams, HotTopicParams, MyListParams, NavigationService,
+  AppRoute, ChatPageParams, ForumPageParams, HotTopicParams, MyListParams, NavigationService,
   NotifyListParams, SearchResultParams, ThreadDetailParams, UserPageParams, DirectoryPageParams,
   ForumMemberPageParams
 } from '../navigation/AppNavigation';
 import { materialManager } from '../common/material/MaterialManager';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionStore, MotionStore } from '../common/appearance/MotionStore';
-import { motionDuration } from '../common/appearance/MotionPolicy';
+import { motionDuration, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { MaterialTabs } from '../components/MaterialTabs';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { ForumListView } from '../components/ForumListView';
@@ -52,6 +53,7 @@ import { homeTopNavStore, HomeTopNavStore } from '../common/appearance/HomeTopNa
 import {
   HomeTopNavStyle, homeTopNavRowHeight
 } from '../common/appearance/HomeTopNavStyle';
+import { ViewerImage } from '../model/ImageLoadPolicy';
 import { ImageViewer } from '../components/ImageViewer';
 import { closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { FollowView } from '../components/FollowView';
@@ -78,6 +80,9 @@ interface TabSlot {
 /** 底栏首页连续点击的识别窗口；首次点击始终立即回顶。 */
 const HOME_DOUBLE_TAP_MS: number = 350;
 
+/** 主页签切换降级为时间曲线（关闭弹簧、保留位移）时的动画时长（ms）。 */
+const MAIN_TAB_SWITCH_MS: number = 360;
+
 /**
  * 收起终点的缩放比。不收到 0：栏体收成一条小胶囊停在手势条安全区**上方**，
  * 再靠透明度消失。收到底会压进手势条区域，位置容易跳，也看不到"收起"的落点。
@@ -100,6 +105,10 @@ struct Index {
 
   /** 当前页签，与 HDS Tab 切换同步，用于保持页面状态 */
   @Local currentIndex: number = 0;
+  @Local private tabTransitioning: boolean = false;
+  @Local private homeOverlayActiveInTransition: boolean = false;
+  @Local private homeTabSlideOffsetX: number = 0;
+  @Local private tabEffectTriggers: number[] = [0, 0, 0, 0];
   @Local pageVisible: boolean = true;
   @Local motionPreferences: MotionStore = motionStore;
   @Local foreground: ForegroundRefresh = foregroundRefresh;
@@ -138,6 +147,7 @@ struct Index {
     this.refreshMyProfile();
   }
   @Local viewerUrls: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
   @Local homeScrollHidden: boolean = false;
   @Local private homeBottomScale: number = 1;
@@ -165,8 +175,8 @@ struct Index {
   /** HDS 会将超高的自定义内容居中；额外补 32vp 后频道行回到安全区下方。 */
   private readonly homeTitleContentOffsetVp: number = 32;
   /**
-   * 首页 NavBar 是否可见（Root 导航压入子页时为 false）。
-   * `@Local` 而非普通成员：值 5 的顶栏玻璃浮层要按它即时隐藏（进帖子详情时不能浮在上面）。
+   * 首页 NavBar 是否可见（Root 导航压入子页时为 false）。必须 `@Local`：顶栏玻璃浮层要按它即时隐藏
+   * （进帖子详情时不能浮在上面）。
    */
   @Local homeNavVisible: boolean = true;
   private statusBarRequestVersion: number = 0;
@@ -188,7 +198,11 @@ struct Index {
   @Monitor('motionPreferences.enabled', 'motionPreferences.arkuiEnabled', 'motionPreferences.selected',
     'motionPreferences.systemReducedMotion')
   private onMotionPreferenceChanged(): void {
-    this.appNavStack.disableAnimation(!motionStore.isOn(MotionEffect.MOVE));
+    const moveOn: boolean = motionStore.isOn(MotionEffect.MOVE);
+    this.appNavStack.disableAnimation(!moveOn);
+    if (!moveOn) {
+      this.resetMainTabTransition();
+    }
   }
 
   pageTransition() {
@@ -249,6 +263,78 @@ struct Index {
   onPageHide(): void {
     this.pageVisible = false;
     this.setHomeScrollHidden(false);
+    this.resetMainTabTransition();
+  }
+
+  private mainTabAnimationDuration(): number {
+    return motionDuration(MAIN_TAB_SWITCH_MS, MotionEffect.MOVE);
+  }
+
+  private homeChromeVisible(): boolean {
+    return this.viewerUrls.length === 0 &&
+      (this.currentIndex === 0 || (this.tabTransitioning && this.homeOverlayActiveInTransition));
+  }
+
+  private resetMainTabTransition(): void {
+    this.tabTransitioning = false;
+    this.homeOverlayActiveInTransition = false;
+    this.homeTabSlideOffsetX = 0;
+  }
+
+  private handleMainTabAnimationStart(from: number, to: number): void {
+    // Tabs 原生 TabBar 接管点击时不会经过自定义 Column.onClick，必须在此第 0ms 同步底栏高亮与图标动效。
+    if (this.currentIndex !== to) {
+      this.lastHomeTapMs = 0;
+      this.currentIndex = to;
+      this.tabEffectTriggers = this.tabEffectTriggers.map((count: number, i: number): number =>
+        i === to ? count + 1 : count);
+      if (to !== 0) {
+        this.setHomeScrollHidden(false);
+      }
+    }
+    if (!materialManager.useArkUI || this.mainTabAnimationDuration() === 0 || from === to) {
+      this.resetMainTabTransition();
+      return;
+    }
+    const wasTransitioning: boolean = this.tabTransitioning;
+    const involvesHome: boolean = from === 0 || to === 0;
+    this.tabTransitioning = true;
+    this.homeOverlayActiveInTransition = involvesHome;
+    if (!involvesHome) {
+      this.homeTabSlideOffsetX = 0;
+      return;
+    }
+    // 静止态切回首页时先把首页浮层预置到左侧一屏外，避免 onContentDidScroll 首帧前在 x=0 闪现。
+    // 半途反切打断则保留当前帧偏移，交给逐帧回调平滑回拉。
+    if (!wasTransitioning) {
+      this.homeTabSlideOffsetX = to === 0 && this.homeViewportWidth > 0 ? -this.homeViewportWidth : 0;
+    }
+  }
+
+  private handleMainTabContentScroll(_selectedIndex: number, index: number, position: number,
+    mainAxisLength: number): void {
+    if (!this.tabTransitioning || !this.homeOverlayActiveInTransition || index !== 0 || mainAxisLength <= 0) {
+      return;
+    }
+    this.homeTabSlideOffsetX = position * mainAxisLength;
+  }
+
+  private handleMainTabAnimationEnd(_index: number): void {
+    this.resetMainTabTransition();
+  }
+
+  private tabSymbolEffect(slot: TabSlot): SymbolEffect {
+    if (slot.icon !== slot.iconFill) {
+      return motionStore.isOn(MotionEffect.FADE)
+        ? new ReplaceSymbolEffect(EffectScope.WHOLE, ReplaceEffectType.CROSS_FADE)
+        : new SymbolEffect();
+    }
+    if (!motionStore.isOn(MotionEffect.SCALE)) {
+      return new SymbolEffect();
+    }
+    return motionStore.isOn(MotionEffect.SPRING)
+      ? new BounceSymbolEffect(EffectScope.WHOLE, EffectDirection.UP)
+      : new ScaleSymbolEffect(EffectScope.WHOLE, EffectDirection.UP);
   }
 
   private statusBarHidden(): boolean {
@@ -269,20 +355,18 @@ struct Index {
   }
 
   /**
-   * 收缩时栏体随缩放量同步下沉：展开态仍是安全区上沿（`BAR_SAFE_H`），
-   * 收到 `BAR_HIDDEN_SCALE` 时再往下 `BAR_HIDDEN_DROP`，停在手势条正上方。
+   * 收缩时栏体随缩放量同步下沉：展开态停在安全区上沿（`BAR_SAFE_H`），收到 `BAR_HIDDEN_SCALE` 时再往下
+   * `BAR_HIDDEN_DROP`，停在手势条正上方。
    */
   private bottomBarBottomMargin(): number {
     const scale: number = this.bottomBarScaleFactor();
     return AppTheme.BAR_SAFE_H - (1 - scale) * BAR_HIDDEN_DROP;
   }
 
-  /** 显示底栏：从底部展开（"吐出来"）。 */
   private showMainTabBar(): void {
     this.animateBottomBar(false);
   }
 
-  /** 隐藏底栏：向底部收缩（"吸进去"）。 */
   private hideMainTabBar(): void {
     this.animateBottomBar(true);
   }
@@ -300,12 +384,11 @@ struct Index {
     this.bottomAnimator = undefined;
     const context: UIContext = this.getUIContext();
     // 动画一开始就要让前景内容可见：它绑定 `bottomBarCollapsed`，收起态下为 Hidden，
-    // 不先放开的话，展开全过程只有底板在长、图标文字要等 onFinish 才冒出来。
+    // 不先放开的话展开全过程只有底板在长、图标文字要等 onFinish 才冒出来。
     this.bottomBarCollapsed = false;
     /*
-     * 尺寸交给 ArkUI 自带弹簧（`curves.springMotion`），透明度只能走控制器逐帧写。
-     * 两者并行：`animateTo` 管 `homeBottomScale`（barHeight/barWidth/底部偏移都挂在它上面），
-     * `createAnimator` 只管透明度，不再自己算弹簧公式。
+     * 尺寸交给 ArkUI 自带弹簧（`curves.springMotion`），透明度只能走控制器逐帧写：`animateTo` 管
+     * `homeBottomScale`（barHeight/barWidth/底部偏移都挂在它上面），`createAnimator` 只管透明度。
      */
     context.animateTo({
       duration: hidden ? 300 : 560,
@@ -415,11 +498,27 @@ struct Index {
       // 底栏不再叠页面底蒙层：去掉玻璃下方的渐隐过渡，内容直接压到玻璃底下。
       maskColor: Color.Transparent,
       maskHeight: 0,
+      animationDuration: this.mainTabAnimationDuration(),
+      animationCurve: motionSwiperCurve(),
+      animationMode: motionStore.isOn(MotionEffect.MOVE)
+        ? AnimationMode.CONTENT_FIRST_WITH_JUMP : AnimationMode.NO_ANIMATION,
       pages: (): void => { this.HomePages(); },
+      onAnimationStart: (index: number, targetIndex: number): void => {
+        this.handleMainTabAnimationStart(index, targetIndex);
+      },
+      onAnimationEnd: (index: number): void => {
+        this.handleMainTabAnimationEnd(index);
+      },
+      onContentDidScroll: (selectedIndex: number, index: number, position: number, mainAxisLength: number): void => {
+        this.handleMainTabContentScroll(selectedIndex, index, position, mainAxisLength);
+      },
       onChange: (index: number): void => {
         this.currentIndex = index;
         this.refreshMyProfile();
         if (index !== 0) { this.lastHomeTapMs = 0; this.setHomeScrollHidden(false); }
+        if (!materialManager.useArkUI || this.mainTabAnimationDuration() === 0) {
+          this.resetMainTabTransition();
+        }
       }
     })
     .width('100%')
@@ -428,14 +527,15 @@ struct Index {
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
       [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(AppTheme.BG)
-      // 看图时保留材质按钮，由上层 Viewer 覆盖；关图不重新创建阴影承载层。
-      // 发帖按钮显隐读偏好（设置 → 外观与布局 → 导航布局 → 悬浮按钮）；隐藏时必须真正卸载，
-      // 才能停掉握姿订阅与待换边定时器。
-      if (this.currentIndex === 0 && this.homeNavVisible && this.smartReachPreferences.homeComposeVisible) {
+      // 看图时保留材质按钮，由上层 Viewer 覆盖；发帖按钮显隐读偏好，隐藏时必须真正卸载，
+      // 才能停掉握姿订阅与待换边定时器。切页滑出期间跟随首页横滑，落定后立即卸载。
+      if (this.homeChromeVisible() && this.homeNavVisible && this.smartReachPreferences.homeComposeVisible) {
         HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
           topInset: this.homeStatusBarH + this.homeTopNavRowH,
-          active: this.pageVisible && this.viewerUrls.length === 0,
+          active: this.pageVisible && this.viewerUrls.length === 0 &&
+            this.currentIndex === 0 && !this.tabTransitioning,
           onCompose: (): void => { NavigationService.openCompose(); } })
+          .translate({ x: this.homeTabSlideOffsetX })
       }
       } // Stack
       .onAreaChange((_old: Area, area: Area): void => {
@@ -465,18 +565,15 @@ struct Index {
 
       },
       /*
-       * 顶栏内容**结构对所有样式一致**（`stackBuilder` 一个入口，内部按当前样式分叉）：
-       * 这样运行时切换样式时 builder 重跑就能换内容 —— HDS 只在创建时固化 style 配置，
-       * builder 内容本身是响应式的（0~4 四套样式即时切换就是靠这条）。
-       * 「官方沉浸」（值 5）**不在标题栏里画任何东西**：它的玻璃由页面根 Stack 的
-       * 浮层承载（见 build 里的 HomeDualRowOverlay），避免标题栏顶部那段系统固有
-       * 标题区（真机实测 73vp）把双排整体压低、首卡被压在玻璃后面。
+       * 顶栏内容结构对所有样式一致（`stackBuilder` 一个入口，内部按当前样式分叉）：运行时切换样式时 builder
+       * 重跑就能换内容，HDS 只在创建时固化 style 配置。官方沉浸（值 5）不在标题栏里画任何东西 ——
+       * 它的玻璃由页面根 Stack 的浮层承载（见 HomeDualRowOverlay），否则标题栏顶部系统固有标题区会把双排压低。
        */
       content: {
         stackBuilder: (): void => { this.HomeTitleBarContent(); }
       }
     })
-    .hideTitleBar(this.currentIndex !== 0 || this.viewerUrls.length > 0)
+    .hideTitleBar(!this.homeChromeVisible())
     .bindToScrollable([this.homeRecommendScroller, this.homeFollowScroller, this.homeHotScroller])
     .systemBarStyle(
       { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
@@ -484,13 +581,12 @@ struct Index {
     )
     .mode(NavigationMode.Stack)
 
-      if (this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-        && this.currentIndex === 0 && this.viewerUrls.length === 0) {
+      if (this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW && this.viewerUrls.length === 0) {
         this.HomeDualRowOverlay()
       }
       if (this.viewerUrls.length > 0) {
-        ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
-          onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
+        ImageViewer({ imageUrls: this.viewerUrls, images: this.viewerItems, initialIndex: this.viewerIndex,
+          onClose: (): void => { this.viewerUrls = []; this.viewerItems = []; this.viewerIndex = 0; } })
           .zIndex(100)
           .transition(imageLayerRetentionTransition())
       }
@@ -504,13 +600,14 @@ struct Index {
   HomePages() {
       TabContent() {
         ForumListView({
-          // 试验：发帖按钮按压时，用点光源照亮帖子卡片外边缘（受光端挂 illuminatedType，光源在按钮上）。
+          // 发帖按钮按压时用点光源照亮帖子卡片外边缘（受光端挂 illuminatedType，光源在按钮上）。
           // 用 BORDER（细边）而不是 DEFAULT_FEATHERING_BORDER（羽化）：羽化在近光侧会过曝并大范围外溢，
           // 远处边被压到看不见；细边只靠亮度随距离衰减，整圈都还在。
           cardLitType: hdsEffect.PointLightIlluminatedType.BORDER,
-          onOpenImages: (urls: string[], index: number): void => {
+          onOpenImages: (urls: string[], index: number, images?: ViewerImage[]): void => {
             this.viewerIndex = index;
             this.viewerUrls = urls;
+            this.viewerItems = images ?? [];
           },
           recommendScroller: this.homeRecommendScroller,
           followScroller: this.homeFollowScroller,
@@ -559,24 +656,29 @@ struct Index {
   /** 整片沉浸顶栏的浮层容器，高度随搜索行收起状态变化。 */
   @Builder
   HomeDualRowOverlay() {
-    HomeDualRowTopBar({
-      statusBarHeight: this.homeStatusBarH,
-      selectedChannel: this.homeSelectedChannel,
-      // 上滑收起：只留频道行（沿用「隐藏顶部导航栏」开关与既有滚动方向信号）
-      collapsed: this.topNavigationHidden(),
-      avatarUrl: this.homeAvatarUrl(),
-      onSelectChannel: (label: string): void => { this.homeChangeChannel(label); },
-      onSearch: (): void => { NavigationService.openSearchPage(); },
-
-      onAvatar: (): void => { this.openMyProfile(); }
-    })
-    // 压在内容层之上（大图查看器 zIndex 100 仍在其上）；
-    // `.position` 绝对定位到屏幕左上：面板比屏幕宽（两端圆弧推出可见区），
-    // 水平方向由组件内部 Stack 居中，垂直方向必须钉在屏幕顶（根 Stack 默认垂直居中）。
+    Stack({ alignContent: Alignment.TopStart }) {
+      HomeDualRowTopBar({
+        statusBarHeight: this.homeStatusBarH,
+        selectedChannel: this.homeSelectedChannel,
+        // 上滑收起：只留频道行（沿用「隐藏顶部导航栏」开关与既有滚动方向信号）
+        collapsed: this.topNavigationHidden(),
+        avatarUrl: this.homeAvatarUrl(),
+        onSelectChannel: (label: string): void => { this.homeChangeChannel(label); },
+        onSearch: (): void => { NavigationService.openSearchPage(); },
+        onAvatar: (): void => { this.openMyProfile(); }
+      })
+    }
+    .width('100%')
+    // 底部留 48vp 容纳官方材质阴影；仅在横滑期间裁平左右伸出屏外的胶囊半圆弧，静止态不裁切。
+    .padding({ bottom: 48 })
+    .clip(this.tabTransitioning)
+    // 压在看图器之下（zIndex 100）；`.position` 绝对定位到左上：垂直必须钉屏顶（根 Stack 默认垂直居中）。
     .position({ x: 0, y: 0 })
-    // 子页覆盖期间保留材质节点，返回时恢复显示，避免每次 pop 都重建整片原生材质。
-    .visibility(this.homeNavVisible ? Visibility.Visible : Visibility.Hidden)
-    .hitTestBehavior(this.homeNavVisible ? HitTestMode.Default : HitTestMode.None)
+    .translate({ x: this.homeTabSlideOffsetX })
+    // 子页覆盖与非首页静止期间保留材质节点，避免每次返回首页都重建整片原生材质。
+    .visibility(this.homeNavVisible && this.homeChromeVisible() ? Visibility.Visible : Visibility.Hidden)
+    .hitTestBehavior(this.homeNavVisible && this.currentIndex === 0 && Math.abs(this.homeTabSlideOffsetX) < 8
+      ? HitTestMode.Transparent : HitTestMode.None)
     .zIndex(50)
   }
 
@@ -616,9 +718,8 @@ struct Index {
           onSearch: (): void => { NavigationService.openSearchPage(); }
         })
         /*
-         * ⚠️ 边距与状态栏避让**必须由宿主下发**：同样的 padding 写进 `HomeTopNav` 内部时，
-         * HDS 会把那一行压成 19px 高（真机实测，见该组件 build() 的注释）。写法与改动前的
-         * `HomeChannelPills` 逐字一致 —— 同样的 `width('100%')` + 同样的 padding。
+         * ⚠️ 边距与状态栏避让必须由宿主下发：同样的 padding 写进 `HomeTopNav` 内部时，HDS 会把那一行压成
+         * 19px 高。写法与改动前的 `HomeChannelPills` 逐字一致 —— 同样的 `width('100%')` + 同样的 padding。
          */
         .width('100%')
         .padding({ top: this.homeStatusBarH + 8 + this.homeTitleContentOffsetVp,
@@ -626,6 +727,7 @@ struct Index {
       }
       .width('100%')
       .height(this.homeStatusBarH + this.homeTopNavRowH + this.homeTitleContentOffsetVp)
+      .translate({ x: this.homeTabSlideOffsetX })
     }
   }
 
@@ -660,6 +762,8 @@ struct Index {
       ForumMemberPage({ routeParams: pageInfos as ForumMemberPageParams })
     } else if (name === AppRoute.NOTIFY_LIST_PAGE) {
       NotifyListPage({ routeParams: pageInfos as NotifyListParams })
+    } else if (name === AppRoute.CHAT_PAGE) {
+      ChatPage({ routeParams: pageInfos as ChatPageParams })
     }
   }
 
@@ -711,19 +815,7 @@ struct Index {
     .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
     .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
     .onClick(() => {
-      if (this.currentIndex === index) {
-        if (index === 0) {
-          this.handleHomeRetap();
-        }
-        return;
-      }
-      this.lastHomeTapMs = 0;
-      // 先改 currentIndex（驱动配色），再让页签承载器切页 —— 顺序有意如此
-      this.currentIndex = index;
-      if (index !== 0) {
-        this.setHomeScrollHidden(false);
-      }
-      this.changeTabIndex(index);
+      this.switchTo(index);
     })
   }
 
@@ -731,7 +823,9 @@ struct Index {
   TabIcon(index: number, slot: TabSlot) {
     SymbolGlyph(index === this.currentIndex ? slot.iconFill : slot.icon)
       .fontSize(24 * this.bottomBarScaleFactor()).maxFontScale(1)
-      .fontColor([this.slotColor(index)]).accessibilityLevel('no')
+      .fontColor([this.slotColor(index)])
+      .symbolEffect(this.tabSymbolEffect(slot), this.tabEffectTriggers[index])
+      .accessibilityLevel('no')
   }
 
   private tabAccessibility(label: string, index: number): string {
@@ -743,8 +837,8 @@ struct Index {
   }
 
   /**
-   * 点击某格：**先改 `currentIndex`（驱动底栏配色），再让 Tabs 切页**。
-   * 顺序有意如此 —— 颜色先落定、页面随后跟上，避免"页面已经过去但高亮还没动"的那一帧。
+   * 点击某格：先改 `currentIndex`（驱动底栏配色），再让 Tabs 切页 —— 颜色先落定、页面随后跟上，
+   * 避免"页面已经过去但高亮还没动"的那一帧。
    */
   private switchTo(idx: number): void {
     if (idx === this.currentIndex) {
@@ -755,6 +849,8 @@ struct Index {
     }
     this.lastHomeTapMs = 0;
     this.currentIndex = idx;
+    this.tabEffectTriggers = this.tabEffectTriggers.map((count: number, i: number): number =>
+      i === idx ? count + 1 : count);
     if (idx !== 0) {
       this.setHomeScrollHidden(false);
     }

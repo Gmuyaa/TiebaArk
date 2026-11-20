@@ -1,10 +1,14 @@
-import { RootPageHeader } from './PageHeader';
+/**
+ * 首页「关注」频道：我关注的吧列表、单吧签到与一键签到、进吧与吧广场入口。
+ * 关系与签到态读 `ForumStateStore`；本视图只负责下拉刷新、前后台刷新与列表渲染。
+ */
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
 import { PageState } from './PageState';
 import { FollowChanges, followChanges } from '../viewmodel/FollowActionVM';
 import { ForumStateChanges, forumStateChanges } from '../viewmodel/ForumStateStore';
 
 import { common } from '@kit.AbilityKit';
-import { promptAction, router } from '@kit.ArkUI';
+import { LengthMetrics, promptAction, router } from '@kit.ArkUI';
 import { FollowVM } from '../viewmodel/FollowVM';
 import { ForumActionButton } from './ForumActionButton';
 import { GlassCircleButton } from './GlassCircleButton';
@@ -17,9 +21,15 @@ import { AppTheme } from '../theme/Theme';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { NavigationService } from '../navigation/AppNavigation';
 import { SignStrategyStore, signStrategyStore } from '../common/appearance/SignStrategyStore';
+import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
+import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
+import { PullRefreshHeader, PULL_REFRESH_OFFSET } from './RefreshSpinner';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { UiLayout } from '../common/appearance/UiLayout';
+
+const FOLLOW_NAV_BAR_HEIGHT: number = 56;
 
 @ComponentV2
 export struct FollowView {
@@ -30,13 +40,21 @@ export struct FollowView {
   private foregroundExperiencePending: boolean = false;
   private foregroundAccount: string = '';
   @Local refreshing: boolean = false;
+  @Local pullRefreshDragging: boolean = false;
+  private navStack: NavPathStack = new NavPathStack();
+  private listScroller: ListScroller = new ListScroller();
   private refreshGestureId: number = 0;
   private consumedRefreshGestureId: number = -1;
   private refreshSequence: number = 0;
 
+  private headerHeight(): number {
+    return this.statusBarH + FOLLOW_NAV_BAR_HEIGHT;
+  }
+
   private resetPullRefresh(): void {
     this.refreshSequence++;
     this.refreshing = false;
+    this.pullRefreshDragging = false;
     this.consumedRefreshGestureId = -1;
   }
 
@@ -162,11 +180,82 @@ export struct FollowView {
   aboutToDisappear(): void { this.resetPullRefresh(); this.vm.dispose(); }
 
   build() {
+    HdsNavigation(this.navStack) {
+      Column() {
+        this.FollowContent()
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(AppTheme.BG)
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
+        [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    }
+    .titleBar({
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR),
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          blurEffectiveStartOffset: LengthMetrics.vp(0),
+          blurEffectiveEndOffset: LengthMetrics.vp(8)
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: Color.Transparent,
+            maskExtraHeight: 0,
+            blurRadius: 0
+          }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            maskExtraHeight: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 32 : 0,
+            blurRadius: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 80 : 0
+          }
+        }
+      },
+      content: {
+        stackBuilder: (): void => { this.FollowNavBar(); }
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideBackButton(true)
+    .hideTitleBar(false)
+    .systemBarStyle(
+      { statusBarContentColor: themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
+      { statusBarContentColor: themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
+    )
+    .mode(NavigationMode.Stack)
+    .bindToScrollable([this.listScroller])
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  FollowNavBar() {
     Column() {
-      RootPageHeader({ title: '我的关注',
-        actions: (): void => { this.HeaderActions(); } })
-      Column() { this.FollowContent() }.width('100%').layoutWeight(1)
-    }.width('100%').height('100%')
+      Row({ space: 12 }) {
+        Text('我的关注')
+          .fontSize(UiLayout.ROOT_TITLE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(AppTheme.TEXT_MAIN)
+          .layoutWeight(1)
+        this.HeaderActions()
+      }
+      .width('100%')
+      .height(FOLLOW_NAV_BAR_HEIGHT)
+      .margin({ top: this.statusBarH })
+      .padding({ left: UiLayout.PAGE_GUTTER, right: UiLayout.PAGE_GUTTER })
+      .alignItems(VerticalAlign.Center)
+      .clip(false)
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+    .clip(false)
+  }
+
+  @Builder
+  PullHeader() {
+    PullRefreshHeader({ inset: this.headerHeight(), active: this.refreshing || this.pullRefreshDragging })
   }
 
   @Builder
@@ -188,13 +277,19 @@ export struct FollowView {
         onLogin: (): void => {
           router.pushUrl({ url: 'pages/Login' });
         }
-      }).layoutWeight(1)
+      })
+      .padding({ top: this.headerHeight() })
+      .layoutWeight(1)
     } else {
-      Refresh({ refreshing: this.refreshing }) {
+      Refresh({ refreshing: this.refreshing, builder: (): void => { this.PullHeader(); } }) {
         this.FollowPage()
       }
       .width('100%').layoutWeight(1)
+      .refreshOffset(PULL_REFRESH_OFFSET)
       .pullToRefresh(!this.vm.loading && !this.vm.signingAll && this.vm.signingFname.length === 0)
+      .onStateChange((state: RefreshStatus): void => {
+        this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;
+      })
       .onTouch((event: TouchEvent): void => { this.handleRefreshTouch(event); })
       .onRefreshing((): void => { void this.refreshForums(true); })
       .id('follow-refresh')
@@ -247,17 +342,19 @@ export struct FollowView {
   FollowPage() {
     Column() {
       if (this.vm.loading && !this.vm.loadedOnce) {
-        PageState({ fillRemaining: true, loading: true, message: '正在加载关注的吧…' }).layoutWeight(1)
+        PageState({ fillRemaining: true, loading: true, message: '正在加载关注的吧…' })
+          .padding({ top: this.headerHeight() })
+          .layoutWeight(1)
       } else if (this.vm.forums.length === 0 && this.vm.errorText.length > 0) {
         PageState({ fillRemaining: true, title: '加载失败', message: this.vm.errorText, actionLabel: '重试',
-          onAction: (): void => { void this.refreshForums(); } }).layoutWeight(1)
+          onAction: (): void => { void this.refreshForums(); } })
+          .padding({ top: this.headerHeight() })
+          .layoutWeight(1)
       } else if (this.vm.forums.length === 0) {
-        PageState({ fillRemaining: true, message: '还没有关注任何吧' }).layoutWeight(1)
+        PageState({ fillRemaining: true, message: '还没有关注任何吧' })
+          .padding({ top: this.headerHeight() })
+          .layoutWeight(1)
       } else {
-        if (this.vm.errorText.length > 0) {
-          PageState({ compact: true, message: '更新失败，正在显示上次数据', actionLabel: '重试',
-            onAction: (): void => { void this.refreshForums(); } })
-        }
         this.FollowList()
       }
     }
@@ -265,10 +362,20 @@ export struct FollowView {
     .height('100%')
   }
 
-  /** 关注吧列表：头像、吧名／等级标签、已知签到次数和签到按钮。 */
   @Builder
   FollowList() {
-    List({ space: 0 }) {
+    List({ space: 0, scroller: this.listScroller }) {
+      ListItem() {
+        Row().width('100%').height(this.headerHeight())
+      }
+      .accessibilityLevel('no')
+      .hitTestBehavior(HitTestMode.None)
+      if (this.vm.errorText.length > 0) {
+        ListItem() {
+          PageState({ compact: true, message: '更新失败，正在显示上次数据', actionLabel: '重试',
+            onAction: (): void => { void this.refreshForums(); } })
+        }
+      }
       ForEach(this.vm.forums, (item: FollowForumItem) => {
         ListItem() {
           this.FollowRow(item)
@@ -343,7 +450,7 @@ export struct FollowView {
     })
   }
 
-  /** 进行中只用按钮内的转圈表示，文案保持稳定状态（2026-11-13 持有者要求去掉「…中…」字样）。 */
+  /** 进行中只用按钮内的转圈表示，文案保持稳定状态，不加「…中…」字样。 */
   private signLabel(item: FollowForumItem): string {
     if (this.vm.signingFname === item.fname) { return '签到'; }
     if (!item.signKnown) { return '重试'; }

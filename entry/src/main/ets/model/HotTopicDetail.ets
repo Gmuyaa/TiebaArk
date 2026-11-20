@@ -1,5 +1,6 @@
 /** 原生话题详情：移动网页公开元信息与 PC 相关帖响应的纯解析。 */
 import { cleanSnippet, cleanTitle } from './SearchPost';
+import { rememberFeedImage } from './HomeFeedPresentation';
 import { ThreadBrief } from './ThreadList';
 import { portraitUrl } from './ThreadDetail';
 import { wireString } from './Wire';
@@ -199,9 +200,17 @@ function parseThread(raw: RawHotTopicThread): ThreadBrief | undefined {
   if (Array.isArray(raw.media)) {
     for (const media of raw.media) {
       if (media === undefined || media === null || typeof media !== 'object' || media.type !== 'pic') { continue; }
-      const image: string = hotTopicImageUrl(media.big_pic) || hotTopicImageUrl(media.water_pic) ||
-        hotTopicImageUrl(media.small_pic);
-      if (image.length > 0 && !item.images.includes(image)) { item.images.push(image); }
+      const big: string = hotTopicImageUrl(media.big_pic);
+      const water: string = hotTopicImageUrl(media.water_pic);
+      const small: string = hotTopicImageUrl(media.small_pic);
+      const image: string = big || water || small;
+      if (image.length > 0 && !item.images.includes(image)) {
+        item.images.push(image);
+        rememberFeedImage(image, 0, 0, false, water || big || small, {
+          thumb: small || image,
+          high: big || water || small
+        });
+      }
     }
   }
   item.coverImage = item.images.length > 0 ? item.images[0] : '';

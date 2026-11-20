@@ -37,7 +37,7 @@ export function searchScopeLabel(forumName: string | undefined): string {
   return scope.length === 0 ? '' : `吧内搜索 · ${scope}`;
 }
 
-/** 还没输入关键词时的提示（吧内搜索进页面就是这一态） */
+/** 还没输入关键词时的提示 */
 export function searchEmptyHint(forumName: string | undefined): string {
   const scope: string = searchScopeForum(forumName);
   return scope.length === 0 ? '输入关键词开始搜索' : `输入关键词，搜索「${scope}」吧内的帖子`;
@@ -194,15 +194,13 @@ export function cleanTitle(raw: string): string {
   return dropEmojiCodes(cleanHtml(raw, false));
 }
 
-/** 一条搜帖结果 */
 export class SearchPostItem {
   tid: number = 0;
   pid: number = 0;
   /** 标题；回复型结果可能为空，界面用摘要顶替 */
   title: string = '';
-  /** 服务端拼好的纯文本摘要 */
+  /** 已是纯文本，标签与表情编码都被清洗过 */
   snippet: string = '';
-  /** 来源吧名 */
   forumName: string = '';
   authorName: string = '';
   /** 毫秒时间戳（服务端给秒，转换时乘 1000） */
@@ -226,7 +224,6 @@ export class SearchPostItem {
   }
 }
 
-/** 一页搜帖结果 + 分页游标 */
 export class SearchPostPage {
   items: SearchPostItem[] = [];
   /** 本结果的页码（请求时的 pn） */

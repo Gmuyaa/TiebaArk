@@ -29,7 +29,6 @@ export function parseKind(raw: string): MyListKind {
   return 'history';
 }
 
-/** 标题（页面顶部与空态文案都用它） */
 export function kindTitle(kind: MyListKind): string {
   if (kind === 'fav') {
     return '我的收藏';
@@ -73,8 +72,8 @@ export class MyListItem {
    */
   isDeleted: boolean = false;
   /**
-   * 发帖时选了「个人主页不可见」。界面在卡片右上角、更多菜单左侧显示「主页不可见」，
-   * 与官方「我的帖子」一致；只有主题列表有意义（回复行不带这个标志）。
+   * 发帖时选了「个人主页不可见」。界面在卡片右上角显示「主页不可见」，与官方「我的帖子」一致；
+   * 只有主题列表有意义（回复行不带这个标志）。
    */
   hideFromProfile: boolean = false;
 }
@@ -274,8 +273,8 @@ export class MyListVM {
     }
     if (!more) { this.favoriteRequest++; this.loadingMore = false; }
     const request: number = this.favoriteRequest;
-    // 服务端的翻页游标是条目偏移（`offset`），`pn` 它根本不看——2026-11-08 真机实测，
-    // 详见 `TiebaApi.fetchStoredThreads`。游标永远从 0 起算，续页接着已取条数往后走。
+    // 服务端的翻页游标是条目偏移（`offset`），`pn` 它根本不看，详见 `TiebaApi.fetchStoredThreads`。
+    // 游标永远从 0 起算，续页接着已取条数往后走。
     const offset: number = more ? this.favoriteOffset : 0;
     this.loading = !more;
     this.loadingMore = more;
@@ -497,8 +496,8 @@ export class MyListVM {
         row.coverUrl = item.coverUrl;
         row.meta = item.timeMs > 0 ? formatRelativeTime(item.timeMs) : '';
         /*
-         * 旧记录（加 `isDeleted` 字段之前存的）没有这个标记，但当时若帖子已不在，
-         * 标题也是空的 → 这里补判一次，让老数据也能灰显。
+         * 旧记录（加 `isDeleted` 字段之前存的）没有这个标记，但当时若帖子已不在，标题也是空的
+         * → 这里补判一次，让老数据也能灰显。
          */
         row.isDeleted = item.isDeleted || item.title.length === 0;
         out.push(row);
@@ -523,9 +522,8 @@ export class MyListVM {
 
   /**
    * 详情页调用：记一条浏览历史（本地，失败静默）。封面与吧头像由详情页从响应里取。
-   *
-   * `isDeleted` 由详情页在**记录时**判定（服务端既没给标题也没给吧名 = 帖子已不在），
-   * 历史是本地记录，事后无法再问服务端，只能记下当时的判断。
+   * `isDeleted` 由详情页在**记录时**判定（服务端既没给标题也没给吧名 = 帖子已不在）：历史是本地
+   * 记录，事后无法再问服务端，只能记下当时的判断。
    */
   static async record(context: common.UIAbilityContext, tid: number, title: string,
     forumName: string, coverUrl: string, forumAvatar: string,
@@ -548,10 +546,8 @@ export class MyListVM {
   }
 
   /**
-   * 详情页调用：帖子已确认删除 → 把历史里对应那条标删（保留原标题等字段）。
-   *
-   * 历史里没有这条 tid 时不补记（`markBrowseDeleted` 返回 false）：
-   * 删帖的响应里标题/吧名都是空的，硬记一条就是"只有 tid 的空行"，没有意义。
+   * 详情页调用：帖子已确认删除 → 把历史里对应那条标删（保留原标题等字段）。历史里没有这条 tid
+   * 时不补记：删帖响应里标题/吧名都是空的，硬记一条就是“只有 tid 的空行”。
    */
   static async markDeleted(context: common.UIAbilityContext, tid: number): Promise<void> {
     if (tid <= 0) {
@@ -573,8 +569,8 @@ export class MyListVM {
         continue;
       }
       /*
-       * 已标删的也问一次：本地标记只是"当时的判断"（旧版本记录时标题为空就标了），
-       * 服务端才是真相。命中缓存后同一 tid 整个会话只问一次，不构成轮询。
+       * 已标删的也问一次：本地标记只是“当时的判断”，服务端才是真相。命中缓存后同一 tid
+       * 整个会话只问一次，不构成轮询。
        */
       if (todo.length < MyListVM.MAX_DELETED_PROBE) {
         todo.push(item.tid);
@@ -611,7 +607,6 @@ export class MyListVM {
     }
   }
 
-  /** 为缺少吧头像的条目补全头像，优先复用共享缓存；异步回调前检查当前账号与请求代次。 */
   private static readonly MAX_AVATAR_FETCH: number = 20;
 
   /** 正在重取的吧（图片加载失败自愈用，避免同一吧并发重取） */
@@ -634,7 +629,7 @@ export class MyListVM {
       const session = authSession.session();
       const plan: ForumAvatarBackfillPlan = new ForumAvatarBackfillPlan();
       plan.label = 'MyListVM';
-      // 首屏 20 条以内：与原来的 MAX_AVATAR_FETCH 一致
+      // 首屏 20 条以内：与 MAX_AVATAR_FETCH 一致
       plan.maxFetch = MyListVM.MAX_AVATAR_FETCH;
       plan.stopped = (): boolean => this.disposed;
       // getforumdetail 优先、frs/page 回退，收敛在接口层（耗时由那里打点）。
@@ -649,10 +644,8 @@ export class MyListVM {
   }
 
   /**
-   * 图片加载失败后的自愈（方案 2 的兜底）：丢掉落盘 URL 与进程内缓存，重新取一次。
-   *
-   * 落盘 URL 在 TTL 内不请求，但服务端签名可能提前失效；如果失败后不给它一条
-   * "作废并重取"的路，那一行就会一直停在文字兜底（文档 §1.3 记过这个坑）。
+   * 图片加载失败后的自愈：丢掉落盘 URL 与进程内缓存，重新取一次。落盘 URL 在 TTL 内不请求，但
+   * 服务端签名可能提前失效；没有这条“作废并重取”的路，那一行会一直停在文字兜底（文档 §1.3）。
    * 同一吧在途时不重入，避免图片反复失败把请求打爆。
    */
   async retryAvatar(context: common.UIAbilityContext, forumName: string): Promise<void> {
@@ -699,7 +692,7 @@ export class MyListVM {
     if (touched) { this.refreshItems(); }
   }
 
-  /** 整体替换 items 触发刷新（保序） */
+  /** 整体替换 `items` 触发刷新（保序）。 */
   private refreshItems(): void {
     const next: MyListItem[] = [];
     for (const item of this.items) {
@@ -709,10 +702,8 @@ export class MyListVM {
   }
 
   /**
-   * 真实 uid（`User.id`）。
-   *
-   * 优先用 `authSession.snapshot.uid`（"我的"页显示的就是它）；
-   * 它是**异步**回填的，为 0 时退到 pb 资料通道现取一次（与 `MineProbe` 同路径）。
+   * 真实 uid（`User.id`）。优先用 `authSession.snapshot.uid`（“我的”页显示的就是它）；它是**异步**
+   * 回填的，为 0 时退到 pb 资料通道现取一次（与 `MineProbe` 同路径）。
    */
   private async resolveUid(context: common.UIAbilityContext, session: TiebaSession): Promise<number> {
     const snapshotUid: number = authSession.snapshot.uid;
@@ -751,7 +742,7 @@ export class MyListVM {
       row.key = isThread ? String(it.tid) : userReplyKey(it);
       row.pieces = it.pieces;
       row.isComment = !isThread && it.isComment;
-      // 回复正文与来源帖标题分开，不再把正文伪装为标题。
+      // 回复正文与来源帖标题分开，不把正文伪装成标题。
       row.title = it.title;
       row.content = it.content;
       row.forumName = it.forumName;
@@ -783,9 +774,8 @@ export class MyListVM {
 }
 
 /**
- * 相对时间：今天 → `HH:MM`，昨天 → `昨天`，更早 → `M-D`。
- *
- * 只做展示用，**不参与排序**（列表顺序以服务端为准）。
+ * 相对时间：今天 → `HH:MM`，昨天 → `昨天`，更早 → `M-D`。只做展示用，**不参与排序**
+ * （列表顺序以服务端为准）。
  */
 function formatRelativeTime(timeMs: number): string {
   const now: Date = new Date();

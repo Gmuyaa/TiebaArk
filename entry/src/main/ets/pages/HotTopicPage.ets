@@ -11,7 +11,8 @@ import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { homeChannelHeight } from '../common/appearance/UiLayout';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { fontSizeScaleOf } from '../common/appearance/FontSizeScale';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageHeader } from '../components/PageHeader';
 import { GlassCircleButton } from '../components/GlassCircleButton';
@@ -48,6 +49,7 @@ export struct HotTopicPage {
   @Local refreshing: boolean = false;
   @Local pullRefreshDragging: boolean = false;
   @Local viewerImages: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private imageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
@@ -224,7 +226,7 @@ export struct HotTopicPage {
         Row({ space: 16 }) {
           Text(this.vm.data.description).fontSize(15).fontColor(AppTheme.TEXT_SUB)
             .lineSpacing(LengthMetrics.vp(5)).layoutWeight(1).id('hot-topic-description')
-          if (this.vm.data.imageUrl.length > 0 && !lowFlowStore.enabled) {
+          if (this.vm.data.imageUrl.length > 0 && !imageLoadStore.isAutoLoadOff()) {
             Image(this.vm.data.imageUrl).width(72).height(72).borderRadius(12)
               .objectFit(ImageFit.Cover).flexShrink(0).accessibilityLevel('no')
           }
@@ -286,8 +288,10 @@ export struct HotTopicPage {
           .then((message: string): void => { this.showActionResult(message); });
       },
       onOpenImage: (index: number): void => {
+        const keys: string[] = this.threadImages(item);
         this.viewerIndex = index;
-        this.viewerImages = this.threadImages(item).map((url: string): string => feedImageInfo(url).origin || url);
+        this.viewerImages = keys.map((url: string): string => feedImageInfo(url).origin || url);
+        this.viewerItems = viewerImagesForFeed(keys);
       }
     })
   }
@@ -308,10 +312,9 @@ export struct HotTopicPage {
           ListItem() { PageState({ compact: true, loading: true, message: '正在更新讨论…' }) }
         }
         /*
-         * 与首页 `ForumListView.FeedList` 同一处理：帖子流走 Repeat 虚拟列表（Repeat 指南建议优先于
-         * LazyForEach），按可视区 + 预加载区创建、滑出回收。键沿用 `cardKey`（对象身份 + 递增号），
-         * `reusable` 不开启——评论区 2026-11-07 的 A/B 实测开启后反而更慢（91 vs 97 fps）。
-         * 外层其余状态项（简介、排序栏、错误/空态、页脚）仍留在 Repeat 之外。
+         * 与首页 `ForumListView.FeedList` 同一处理：帖子流走 Repeat 虚拟列表，按可视区 + 预加载区创建、滑出回收；
+         * 键沿用 `cardKey`（对象身份 + 递增号）。`reusable` 不开 —— 开过之后反而更慢。
+         * 简介、排序栏、错误/空态、页脚仍留在 Repeat 之外。
          */
         Repeat<ThreadBrief>(this.visibleTopicThreads)
           .each((ri: RepeatItem<ThreadBrief>) => {
@@ -364,8 +367,8 @@ export struct HotTopicPage {
           }
         }.width('100%').height('100%').padding({ top: this.statusBarH }).backgroundColor(AppTheme.BG)
         if (this.viewerImages.length > 0) {
-          ImageViewer({ imageUrls: this.viewerImages, initialIndex: this.viewerIndex,
-            onClose: (): void => { this.viewerImages = []; } })
+          ImageViewer({ imageUrls: this.viewerImages, images: this.viewerItems, initialIndex: this.viewerIndex,
+            onClose: (): void => { this.viewerImages = []; this.viewerItems = []; } })
             .zIndex(100).transition(imageLayerRetentionTransition())
         }
       }.width('100%').height('100%')

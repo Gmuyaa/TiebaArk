@@ -7,7 +7,10 @@ import { POST_IMAGE_PREVIEW_MAX_HEIGHT, ReadingDecodeSize, commentImageBox, hasR
   readingImageInfo } from '../model/PostImageLayout';
 import { FeedImageTransform } from '../model/FeedImageLayout';
 import { ImageTransitionCrop, imageTransitionCrop } from '../model/ImageTransitionCrop';
-import { LowFlowStore, lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
+import {
+  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, shouldPromoteLongToOrigin
+} from '../model/ImageLoadPolicy';
 import { AppTheme } from '../theme/Theme';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
 
@@ -40,7 +43,8 @@ struct PostFlowImage {
   @Local failedUrl: string = '';
   @Local actualUrl: string = '';
   @Local actual: FeedImageInfo = new FeedImageInfo();
-  @Local flow: LowFlowStore = lowFlowStore;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
+  @Local private policy: ImageLoadPolicy = imageLoadStore.currentPolicy();
   @Local private originalPreferred: boolean = false;
   @Local private transitionRetained: boolean = false;
   @Local private sharedBindingEnabled: boolean = true;
@@ -57,14 +61,18 @@ struct PostFlowImage {
 
   aboutToAppear(): void {
     this.alive = true;
+    this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     const sameSource: boolean = this.imageKey === this.currentImageKey();
-    this.originalPreferred = (sameSource && this.originalPreferred) || this.knownLongImage();
+    this.originalPreferred = (sameSource && this.originalPreferred) ||
+      (shouldPromoteLongToOrigin(this.policy) && this.knownLongImage());
     this.imageKey = this.currentImageKey();
     this.sourceIdentity = this.sourceUrl();
     this.imagePosition = this.imageIndex;
     this.registerReturnSource();
   }
+
+  private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
 
   private currentImageKey(): string {
     return `${this.image.imageUrl}\n${this.image.originImageUrl}`;
@@ -95,7 +103,10 @@ struct PostFlowImage {
     this.imageKey = this.currentImageKey();
     this.imagePosition = this.imageIndex;
     this.invalidateTransition();
-    if (!sameSource) { this.originalPreferred = this.knownLongImage(); }
+    if (!sameSource) {
+      this.policy = this.imageLoad.currentPolicy();
+      this.originalPreferred = shouldPromoteLongToOrigin(this.policy) && this.knownLongImage();
+    }
     this.sourceIdentity = this.sourceUrl();
     if (previousUrl !== this.sourceIdentity) {
       this.invalidateRequest();
@@ -126,10 +137,10 @@ struct PostFlowImage {
     const key: string = this.currentImageKey();
     const index: number = this.imageIndex;
     const viewerIndex: number = this.viewerIndex;
-    const origin: string = this.image.originImageUrl || this.image.imageUrl;
+    const origin: string = bodyTransitionKey(this.image);
     this.unregisterReturn = this.transitionGallery.register(viewerIndex, origin,
       (): ImageTransitionTarget | undefined => {
-        if (!this.alive || !this.visible || this.flow.enabled || !this.isLoaded() ||
+        if (!this.alive || !this.visible || this.isOff() || !this.isLoaded() ||
           key !== this.currentImageKey() || index !== this.imageIndex || viewerIndex !== this.viewerIndex) {
           return undefined;
         }
@@ -144,9 +155,19 @@ struct PostFlowImage {
       });
   }
 
-  @Monitor('flow.enabled')
-  onLowFlowChanged(): void {
-    this.invalidateRequest();
+  @Monitor('imageLoad.revision')
+  onPolicyChanged(): void {
+    const prevOff: boolean = this.isOff();
+    const prevSource: string = this.sourceUrl();
+    this.policy = this.imageLoad.currentPolicy();
+    this.originalPreferred = shouldPromoteLongToOrigin(this.policy) && this.knownLongImage();
+    const nextOff: boolean = this.isOff();
+    const nextSource: string = this.sourceUrl();
+    this.sourceIdentity = nextSource;
+    if (prevOff !== nextOff || prevSource !== nextSource) {
+      this.invalidateRequest();
+      this.registerReturnSource();
+    }
   }
 
   aboutToDisappear(): void {
@@ -158,8 +179,7 @@ struct PostFlowImage {
   }
 
   private sourceUrl(): string {
-    return (this.originalPreferred || this.image.imageUrl.length === 0) && this.image.originImageUrl.length > 0
-      ? this.image.originImageUrl : this.image.imageUrl;
+    return bodyImageSource(this.image, this.originalPreferred, this.policy);
   }
 
   private isLoaded(): boolean { return this.sourceUrl().length > 0 && this.loadedUrl === this.sourceUrl(); }
@@ -181,6 +201,7 @@ struct PostFlowImage {
 
   /** 取源只升级一次；仅实际换 URL 才清除加载状态并使旧回调失效。 */
   private promoteOriginalIfLong(): boolean {
+    if (!shouldPromoteLongToOrigin(this.policy)) { return false; }
     if (this.originalPreferred || !(this.knownLongImage() || this.sourceInfo().long)) { return false; }
     const previousUrl: string = this.sourceUrl();
     this.originalPreferred = true;
@@ -215,7 +236,7 @@ struct PostFlowImage {
 
   private frame(): FeedImageBox {
     if (this.commentPreview) {
-      return commentImageBox(this.sourceInfo(), this.contentWidth, this.density, this.flow.enabled);
+      return commentImageBox(this.sourceInfo(), this.contentWidth, this.density, this.isOff());
     }
     // 正文单图限高：宽度撑满，超过约一屏高的部分顶部裁切，点开看全。
     return readingImageBox(this.sourceInfo(), this.contentWidth, this.density, false);
@@ -232,10 +253,8 @@ struct PostFlowImage {
   }
 
   /**
-   * 完整图片只需单位变换，仍用 crop 会话保持同源预览交接及返回保护。
-   *
-   * 正文裁切只体现在外框上：查看器那边的图片节点按原图比例排、宽度撑满，
-   * 转场时共享框从裁切窗口长成完整图，这段变化不需要再叠一次缩放。
+   * 完整图片只需单位变换，仍用 crop 会话保持同源预览交接及返回保护。正文裁切只体现在外框上：
+   * 查看器那边按原图比例排、宽度撑满，共享框从裁切窗口长成完整图，这段变化不再叠一次缩放。
    */
   private drawingCrop(): ImageTransitionCrop {
     const crop: ImageTransitionCrop = imageTransitionCrop(new FeedImageTransform());
@@ -245,7 +264,7 @@ struct PostFlowImage {
   }
 
   private retentionIsCurrent(url: string, index: number, epoch: number): boolean {
-    return this.alive && !this.flow.enabled && this.transitionRetained && epoch === this.transitionEpoch &&
+    return this.alive && !this.isOff() && this.transitionRetained && epoch === this.transitionEpoch &&
       url === this.sourceUrl() && index === this.imageIndex;
   }
 
@@ -273,17 +292,18 @@ struct PostFlowImage {
 
   private openImage(): void {
     const url: string = this.sourceUrl();
-    if (url.length === 0) { return; }
+    const origin: string = bodyTransitionKey(this.image);
+    if (url.length === 0 && origin.length === 0) { return; }
     const request: number = this.requestEpoch;
     const index: number = this.imageIndex;
-    const ready: boolean = this.acceptsRequest(url, request) && this.isLoaded();
+    const ready: boolean = url.length > 0 && this.acceptsRequest(url, request) && this.isLoaded();
     const crop: ImageTransitionCrop | undefined = ready && this.imageTransition.canOpenShared()
       ? this.drawingCrop() : undefined;
     const transition: number = ++this.transitionEpoch;
     // 只保留当前参与共享的一张已加载源图，不把所有看过的长图常驻在页面里。
     this.transitionRetained = crop !== undefined && crop.usable;
     this.imageTransition.open(this.getUIContext(), url,
-      this.image.originImageUrl || this.image.imageUrl, this.onOpen, index, ready, crop, undefined,
+      origin, this.onOpen, index, ready, crop, undefined,
       (): void => { this.releaseTransition(url, index, transition); }, this.transitionGallery, this.viewerIndex);
   }
 
@@ -296,7 +316,7 @@ struct PostFlowImage {
   }
 
   private acceptsRequest(url: string, epoch: number): boolean {
-    return this.alive && (this.visible || this.transitionRetained) && !this.flow.enabled && url.length > 0 &&
+    return this.alive && (this.visible || this.transitionRetained) && !this.isOff() && url.length > 0 &&
       epoch === this.requestEpoch && url === this.sourceUrl();
   }
 
@@ -361,8 +381,8 @@ struct PostFlowImage {
   @Builder
   Picture() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.flow.enabled) {
-        Text('低流量模式 · 点按查看').fontSize(12).fontColor(AppTheme.TEXT_SUB)
+      if (this.isOff()) {
+        Text('点按查看图片').fontSize(12).fontColor(AppTheme.TEXT_SUB)
           .width('100%').height('100%').textAlign(TextAlign.Center)
       } else {
         if (!this.isLoaded()) {
@@ -374,21 +394,23 @@ struct PostFlowImage {
         }
         // 首次只加载可见图；共享会话期间保留同一节点，连续多图不会一次下载全部原图。
         if ((this.visible || this.transitionRetained) && this.sourceUrl().length > 0) {
-          Image(this.sourceUrl())
-            .width('100%').height('100%')
-            .position({ x: 0, y: 0 })
-            .objectFit(ImageFit.Contain)
-            .objectRepeat(ImageRepeat.NoRepeat)
-            .autoResize(true)
-            // 裁切态：以顶部中心放大绘制，宽度贴满外框，下方由父层 clip 掉。
-            .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
-            .sourceSize(this.decodeSize())
-            .opacity(this.isLoaded() ? 1 : 0)
-            .onComplete(this.completeHandler(this.sourceUrl(), this.requestEpoch))
-            .onError(this.errorHandler(this.sourceUrl(), this.requestEpoch))
+          ForEach([this.sourceUrl()], (src: string) => {
+            Image(src)
+              .width('100%').height('100%')
+              .position({ x: 0, y: 0 })
+              .objectFit(ImageFit.Contain)
+              .objectRepeat(ImageRepeat.NoRepeat)
+              .autoResize(true)
+              // 裁切态：以顶部中心放大绘制，宽度贴满外框，下方由父层 clip 掉。
+              .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
+              .sourceSize(this.decodeSize())
+              .opacity(this.isLoaded() ? 1 : 0)
+              .onComplete(this.completeHandler(src, this.requestEpoch))
+              .onError(this.errorHandler(src, this.requestEpoch))
+          }, (src: string) => src)
         }
       }
-      if (this.clipped() && !this.flow.enabled) {
+      if (this.clipped() && !this.isOff()) {
         // 只留左上角标，不加底部渐变：裁切边界靠角标和"点开看全"就够了。
         // `.align()` 只对齐文本自身内容，不会把子组件摆到 Stack 的角上，这里用铺满的 Row 定位。
         Row() {
@@ -405,7 +427,7 @@ struct PostFlowImage {
     .width(this.frame().width).height(this.frame().height)
     .backgroundColor(this.isLoaded() ? Color.Transparent : AppTheme.SURFACE_MUTED)
     .borderRadius(BODY_RADIUS).clip(true)
-    .geometryTransition(this.sharedBindingEnabled
+    .geometryTransition(this.sharedBindingEnabled && this.sourceUrl().length > 0
       ? this.imageTransition.id(this.sourceUrl(), this.imageIndex) : '', { follow: true })
     .transition(TransitionEffect.IDENTITY)
     .renderFit(RenderFit.RESIZE_FILL)
@@ -430,9 +452,8 @@ export struct PostImageFlow {
   @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
   @Param commentPreview: boolean = false;
   /**
-   * 调用方已知的可用宽度（vp）。>0 时作为首帧宽度，代替按屏宽估算——
-   * 评论左侧有头像列，按屏宽算会宽出 48vp，首帧高度偏大、`onAreaChange`
-   * 修正后再塌回，翻页插入新楼层时就表现为"页面跳一下"。0 = 沿用估算。
+   * 调用方已知的可用宽度（vp）。>0 时作首帧宽度：评论左侧有头像列，按屏宽算会宽出 48vp，首帧高度偏大、
+   * `onAreaChange` 修正后塌回，翻页插入新楼层时就表现为"页面跳一下"。0 = 沿用估算。
    */
   @Param contentWidthHint: number = 0;
   @Event onOpenImage: (index: number) => void = (): void => {};

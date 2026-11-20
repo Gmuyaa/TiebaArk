@@ -19,9 +19,17 @@ export struct MaterialTabs {
   @Param componentMaterial: boolean = false;
   @Param controller: TabsController | undefined = undefined;
   @Param fallbackController: HdsTabsController | undefined = undefined;
+  @Param animationDuration: number = 0;
+  @Param animationCurve: Curve | ICurve | undefined = undefined;
+  @Param animationMode: AnimationMode = AnimationMode.CONTENT_FIRST;
   @Local contentWidth: number = 0;
   private componentBarModifier: CommonModifier = new CommonModifier();
   @Event onChange: (index: number) => void = (_index: number): void => {};
+  @Event onAnimationStart: (index: number, targetIndex: number) => void =
+    (_index: number, _targetIndex: number): void => {};
+  @Event onAnimationEnd: (index: number) => void = (_index: number): void => {};
+  @Event onContentDidScroll: (selectedIndex: number, index: number, position: number, mainAxisLength: number) => void =
+    (_selectedIndex: number, _index: number, _position: number, _mainAxisLength: number): void => {};
 
   aboutToAppear(): void {
     // 放开真正 TabBar 的子节点裁切，阴影无需靠扩大整片承载区来容纳。
@@ -56,10 +64,12 @@ export struct MaterialTabs {
           barModifier: this.componentMaterial ? this.componentBarModifier : undefined }) {
           this.pages()
         }
-        .vertical(false).barMode(BarMode.Fixed).scrollable(false).animationDuration(0)
-        // 不带隐式动画标志：宿主逐帧驱动 barHeight 参数（scale 每帧变），收尾的
-        // collapsed 切换发生时栏体 alpha 已为 0，隐式动画只会把浮面→贴底的锚点
-        // 切换也播出来，收起尾巴看起来像"换了个位置接着收"（2026-11-08 真机）。
+        .vertical(false).barMode(BarMode.Fixed).scrollable(false)
+        .animationDuration(this.animationDuration)
+        .animationCurve(this.animationCurve ?? Curve.EaseOut)
+        .animationMode(this.animationMode)
+        // 不带隐式动画标志：宿主逐帧驱动 barHeight（scale 每帧变），收尾的 collapsed 切换时栏体 alpha 已为 0，
+        // 隐式动画会把浮面→贴底的锚点切换也播出来，收起尾巴看起来像"换了个位置接着收"。
         .barHeight(this.barVisible ? this.barHeight : 0)
         // 子组件已有官方材质；纯承载 TabBar 不再额外开启整片重叠模糊。
         .barOverlap(!this.componentMaterial)
@@ -76,6 +86,13 @@ export struct MaterialTabs {
           systemMaterial: materialManager.officialOf(this.slot, this.applyShadow)
         })
         .onChange((index: number): void => { this.onChange(index); })
+        .onAnimationStart((index: number, targetIndex: number): void => {
+          this.onAnimationStart(index, targetIndex);
+        })
+        .onAnimationEnd((index: number): void => { this.onAnimationEnd(index); })
+        .onContentDidScroll((selectedIndex: number, index: number, position: number, mainAxisLength: number): void => {
+          this.onContentDidScroll(selectedIndex, index, position, mainAxisLength);
+        })
         // 官方材质按压时会越过布局边界，不能由承载 Tabs 再次裁切。
         .clip(false)
         .width('100%')
@@ -106,7 +123,7 @@ export struct MaterialTabs {
       HdsTabs({ controller: this.fallbackController, barPosition: BarPosition.End }) {
         this.pages()
       }
-      .vertical(false).barMode(BarMode.Fixed).scrollable(false).animationDuration(0)
+      .vertical(false).barMode(BarMode.Fixed).scrollable(false).animationDuration(this.animationDuration)
       .barHeight(this.barVisible ? this.barHeight : 0).barOverlap(true)
       .barBackgroundColor(Color.Transparent).barBackgroundBlurStyle(BlurStyle.NONE)
       .barFloatingStyle({
@@ -122,6 +139,9 @@ export struct MaterialTabs {
         systemMaterialEffect: materialManager.hdsEffectOf(this.slot)
       })
       .onChange((index: number): void => { this.onChange(index); })
+      .onAnimationStart((index: number, targetIndex: number): void => {
+        this.onAnimationStart(index, targetIndex);
+      })
       .clip(false)
       .width('100%').height('100%')
     }

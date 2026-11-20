@@ -43,10 +43,10 @@ export interface RawForumThemeVariant {
   dark_color?: string;
   light_color?: string;
   /**
-   * 吧页头部**底纹图**。实测 1080×600 的 PNG（`Content-Type` 与文件头都是 PNG，
+   * 吧页头部**底纹图**。是 PNG（`Content-Type` 与文件头都是 PNG，
    * 但 URL 与响应头写的扩展名是 `.jpg`，别按扩展名判断）。
    *
-   * ⚠️ 内容是**极淡的浅色纹理**，不是可直接当深色头部背景的照片：
+   * 内容是**极淡的浅色纹理**，不是可直接当深色头部背景的照片：
    * 必须叠在主题色暗化蒙层之下使用（见 `ForumHeroStyle.ets` 的 scrim 说明）。
    */
   pattern_image?: string;
@@ -84,9 +84,13 @@ export interface RawShownPost {
 }
 export interface RawThreadMedia {
   type?: number | string;
+  /** 实测为小缩略图（106–180px，带 `g=0` 静态） */
   big_pic?: string;
+  /** 实测为 960 宽高清图 */
   src_pic?: string;
   origin_pic?: string;
+  /** 原图字节数 */
+  origin_size?: number | string;
   width?: number | string;
   height?: number | string;
   is_long_pic?: number | string;
@@ -115,9 +119,9 @@ export interface RawThread {
   nid?: string;
   title?: string;
   author_id?: number;
-  /** 真实回帖数。三个吧 × 两个端点交叉实测均为真值 */
+  /** 真实回帖数（与 `comment_num` 相反） */
   reply_num?: number;
-  /** 本端点上实测恒为 0（其它端点可能有值），别拿它当列表页的回帖数 */
+  /** 本端点上恒为 0（其它端点可能有值），别拿它当列表页的回帖数 */
   comment_num?: number;
   view_num?: number;
   share_num?: number;
@@ -240,6 +244,8 @@ export interface RawFeedPic {
   small_pic_url?: string;
   big_pic_url?: string;
   origin_pic_url?: string;
+  /** 原图字节数 */
+  origin_size?: number | string;
   width?: number;
   height?: number;
   is_long_pic?: number;

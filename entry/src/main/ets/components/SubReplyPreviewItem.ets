@@ -1,13 +1,6 @@
 /**
- * 楼中楼预览里的**一条**：`昵称[楼主]：正文` 或 `昵称 回复 某人[楼主]：正文`。
- *
- * 为什么不用完整的楼中楼行（头像 + 时间 + 富文本）：预览块要的是密度，
- * 一行能读完的"谁回复谁"，不是又一张作者卡片。所以这里：
- *   - 不显示头像
- *   - 不显示时间（默认不展示）
- *   - 正文里的图片退化成"查看图片"链接，不撑开高度
- *
- * 发言者用沉蓝色，回复对象和连接词用辅助灰，正文保留清楚的深字。
+ * 楼中楼预览里的一条：`昵称[楼主]：正文` 或 `昵称 回复 某人[楼主]：正文`。预览块要的是密度而不是又一张作者卡片，
+ * 所以不显示头像与时间，正文里的图片退化成"查看图片"链接、不撑开高度；发言者用沉蓝色，回复对象与连接词用辅助灰。
  */
 
 import { ContentPiece, SubPostItem, collectPreviewImageUrls } from '../model/ThreadDetail';
@@ -28,7 +21,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 const PREVIEW_IMAGE_HINT: string = '查看图片';
 
 /**
- * 行内表情边长（vp）：正文14fp，预览行高约18.67vp，表情18vp不撑行。
+ * 行内表情边长（vp）：正文 14fp、预览行高约 18.67vp，表情 18vp 不撑行。
  */
 const PREVIEW_EMOJI_SIZE: number = 18;
 
@@ -39,7 +32,6 @@ export struct SubReplyPreviewItem {
   @Local themeSettings: ThemeModeStore = themeModeStore;
   @Local visualSettings: VisualThemeStore = visualThemeStore;
   private badgeSeq: number = 0;
-  /** 一条楼中楼 */
   @Require @Param sub: SubPostItem;
   /** 点"查看图片"时回传图片地址 */
   @Event onViewImage: (url: string) => void = (): void => {};

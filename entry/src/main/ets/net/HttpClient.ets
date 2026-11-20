@@ -1,12 +1,7 @@
 /**
- * HTTP 传输层。只负责"把字节发出去、把字节拿回来"，不含任何贴吧业务语义。
+ * HTTP 传输层：只负责把字节发出去、把字节拿回来，不含贴吧业务语义。
  *
- * 使用 @kit.NetworkKit 的 http 模块。统一在此收敛：
- * - 超时策略
- * - 请求头
- * - 错误归一化（网络异常不向上抛原始错误，转成可判断的结果对象）
- *
- * 上层（接口层与页面 VM）只关心"拿到了什么字节"和"要不要重试"。
+ * 超时、默认请求头与错误归一化都在这里收口；网络异常转成结果对象，不向上抛原始异常。
  */
 
 import { http } from '@kit.NetworkKit';
@@ -21,13 +16,9 @@ const TAG: string = 'HttpClient';
 
 /** 传输结果。用显式字段而非抛异常，便于上层区分"网络失败"与"业务失败"。 */
 export class HttpResult {
-  /** HTTP 状态码，失败时为 0 */
   code: number = 0;
-  /** 响应体原始字节 */
   bytes: Uint8Array = new Uint8Array(0);
-  /** 是否成功收到 2xx 响应 */
   ok: boolean = false;
-  /** 失败原因，成功时为空串 */
   error: string = '';
   /** 响应头键名统一为小写。set-cookie 可能包含认证凭据，日志只记录存在性或长度。 */
   headers: Record<string, string> = {};
@@ -40,7 +31,6 @@ export class HttpResult {
   }
 }
 
-/** 把 http 模块给的响应头对象归一成"键小写"的字符串表；非法输入返回空表而不是抛异常 */
 function normalizeHeaders(raw: Object | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (raw === undefined || raw === null) {
@@ -63,20 +53,12 @@ export class HttpClient {
   private connectTimeout: number = 10000;
   private readTimeout: number = 15000;
 
-  /**
-   * User-Agent。空 UA 会被百度的风控直接 403（实测：网页接口返回 403 + 挑战页），
-   * 因此不能依赖系统默认值，必须显式设置。
-   * 客户端接口用 "bdtb for Android <版本>"；网页接口需要浏览器 UA。
-   */
+  /** User-Agent。空 UA 会被风控直接 403，不能依赖系统默认值；客户端接口用 "bdtb for Android <版本>"，网页接口需浏览器 UA。 */
   userAgent: string = 'bdtb for Android 12.64.1.1';
 
   /** 以 form 形式 POST。
-   * 贴吧的 form 接口要求 body 为 application/x-www-form-urlencoded，
-   * 且参数顺序需与签名时一致（本实现在签名后不再重排）。
-   *
-   * `extraHeaders` 会**覆盖**默认头（写请求需要精确指定
-   * UA / Cookie / Connection / client_user_token 等）。
-   * **不要在任何日志里输出 Cookie 值**：它可能含 BDUSS/STOKEN。
+   * 参数顺序必须与签名时一致，签名后不能再重排；`extraHeaders` 覆盖默认头。
+   * Cookie 可能含 BDUSS/STOKEN，任何日志都不能输出其值。
    */
   async postForm(url: string, body: string,
     extraHeaders?: Record<string, string>): Promise<HttpResult> {
@@ -127,7 +109,6 @@ export class HttpClient {
     return this.send(url, options);
   }
 
-  /** 以 GET 拉取，用于网页端接口与静态资源 */
   async get(url: string): Promise<HttpResult> {
     const options: http.HttpRequestOptions = {
       method: http.RequestMethod.GET,
@@ -167,10 +148,8 @@ export class HttpClient {
   }
 
   /**
-   * 把**实际入参**（真正交给 `@ohos.net.http` 的那个对象）打成一行脱敏日志。
-   *
-   * 只在点赞端点打印（`shouldLog`），其余请求一行都不打——取证范围之外不留噪音。
-   * 头部取值一律经 `describeHeader` 脱敏；body 只给长度与 hash。
+   * 把真正交给 `@ohos.net.http` 的实际入参打成一行脱敏日志，只在点赞端点打印，其余请求一行都不打。
+   * 头取值一律经 `describeHeader` 脱敏；body 只给长度与 hash。
    */
   private traceOptions(url: string, options: http.HttpRequestOptions): void {
     if (!shouldLog(url)) {
@@ -248,7 +227,7 @@ export class HttpClient {
       if (raw instanceof ArrayBuffer) {
         result.bytes = new Uint8Array(raw);
       } else if (typeof raw === 'string') {
-        // 少数接口返回文本，统一转成字节交由上层处理
+        // 期望 ARRAY_BUFFER 却拿到文本：按失败处理，不当成空响应
         result.bytes = new Uint8Array(0);
         result.ok = false;
         result.error = 'unexpected text response';
@@ -258,7 +237,7 @@ export class HttpClient {
       if (!result.ok && result.error.length === 0) {
         result.error = `http ${response.responseCode}`;
       }
-      // 传输统计：官方也是拿到（成功）响应后才入队一条（见 TransferStats 头注释）
+      // 传输统计：官方也是拿到（成功）响应后才入队一条（见 TransferStats.recordSuccess）
       if (result.ok) {
         TransferStats.recordSuccess(Date.now() - startedAt, result.bytes.length);
       } else {

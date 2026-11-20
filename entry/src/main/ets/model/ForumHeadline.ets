@@ -33,7 +33,7 @@ export class ForumHeadlineResult {
 /**
  * 解析 frs/page(pb) 响应里的头图。
  *
- * ⚠️ 响应是**全量吧页数据**（~260KB），这里只取头图两支，其余一律 skipField。
+ * 响应是**全量吧页数据**，这里只取头图两支，其余一律 skipField。
  * 任何解析异常都兜底成空结果 —— 头图是锦上添花，绝不能拖垮吧页。
  */
 export function parseForumHeadlineProto(bytes: Uint8Array): ForumHeadlineResult {
@@ -110,7 +110,6 @@ class RawHeadImg {
   img_url: string = '';
 }
 
-/** `activityhead` 段 */
 class RawActivityHead {
   head_imgs: RawHeadImg[] = [];
 }
@@ -189,7 +188,6 @@ export function getForumHeadline(forumName: string): string {
   return headlineCache.get(name) ?? '';
 }
 
-/** 当前缓存条数（诊断 / 测试用） */
 export function forumHeadlineCount(): number {
   return headlineCache.size;
 }

@@ -2,6 +2,7 @@
 
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 import { decodeUtf8 } from '../utils/TextCodec';
+import { rememberFeedImage } from './HomeFeedPresentation';
 import { ContentKind, ContentPiece, emojiCodeFromReplyToken, emojiImageUrl } from './ThreadDetail';
 
 /** 收藏响应的错误段（与别处不同：字段叫 `errno`，值是**字符串**） */
@@ -10,7 +11,6 @@ export interface RawStoredError {
   errmsg?: string;
 }
 
-/** 收藏条目的作者段 */
 export interface RawStoredAuthor {
   name?: string;
   name_show?: string;
@@ -23,20 +23,18 @@ export interface RawStoredMedia {
   water_pic?: string;
 }
 
-/** 收藏响应信封（只声明要读的键） */
 export interface RawStoredThreadResponse {
   error?: RawStoredError;
   store_thread?: RawStoredThread[];
 }
 
-/** 收藏列表一项（只声明要读的键，其余忽略） */
 export interface RawStoredThread {
   thread_id?: string;
   title?: string;
   forum_name?: string;
   reply_num?: string;
   create_time?: string;
-  /** 是否已删除。实测是**字符串** "1"/"0"（数字 1/0 也接受） */
+  /** 是否已删除。是**字符串** "1"/"0"（数字 1/0 也接受） */
   is_deleted?: string | number;
   author?: RawStoredAuthor;
   media?: RawStoredMedia[];
@@ -61,7 +59,6 @@ export class StoredThread {
   isDeleted: boolean = false;
 }
 
-/** 收藏响应解析结果 */
 export class StoredThreadList {
   errorCode: number = 0;
   errorMsg: string = '';
@@ -181,10 +178,9 @@ export class UserPostItem {
   /**
    * 发帖时选的「个人主页不可见」：1 = 主页不展示、0 = 全场景可见。
    *
-   * 字段号 41（wire tag 41 / VARINT）。22.12 的 `tbclient.PostInfoList` 注解里这个
-   * tag 写的是 `is_remain`，但**真机对照是它**：同一条帖子（tid 11136843197）在
-   * 官方 App 里改成「全场景可见」前后各抓一次列表响应，全部字段里只有 41 从 1 变 0
-   * （2026-10-25，用户操作、探针 dump 取证）。界面文案用「主页不可见」。
+   * 字段号 41（wire tag 41 / VARINT）。`tbclient.PostInfoList` 注解里这个 tag 写的是
+   * `is_remain`，但对照实测是它：官方 App 改成「全场景可见」前后各抓一次列表响应，
+   * 全部字段里只有 41 从 1 变 0。界面文案用「主页不可见」。
    */
   hideFromProfile: boolean = false;
   isComment: boolean = false;
@@ -356,7 +352,7 @@ function readPostInfo(bytes: Uint8Array): UserPostItem {
       case POST_REPLY_NUM:
         item.replyNum = Number(reader.readVarint());
         break;
-      // 固定 22.11 APK PostInfoList 注解：15 摘要、16 媒体、19 头像、37 赞、39 分享。
+      // 基准 APK PostInfoList 注解：15 摘要、16 媒体、19 头像、37 赞、39 分享。
       case 15:
         summaryPieces = summaryPieces.concat(readPostSummary(reader.readBytes()));
         break;
@@ -414,9 +410,17 @@ function readPostMedia(bytes: Uint8Array, item: UserPostItem): void {
   let source: string = '';
   let origin: string = '';
   let active: string = '';
+  let width: number = 0;
+  let height: number = 0;
+  let originSize: number = 0;
+  let isLong: boolean = false;
   while (reader.hasMore()) {
     const field: number = reader.readTag();
     if (field === 1 && reader.wireType === WireType.VARINT) { type = reader.readInt32(); }
+    else if (field === 10 && reader.wireType === WireType.VARINT) { width = Number(reader.readVarint()); }
+    else if (field === 11 && reader.wireType === WireType.VARINT) { height = Number(reader.readVarint()); }
+    else if (field === 16 && reader.wireType === WireType.VARINT) { originSize = Number(reader.readVarint()); }
+    else if (field === 19 && reader.wireType === WireType.VARINT) { isLong = Number(reader.readVarint()) === 1; }
     else if (reader.wireType === WireType.LENGTH_DELIMITED && [3, 8, 15, 18].includes(field)) {
       const url: string = reader.readString();
       if (!/^https?:\/\//i.test(url)) { continue; }
@@ -428,8 +432,14 @@ function readPostMedia(bytes: Uint8Array, item: UserPostItem): void {
   }
   const preview: string = active || big || source || origin;
   if (type === 3 && preview.length > 0) {
+    const resolvedOrigin: string = origin || source || preview;
     item.images.push(preview);
-    item.originImages.push(origin || source || preview);
+    item.originImages.push(resolvedOrigin);
+    rememberFeedImage(preview, width, height, isLong, resolvedOrigin, {
+      thumb: big || active || preview,
+      high: source || big || preview,
+      originBytes: originSize
+    });
   }
 }
 

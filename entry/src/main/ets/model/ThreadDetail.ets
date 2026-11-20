@@ -5,11 +5,8 @@
  * 且有确定值的信息。转换集中在各个 `from*` 静态方法里，服务端缺字段时落默认值，
  * UI 层因此不必写 `?? 0` 这类防御代码。
  *
- * 三处容易做错、已在注释里钉死的地方：
- *   1. 楼层作者是 `author_id` + 顶层 `user_list` 的映射，不是内联对象；
- *      而楼中楼作者是内联 `author`。两者共用 UserBrief，但取值路径不同。
- *   2. 显示名优先 `name_show`，空才用 `name`（实测两者常不同）。
- *   3. `bsize` 是 "宽,高" 的字符串，要拆成两个数；拆不出就留 0，由 UI 兜底。
+ * 三处容易做错的地方：楼层作者是 `author_id` + 顶层 `user_list` 的映射（楼中楼作者才是内联
+ * `author`）；显示名优先 `name_show`，空才用 `name`；`bsize` 是 "宽,高" 的字符串，拆不出就留 0。
  */
 
 import {
@@ -20,16 +17,16 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { formatTimeText } from './TimeText';
 import { VoiceClip, parseVoiceClip, voiceClipLabel } from './VoiceClip';
 import { VideoClip, parseVideoClip } from './VideoClip';
+import { BodyImageSource, ViewerImage, viewerImagesForBody } from './ImageLoadPolicy';
 
 const FLOW_TAG: string = 'AgreeFlow';
 const FLOW_DOMAIN: number = 0x0000;
 
-/** 把 0/1 标志位转成布尔。实测服务端只用 1 表示真，别的值一律当假 */
+/** 把 0/1 标志位转成布尔。服务端只用 1 表示真，别的值一律当假 */
 function toFlag(value: number | undefined): boolean {
   return value === 1;
 }
 
-/** 可空数字 → 数字 */
 function toNum(value: number | undefined): number {
   return value === undefined ? 0 : value;
 }
@@ -40,7 +37,17 @@ function userLevel(value: number | string | undefined, unknown: number): number 
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : unknown;
 }
 
-/** 可空字符串 → 字符串 */
+function toBytes(value: number | string | undefined): number {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed: number = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
+}
+
 function toStr(value: string | undefined): string {
   return value === undefined ? '' : value;
 }
@@ -137,7 +144,7 @@ export function emojiImageUrl(code: string): string {
 /**
  * 从贴吧的跳转链接里取出真实目标地址。
  *
- * 实测链接片段的 link 是 `https://tieba.baidu.com/mo/q/checkurl?url=<URL编码的真实地址>&urlrefer=...`，
+ * 链接片段的 link 是 `https://tieba.baidu.com/mo/q/checkurl?url=<URL编码的真实地址>&urlrefer=...`，
  * 直接展示这个只会看到一堆编码。取不到时原样返回，保证不丢信息。
  */
 export function resolveRealLink(link: string): string {
@@ -293,7 +300,7 @@ export enum ContentKind {
   REPLY_TARGET = 4,
   /** 界面内部的话题种类，不对应服务端 type 编号 */
   TOPIC = 5,
-  /** 未实测到的类型，按纯文本兜底处理，不丢内容也不崩 */
+  /** 未确认的类型，按纯文本兜底处理，不丢内容也不崩 */
   UNKNOWN = 99
 }
 
@@ -301,19 +308,21 @@ export enum ContentKind {
 export class ContentPiece {
   voice: VoiceClip | undefined = undefined;
   kind: ContentKind = ContentKind.TEXT;
-  /** TEXT/LINK/TOPIC 的显示文本 */
   text: string = '';
   /** LINK/TOPIC 的目标地址；纯文字话题可为空 */
   link: string = '';
-  /** EMOJI 的图片地址；空串表示只能显示文字 */
+  /** 空串表示只能显示文字 */
   emojiUrl: string = '';
-  /** EMOJI 的中文名，如"欢呼" */
   emojiName: string = '';
-  /** IMAGE 展示用地址 */
   imageUrl: string = '';
-  /** IMAGE 原图地址 */
+  /** 带 `g=0` 的静态首帧通道（`cdn_src`） */
+  staticUrl: string = '';
+  /** 960 宽高清通道（`big_cdn_src`） */
+  bigImageUrl: string = '';
   originImageUrl: string = '';
-  /** IMAGE 宽高，解析失败为 0 */
+  /** 原图字节数 */
+  originBytes: number = 0;
+  /** 解析失败为 0，由 UI 兜底比例 */
   width: number = 0;
   height: number = 0;
 
@@ -340,11 +349,11 @@ export class ContentPiece {
   /**
    * 拆分普通文本里的网址、话题和官方表情编码。
    *
-   * 贴吧接口并不总把表情单独标成 type=2；实测 type=0 文本会直接包含
+   * 贴吧接口并不总把表情单独标成 type=2；type=0 文本会直接包含
    * `image_emoticon22`，甚至一段里出现多个编码。这里只复用 emojiImageUrl
    * 已验证过的前缀和官方 CDN 规则，不维护编号到图片的临时映射。
    */
-  private static splitTextAndEmoji(text: string): ContentPiece[] {
+  static splitTextAndEmoji(text: string): ContentPiece[] {
     const out: ContentPiece[] = [];
     let plainStart: number = 0;
     let cursor: number = 0;
@@ -356,6 +365,14 @@ export class ContentPiece {
         ? text.substring(cursor) : '';
       const urlMatch: RegExpMatchArray | null = rest.match(/^(?:https?:\/\/|www\.)[^\s<>"“”‘’，。！？、；]+/i);
       const topicMatch: RegExpMatchArray | null = rest.match(/^(##?)([^#\r\n]{1,100})\1/);
+      /**
+       * 官方表情的中文写法 `#(酸爽)`。它和话题一样以 `#` 开头、这里又没有结尾 `#`，
+       * 但两个表情相邻时（`#(呵呵)#(哈哈)`）从第一个表情到第二个 `#` 正好构成 `#…#` 话题形状，
+       * 话题分支会先把整段吃掉。所以认得出的表情 token 要排在话题前面；
+       * 认不出的 `#(xxx)#` 仍然按话题解析。
+       */
+      const faceMatch: RegExpMatchArray | null = rest.match(/^#\(([^()\r\n]{1,12})\)/);
+      const faceCode: string = faceMatch === null ? '' : emojiCodeFromReplyToken(faceMatch[0]);
       let interactive: ContentPiece | null = null;
       let end: number = cursor;
       if (urlMatch !== null && (cursor === 0 || !/[a-z0-9_@]/i.test(text[cursor - 1]))) {
@@ -371,6 +388,14 @@ export class ContentPiece {
           interactive.link = webLinkUrl(url);
           end = cursor + url.length;
         }
+      } else if (faceCode.length > 0 && faceMatch !== null) {
+        const face: ContentPiece = new ContentPiece();
+        face.kind = ContentKind.EMOJI;
+        face.text = faceCode;
+        face.emojiName = faceMatch[1];
+        face.emojiUrl = emojiImageUrl(faceCode);
+        interactive = face;
+        end = cursor + faceMatch[0].length;
       } else if (topicMatch !== null && topicMatch[2].trim().length > 0) {
         interactive = new ContentPiece();
         interactive.kind = ContentKind.TOPIC;
@@ -469,7 +494,7 @@ export class ContentPiece {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_';
   }
   /**
-   * 单个片段转换。type 取值全部来自实测：
+   * 单个片段转换。type 取值：
    *   0 文本 {text}（可能内嵌表情编码）/ 1 链接 {text,link}
    *   2 表情 {text:image_emoticon<N>, c:中文名}
    *   3 图片 {origin_src, cdn_src, cdn_src_active, bsize:"宽,高"}
@@ -506,11 +531,13 @@ export class ContentPiece {
     }
     if (type === 3) {
       c.kind = ContentKind.IMAGE;
-      // 活动图优先，它在各端适配最好；退回常规图
       const active: string = toStr(raw.cdn_src_active);
       const normal: string = toStr(raw.cdn_src);
       c.imageUrl = active.length > 0 ? active : normal;
+      c.staticUrl = normal;
+      c.bigImageUrl = toStr(raw.big_cdn_src);
       c.originImageUrl = toStr(raw.origin_src);
+      c.originBytes = toBytes(raw.origin_size);
       const size: number[] = ContentPiece.parseSize(toStr(raw.bsize));
       c.width = size[0];
       c.height = size[1];
@@ -560,11 +587,16 @@ export class ContentPiece {
  * 为什么单独建类：正文里**连续的图片会合并成一个可左右滑动的图集**，
  * 一个块里可能有多张，ContentBlock 上那三个标量字段表达不了。
  */
-export class ContentImage {
-  /** 展示用地址 */
+export class ContentImage implements BodyImageSource {
   imageUrl: string = '';
+  /** 带 `g=0` 的静态首帧通道（`cdn_src`） */
+  staticUrl: string = '';
+  /** 960 宽高清通道（`big_cdn_src`） */
+  bigImageUrl: string = '';
   /** 原图地址；为空时查看器退回 imageUrl */
   originImageUrl: string = '';
+  /** 原图字节数 */
+  originBytes: number = 0;
   /** 原始宽高；0 表示服务端没给，由 UI 用默认比例兜底 */
   width: number = 0;
   height: number = 0;
@@ -589,9 +621,13 @@ export class ContentBlock {
   imageStartIndex: number = 0;
   /** 首图镜像。旧调用方（只关心首图的地方）继续可用，等于 images[0] 的对应字段 */
   imageUrl: string = '';
-  /** 首图原图地址；为空时查看器退回 imageUrl */
+  /** 带 `g=0` 的静态首帧通道（`cdn_src`） */
+  staticUrl: string = '';
+  /** 960 宽高清通道（`big_cdn_src`） */
+  bigImageUrl: string = '';
   originImageUrl: string = '';
-  /** 首图原始宽高；0 表示服务端没给，由 UI 用默认比例兜底 */
+  /** 原图字节数 */
+  originBytes: number = 0;
   width: number = 0;
   height: number = 0;
   /** 文本块包含的片段（文本/链接/表情），至少一个 */
@@ -622,7 +658,10 @@ export function groupContentBlocks(pieces: ContentPiece[]): ContentBlock[] {
   const appendImage = (block: ContentBlock, piece: ContentPiece): void => {
     const img: ContentImage = new ContentImage();
     img.imageUrl = piece.imageUrl;
+    img.staticUrl = piece.staticUrl;
+    img.bigImageUrl = piece.bigImageUrl;
     img.originImageUrl = piece.originImageUrl;
+    img.originBytes = piece.originBytes;
     img.width = piece.width;
     img.height = piece.height;
     block.images.push(img);
@@ -671,7 +710,7 @@ export const FALLBACK_IMAGE_ASPECT: number = 1.5;
 /**
  * 图集整体高度所用宽高比的上下限。
  *
- * 不夹紧会走极端：一组全是竖长截图（实测 560×995 → 0.563）会把图集撑到屏高的
+ * 不夹紧会走极端：一组全是竖长截图会把图集撑到屏高的
  * 一大半，一组全是横图又只剩一条缝。夹紧后图集高度落在「宽的 0.625~1.5 倍」之间。
  */
 export const GALLERY_ASPECT_MIN: number = 0.66;
@@ -723,6 +762,25 @@ export function collectPreviewImageUrls(pieces: ContentPiece[]): string[] {
     }
   }
   return urls;
+}
+
+/** 收集一组正文片段对应的全屏查看器图片序列（与 `collectPreviewImageUrls` 顺序一致）。 */
+export function collectViewerImages(pieces: ContentPiece[]): ViewerImage[] {
+  const sources: BodyImageSource[] = [];
+  for (let i: number = 0; i < pieces.length; i++) {
+    const piece: ContentPiece = pieces[i];
+    if (piece.kind !== ContentKind.IMAGE) { continue; }
+    if (piece.originImageUrl.length === 0 && piece.bigImageUrl.length === 0 &&
+      piece.imageUrl.length === 0 && piece.staticUrl.length === 0) { continue; }
+    const img: ContentImage = new ContentImage();
+    img.imageUrl = piece.imageUrl;
+    img.staticUrl = piece.staticUrl;
+    img.bigImageUrl = piece.bigImageUrl;
+    img.originImageUrl = piece.originImageUrl;
+    img.originBytes = piece.originBytes;
+    sources.push(img);
+  }
+  return viewerImagesForBody(sources);
 }
 
 /** 去掉正文开头多余的分隔符。实测被回复人后面紧跟的正文以 " :" 开头 */
@@ -783,22 +841,16 @@ export function parseReplyTarget(pieces: ContentPiece[]): ReplyTargetParse {
 
 /** 用户的展示信息。详情页作者与楼中楼作者共用 */export class UserBrief {
   id: number = 0;
-  /** 展示名：name_show 优先，空则用 name */
   displayName: string = '';
-  /** 用户名（@名） */
   userName: string = '';
-  /** 头像地址，可能为空 */
   portraitUrl: string = '';
-  /** 吧内等级 */
   level: number = 0;
   levelName: string = '';
   /** 个人成长等级；-1表示接口未提供，明确0保留为0。 */
   growthLevel: number = -1;
   /** IP 归属地，可能为空 */
   ipLocation: string = '';
-  /** 是否吧务 */
   isBawu: boolean = false;
-  /** 吧务头衔描述 */
   bawuTitle: string = '';
 
   /** 从服务端用户对象构造。两种来源（user_list 元素 / 楼中楼 author）字段同名 */
@@ -939,11 +991,9 @@ export function forumChipText(responseName: string, sourceName: string): string 
   return name.length > 0 ? name : FORUM_CHIP_PLACEHOLDER;
 }
 
-/** 一个楼层 */
 export class PostItem {
-  /** 楼层 id */
   pid: number = 0;
-  /** 楼层号。实测会跳号，不能当序号用 */
+  /** 楼层号。会跳号，不能当序号用 */
   floor: number = 0;
   /** 首楼的标题（与主题标题同）；后续楼层为空 */
   title: string = '';
@@ -952,7 +1002,6 @@ export class PostItem {
   timeText: string = '';
   author: UserBrief = new UserBrief();
   contents: ContentPiece[] = [];
-  /** 点赞数 */
   agreeCount: number = 0;
 
   isAgreed: boolean = false;
@@ -965,13 +1014,12 @@ export class PostItem {
    * 二次请求会让预览框先矮后高，把下面的内容顶走。
    */
   inlineSubPosts: SubPostItem[] = [];
-  /** 该楼被折叠 */
   isFold: boolean = false;
   foldTip: string = '';
 
   /**
    * 从服务端楼层构造。
-   * `users` 是本页顶层的用户表，用 `author_id` 去查——实测覆盖率 100%。
+   * `users` 是本页顶层的用户表，用 `author_id` 去查。
    */
   static fromRaw(raw: RawPost, users: Map<number, UserBrief>, nowMs: number): PostItem {
     const p: PostItem = new PostItem();
@@ -1014,7 +1062,7 @@ export class PostItem {
       s.timeText = formatTimeText(s.timeMs, nowMs);
       /*
        * 内联楼中楼不带头像/昵称对象，只有 `author_id`；`title` 是原楼层正文摘要
-       * （实测形如「回复：xxx」），不能当昵称用。作者仍走本页 `user_list` 查表，
+       * （形如「回复：xxx」），不能当昵称用。作者仍走本页 `user_list` 查表，
        * 查不到时 `lookupUser` 给"匿名用户"占位；点开详情后 floor 接口会补全。
        */
       s.author = PostItem.lookupUser(users, toNum(item.author_id));
@@ -1062,7 +1110,6 @@ export function copyPostItem(src: PostItem): PostItem {
   return c;
 }
 
-/** 楼中楼的一条回复 */
 export class SubPostItem {
   pid: number = 0;
   timeMs: number = 0;
@@ -1113,22 +1160,19 @@ export class ThreadDetail {
   isAgreed: boolean = false;
   createTimeMs: number = 0;
   /**
-   * 发帖时选的内容声明，来自 `thread.content_statement`（真机取证 2026-10-25，
-   * 样本值「疑似含AI内容」）。没有写声明的帖子此字段为空串，界面整段不渲染。
+   * 发帖时选的内容声明，来自 `thread.content_statement`（样本值「疑似含AI内容」）。
+   * 没有写声明的帖子此字段为空串，界面整段不渲染。
    */
   contentStatement: string = '';
 
   isStored: boolean = false;
-  /** 楼主 */
   author: UserBrief = new UserBrief();
-  /** 本页楼层 */
   posts: PostItem[] = [];
 
   forumName: string = '';
   forumId: number = 0;
   /** 吧头像完整地址；服务端缺失时为空串，界面退回默认图 */
   forumAvatar: string = '';
-  /** 关注数 */
   forumMemberNum: number = 0;
   page: DetailPageInfo = new DetailPageInfo();
 
@@ -1211,7 +1255,7 @@ export class ThreadDetail {
      *   1. 正常情况按 `thread.author.id` 去 `user_list` 找同 id 条目；
      *   2. `thread` 整个缺失时 `d.author.id` 为 0，改从首楼（`floor === 1`）的作者取——
      *      首楼作者本来就是主帖作者，而且它已经是 `user_list` 里的对象。
-     * 实测 `ip_address` 只在 `user_list` 上，不补的话作者区的"地区"永远是空的。
+     * `ip_address` 只在 `user_list` 上，不补的话作者区的"地区"永远是空的。
      */
     let fallback: UserBrief | undefined = users.get(d.author.id);
     if (fallback === undefined && d.posts.length > 0 && d.posts[0].floor === 1) {
@@ -1219,7 +1263,7 @@ export class ThreadDetail {
     }
     d.author = mergeAuthorFallback(d.author, fallback);
 
-    // 首楼标题为空时用主题标题补：实测首楼 title 与 thread.title 相同，
+    // 首楼标题为空时用主题标题补：首楼 title 与 thread.title 相同，
     // 但服务端若只给一个，界面也不该空着
     if (d.posts.length > 0 && d.posts[0].floor === 1 && d.posts[0].title.length === 0) {
       d.posts[0].title = d.title;
@@ -1411,21 +1455,15 @@ export class SubPostPage {
  */
 @ObservedV2
 export class SubPostThreadState {
-  /** 所属楼层 id */
   pid: number = 0;
-  /** 是否展开 */
   @Trace expanded: boolean = false;
-  /** 是否正在请求楼中楼 */
   @Trace loading: boolean = false;
-  /** 是否成功加载过第一页 */
   @Trace loadedOnce: boolean = false;
   /** 加载失败提示。首页失败与分页失败共用，界面按 subPosts 是否为空区分展示位置 */
   @Trace errorText: string = '';
-  /** 已加载的楼中楼 */
   @Trace subPosts: SubPostItem[] = [];
-  /** 楼中楼分页信息；currentPage 用于推进下一页 */
+  /** `page.currentPage` 用于推进下一页 */
   @Trace page: SubPostPage = new SubPostPage();
-  /** 是否还有下一页 */
   @Trace hasMore: boolean = false;
   /**
    * 当前 `subPosts` 是楼层内联下发的预览（不是 floor 接口的完整一页）。

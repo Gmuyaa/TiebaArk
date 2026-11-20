@@ -2,14 +2,14 @@ import { ThemeColorRole, themeResource } from './ThemePalette';
 
 /** 应用配色入口与共享尺寸。新增六色只覆盖强调与交互，浅深中性色沿用经典资源。 */
 export class AppTheme {
-  /** 通知数字角标：固定语义红与白字，深浅主题均保持可读。 */
+  /** 通知角标：语义红底白字，深浅模式共用 */
   static get NOTIFY_BADGE_BACKGROUND(): Resource {
     return themeResource($r('app.color.notify_badge_background'), $r('app.color.notify_badge_background'), ThemeColorRole.NOTIFY_BG);
   }
   static get NOTIFY_BADGE_TEXT(): Resource {
     return themeResource($r('app.color.notify_badge_text'), $r('app.color.notify_badge_text'), ThemeColorRole.NOTIFY_TEXT);
   }
-  /** 旧蓝色光边资源仅兼容历史声明；现有官方材质不额外恢复自绘光边。 */
+  /** 光边资源仅为历史兼容保留；官方材质下不再自绘光边。 */
   static get FORUM_TAB_GLOW_BORDER(): Resource {
     return themeResource($r('app.color.forum_tab_glow_border'), $r('app.color.forum_tab_glow_border'), ThemeColorRole.LEGACY_GLOW_BORDER);
   }
@@ -22,7 +22,7 @@ export class AppTheme {
   static get HELP_ANSWER(): Resource {
     return themeResource($r('app.color.help_answer_tag'), $r('app.color.help_answer_tag'), ThemeColorRole.HELP_ANSWER);
   }
-  /** 强调色：选中态、发布按钮、链接（浅 `#0A59F7` / 深 `#317AF7`，对齐 detail_accent） */
+  /** 强调色：选中态、发布按钮、链接（对齐官方 detail_accent） */
   static get ACCENT(): Resource {
     return themeResource($r('app.color.app_accent'), $r('app.color.paper_app_accent'), ThemeColorRole.ACCENT);
   }
@@ -30,7 +30,7 @@ export class AppTheme {
   static get ACCENT_LIGHT(): Resource {
     return themeResource($r('app.color.app_accent_light'), $r('app.color.paper_app_accent_light'), ThemeColorRole.ACCENT_LIGHT);
   }
-  /** 强调色深字：浅底上的文字（深色模式翻转为亮蓝 `#6EA6FF`，落在深蓝底上可读） */
+  /** 浅底上的文字；深色模式翻成亮蓝，落在深蓝底上仍可读。 */
   static get ACCENT_DARK(): Resource {
     return themeResource($r('app.color.app_accent_dark'), $r('app.color.paper_app_accent_dark'), ThemeColorRole.ACCENT_DARK);
   }
@@ -38,23 +38,20 @@ export class AppTheme {
   static get ICON(): Resource {
     return themeResource($r('app.color.app_icon'), $r('app.color.paper_app_icon'), ThemeColorRole.ICON);
   }
-  /** 页面浅灰背景（深 `#0A0A0B`，对齐 detail_page_background dark） */
+  /** 页面背景（对齐官方 detail_page_background） */
   static get BG(): Resource {
     return themeResource($r('app.color.app_bg'), $r('app.color.paper_app_bg'), ThemeColorRole.BG);
   }
-  /** 卡片白（深 `#191919`，比页面底 `#0A0A0B` 亮一档，保持卡片分层） */
+  /** 卡片底色：比页面底亮一档，维持卡片与页面的分层 */
   static get CARD(): Resource {
     return themeResource($r('app.color.app_card'), $r('app.color.paper_app_card'), ThemeColorRole.CARD);
   }
-  /** 主文字 */
   static get TEXT_MAIN(): Resource {
     return themeResource($r('app.color.app_text_main'), $r('app.color.paper_app_text_main'), ThemeColorRole.TEXT_MAIN);
   }
-  /** 次要文字 */
   static get TEXT_SUB(): Resource {
     return themeResource($r('app.color.app_text_sub'), $r('app.color.paper_app_text_sub'), ThemeColorRole.TEXT_SUB);
   }
-  /** 分割线 */
   static get DIVIDER(): Resource {
     return themeResource($r('app.color.app_divider'), $r('app.color.paper_app_divider'), ThemeColorRole.DIVIDER);
   }
@@ -70,73 +67,72 @@ export class AppTheme {
   static get TAB_PILL_TEXT(): Resource {
     return themeResource($r('app.color.app_tab_pill_text'), $r('app.color.paper_app_tab_pill_text'), ThemeColorRole.TEXT_MAIN);
   }
-  /** 下划线式页签未选中字色（原 `#66666B`） */
+  /** 下划线式页签未选中字色 */
   static get TAB_UNDERLINE_TEXT(): Resource {
     return themeResource($r('app.color.app_tab_underline_text'), $r('app.color.paper_app_tab_underline_text'), ThemeColorRole.TEXT_SUB);
   }
-  /** 「返回推荐」等行内次级链接（原 `#75757A`） */
+  /** 行内次级链接（如「返回推荐」）字色 */
   static get LINK_HINT(): Resource {
     return themeResource($r('app.color.app_link_hint'), $r('app.color.paper_app_link_hint'), ThemeColorRole.TEXT_SUB);
   }
-  /** 搜索胶囊占位字（原 `#8A8A8E`） */
+  /** 搜索胶囊占位字色 */
   static get SEARCH_HINT(): Resource {
     return themeResource($r('app.color.app_search_hint'), $r('app.color.paper_app_search_hint'), ThemeColorRole.TEXT_MUTED);
   }
-  /** 楼中楼 / 弱化信息字（原 ForumListView `#606065`） */
+  /** 楼中楼与弱化信息字色 */
   static get META_TEXT(): Resource {
     return themeResource($r('app.color.app_meta_text'), $r('app.color.paper_app_meta_text'), ThemeColorRole.TEXT_SUB);
   }
-  /** 吧页页签字（原 ForumPage / ForumListView `#4C4C50`） */
+  /** 吧页页签字色 */
   static get BAR_TAB_TEXT(): Resource {
     return themeResource($r('app.color.app_bar_tab_text'), $r('app.color.paper_app_bar_tab_text'), ThemeColorRole.TEXT_MAIN);
   }
-  /** 「我的」页功能行字（原 ProfileView `#333333`） */
+  /** 「我的」页功能行字色 */
   static get TEXT_ROW(): Resource {
     return themeResource($r('app.color.app_text_row'), $r('app.color.paper_app_text_row'), ThemeColorRole.TEXT_MAIN);
   }
-  /** 页脚小字（原 ProfileView `#BBBBBB`） */
+  /** 页脚小字 */
   static get TEXT_CAPTION(): Resource {
     return themeResource($r('app.color.app_text_caption'), $r('app.color.paper_app_text_caption'), ThemeColorRole.TEXT_MUTED);
   }
-  /** 功能行右箭头 ›（原 ProfileView `#CCCCCC`） */
+  /** 功能行右箭头 › 的颜色 */
   static get ARROW_ROW(): Resource {
     return themeResource($r('app.color.app_arrow_row'), $r('app.color.paper_app_arrow_row'), ThemeColorRole.TEXT_MUTED);
   }
-  /** 消息列表右箭头（原 MessageView `#C8C8CC`） */
+  /** 消息列表右箭头 */
   static get ARROW_LIST(): Resource {
     return themeResource($r('app.color.app_arrow_list'), $r('app.color.paper_app_arrow_list'), ThemeColorRole.TEXT_MUTED);
   }
-  /** 设置页右侧值文字（原 SettingsCardStyle.VALUE_TEXT `#767676`） */
+  /** 设置页右侧值文字 */
   static get VALUE_TEXT(): Resource {
     return themeResource($r('app.color.app_value_text'), $r('app.color.paper_app_value_text'), ThemeColorRole.TEXT_SUB);
   }
-  /** 设置页右侧细箭头（原 SettingsCardStyle.CHEVRON_TINT `#BABABA`） */
+  /** 设置页右侧细箭头 */
   static get CHEVRON_TINT(): Resource {
     return themeResource($r('app.color.app_chevron_tint'), $r('app.color.paper_app_chevron_tint'), ThemeColorRole.TEXT_MUTED);
   }
-  /** 危险项字（原 SettingsCardStyle.DANGER_TEXT `#C7161C`；深色对齐 detail_error dark） */
+  /** 危险项字色（深色对齐官方 detail_error） */
   static get DANGER_TEXT(): Resource {
     return themeResource($r('app.color.app_danger_text'), $r('app.color.paper_app_danger_text'), ThemeColorRole.ERROR);
   }
-  /** 设置弹层选项分隔线（原 SettingsCardStyle.POPUP_LINE `#CBCBCB`） */
+  /** 设置弹层选项分隔线 */
   static get POPUP_LINE(): Resource {
     return themeResource($r('app.color.app_popup_line'), $r('app.color.paper_app_popup_line'), ThemeColorRole.DIVIDER);
   }
-  /** 关于页数据说明字（原 Settings.ets `#666666`） */
+  /** 关于页数据说明字 */
   static get NOTE_TEXT(): Resource {
     return themeResource($r('app.color.app_note_text'), $r('app.color.paper_app_note_text'), ThemeColorRole.TEXT_SUB);
   }
-  /** 头像占位底（原 AvatarComponent 默认 `#F1F1F3`） */
+  /** 头像占位底色 */
   static get AVATAR_BG(): Resource {
     return themeResource($r('app.color.app_avatar_bg'), $r('app.color.paper_app_avatar_bg'), ThemeColorRole.AVATAR_BG);
   }
-  /** 吧页页签条底（原 ForumPage `#F5F7FA`） */
+  /** 吧页页签条底色 */
   static get FORUM_TAB_BG(): Resource {
     return themeResource($r('app.color.app_forum_tab_bg'), $r('app.color.paper_app_forum_tab_bg'), ThemeColorRole.CARD);
   }
-  /** 设置页顶栏渐隐的起始色（原 SettingsCardStyle.NAV_FADE_COLOR `#FFFFFF`；深色=页面底）。
-   *  透明终点保留同一页面色相。
-   *  ⚠️ 当前无调用点：设置页顶栏已改为官方玻璃材质，保留定义供后续复用。 */
+  /** 设置页顶栏渐隐的起始色，透明终点沿用同一页面色相。
+   *  ⚠️ 当前无调用点：设置页顶栏已改用官方玻璃材质，保留资源供后续复用。 */
   static get NAV_FADE(): Resource {
     return themeResource($r('app.color.app_nav_fade'), $r('app.color.paper_app_nav_fade'), ThemeColorRole.NAV_FADE);
   }
@@ -144,13 +140,13 @@ export class AppTheme {
   static get NAV_FADE_CLEAR(): Resource {
     return themeResource($r('app.color.app_nav_fade_clear'), $r('app.color.paper_app_nav_fade_clear'), ThemeColorRole.NAV_FADE_CLEAR);
   }
-  /** 首页底栏 `gradientMask.maskColor`（原 `#33F5F5F7` = 页面底色 20%）。
-   *  ⚠️ 这层是"页面底色的延伸"，不是玻璃 —— 深色下必须跟着页面底走，否则浅雾突兀。
-   *  ⚠️ 2026-11-09 起首页底栏不再叠这层蒙层（`Index` 传 `Color.Transparent`），保留资源供后续复用。 */
+  /** 首页底栏 `gradientMask.maskColor`。
+   *  ⚠️ 这层是页面底色的延伸，不是玻璃 —— 深色下必须跟着页面底走，否则浅雾突兀。
+   *  ⚠️ 当前首页底栏不再叠这层蒙层（`Index` 传 `Color.Transparent`），保留资源供后续复用。 */
   static get BOTTOM_BAR_MASK(): Resource {
     return themeResource($r('app.color.app_bottom_mask'), $r('app.color.paper_app_bottom_mask'), ThemeColorRole.BOTTOM_MASK);
   }
-  /** 消息页分类徽章四组「浅彩底 + 彩字」（原 MessageView 字面量；深色 = 深彩底 + 亮字） */
+  /** 消息页分类徽章四组「浅彩底 + 彩字」；深色为深彩底 + 亮字 */
   static get MSG_BADGE_RED_BG(): Resource {
     return themeResource($r('app.color.app_msg_badge_red_bg'), $r('app.color.paper_emphasis_light'), ThemeColorRole.MSG_RED_BG);
   }
@@ -250,34 +246,29 @@ export class AppTheme {
   static get MEDIA_ACCENT(): Resource {
     return themeResource($r('app.color.theme_classic_media_accent'), $r('app.color.theme_paper_media_accent'), ThemeColorRole.MEDIA_ACCENT);
   }
-  /** 首页顶栏「明度保护层」的渐隐色（`#D9` 页面底 → 透明）。
-   *  ⚠️ 当前无调用点：2026-11-09 起顶栏不再铺这层渐隐，`HomeTopNavBackdrop` 已移除。 */
+  /** 首页顶栏「明度保护层」的渐隐色（页面底 → 透明）。
+   *  ⚠️ 当前无调用点：顶栏不再铺这层渐隐，保留资源供后续复用。 */
   static get HOME_TOP_BACKDROP(): Resource {
     return themeResource($r('app.color.theme_classic_home_top_backdrop'), $r('app.color.theme_paper_home_top_backdrop'), ThemeColorRole.HOME_TOP_BACKDROP);
   }
   static get HOME_TOP_BACKDROP_CLEAR(): Resource {
     return themeResource($r('app.color.theme_classic_home_top_backdrop_clear'), $r('app.color.theme_paper_home_top_backdrop_clear'), ThemeColorRole.HOME_TOP_BACKDROP_CLEAR);
   }
-  /** 发帖按钮的沉浸光感着色：当前主题强调色，六色主题各自独立。
-   *  2026-11-10 起 alpha 由 70% 提到 100%（`#B3` → `#FF`），且浅深同色——按钮在深浅模式下观感一致。
-   *  统一取深色那支（强调色的亮版，如经典 `#317AF7`）：原浅色 `#0A59F7` 偏深，放浅底上显得沉。
-   *  ⚠️ 圆面既已不透明，圆内图标就不能再跟 `TEXT_MAIN`：`HomeComposeButton` 固定传白色。 */
+  /** 发帖按钮的沉浸光感着色：主题强调色，六套主题各自独立，深浅同色。
+   *  ⚠️ 圆面已不透明，圆内图标不能再跟 `TEXT_MAIN`：`HomeComposeButton` 固定传白色。 */
   static get COMPOSE_TINT(): Resource {
     return themeResource($r('app.color.theme_classic_compose_tint'), $r('app.color.theme_paper_compose_tint'), ThemeColorRole.COMPOSE_TINT);
   }
 
-  /** 全局页面左右安全留白 */
   static readonly PAGE_GUTTER: number = 12;
-  /** 信息流卡片圆角 */
   static readonly CARD_RADIUS: number = 16;
-  /** 悬浮胶囊圆角 */
   static readonly PILL_RADIUS: number = 28;
 
-  /** 主界面悬浮底栏高度：对齐参考图的 56vp 胶囊。 */
+  /** 悬浮底栏内容高，与 `BAR_SAFE_H` 共同决定 `BAR_TOTAL_H` */
   static readonly BAR_CONTENT_H: number = 56;
 
   static readonly BAR_SIDE: number = 24;
-  /** 悬浮底栏底边到物理屏底的距离：参考图与本机均为 28vp。 */
+  /** 悬浮底栏底边到物理屏底的距离 */
   static readonly BAR_SAFE_H: number = 28;
 
   static readonly BAR_TOTAL_H: number = AppTheme.BAR_CONTENT_H + AppTheme.BAR_SAFE_H;
@@ -285,7 +276,7 @@ export class AppTheme {
 
 /** 帖子详情页语义颜色；由 base/dark 资源自动跟随系统深浅色。 */
 export class DetailTheme {
-  /** 评论区试调语义色；深浅色资源分别配置，链接与已选状态仍用 ACCENT。 */
+  /** 评论区昵称色；链接与已选状态仍用 ACCENT。 */
   static get COMMENT_NICKNAME(): Resource {
     return themeResource($r('app.color.detail_comment_nickname'), $r('app.color.paper_detail_comment_nickname'), ThemeColorRole.TEXT_SUB);
   }

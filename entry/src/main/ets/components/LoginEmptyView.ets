@@ -1,12 +1,8 @@
 /**
- * 未登录功能的统一空态视图。
+ * 未登录功能的统一空态视图：图标 + 主文案 + 副文案 + 一个"去登录"按钮。
  *
- * 关注 / 消息这类依赖登录态的功能，在登录做出来之前都挂这个空态：
- * 图标 + 主文案 + 副文案 + 一个"去登录"按钮。
- *
- * 登录入口由**调用方**通过 `onLogin` 注入：组件不认识路由，也不判断登录态，
- * 这样它既能被 Tab 页复用，也不会把 `pages/Login` 这个具体页面焊死在里面。
- * 没有传 `onLogin` 时按老行为 toast 说明未开放——不给出点了没反应的假入口。
+ * 登录入口由调用方通过 `onLogin` 注入：组件不认识路由、也不判断登录态，因此能被 Tab 页复用，
+ * 也不会把 `pages/Login` 焊死在里面。没传 `onLogin` 时 toast 说明未开放，不给点了没反应的假入口。
  */
 
 import { promptAction } from '@kit.ArkUI';
@@ -16,9 +12,7 @@ import { AppTheme } from '../theme/Theme';
 export struct LoginEmptyView {
   /** Tab 图标位的示意图标。单色 SVG，靠 fillColor 染浅色 */
   @Param icon: Resource = $r('app.media.icon_person');
-  /** 主文案：这个功能是什么 */
   @Param title: string = '';
-  /** 副文案：登录后能干什么 */
   @Param subtitle: string = '';
   /** 点"去登录"时的行为；不传则退化为 toast 提示 */
   @Param onLogin: () => void = () => {

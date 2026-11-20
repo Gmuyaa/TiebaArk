@@ -16,7 +16,6 @@ const SENSITIVE_NAMES: string[] = [
   'cuid', 'cuid_galaxy2', 'cuid_gid', 'c3_aid', 'oaid', '_phone_imei',
   'android_id', 'imei', 'mac', '_os_version', '_client_id',
   /** model 仅参与请求体；诊断日志只记录请求体长度与哈希。 */
-  // 账号标识：本次 Diff 不需要看到它的值
   'uid', 'client_logid'
 ];
 
@@ -68,7 +67,6 @@ function hex8(x: number): string {
   return out;
 }
 
-/** sha256 → 小写 hex */
 export function sha256Hex(text: string): string {
   const bytes: number[] = utf8Bytes(text);
   const bitLen: number = bytes.length * 8;
@@ -142,11 +140,9 @@ export function sha256Hex(text: string): string {
 /**
  * 值是否像一条 Cookie（形如 `a=1; b=2`）。
  *
- * ⚠️ 判据不能只看"含 `;` 且含 `=`"：`Accept-Language: zh-CN,en-US;q=0.9` 就是这样，
- * 早期版本因此把一个**普通的协商头**误判为凭据（日志里看不到它的值，两侧就没得比）。
- * 真正的 Cookie 串至少要有**两段** `名字=值`，否则不认。
- * 名字列表里的普通头（Accept-Language / Content-Type / Connection / User-Agent）另有
- * 显式白名单兜底，见 `isPlainNegotiationHeader`。
+ * ⚠️ 不能只看"含 `;` 且含 `=`"：`Accept-Language: zh-CN,en-US;q=0.9` 正合这条，会把普通协商头
+ * 误判为凭据（日志里看不到它的值，两侧就没得比）。真 Cookie 至少要有两段 `名字=值`。
+ * 普通协商头另有显式白名单，见 `isPlainNegotiationHeader`。
  */
 function looksLikeCookie(name: string, value: string): boolean {
   if (name.includes('cookie')) {
@@ -187,7 +183,6 @@ function looksLikeFingerprint(name: string, value: string): boolean {
   return name.startsWith('wappc_');
 }
 
-/** 这个键的值是否必须脱敏 */
 export function isSensitiveName(name: string, value: string): boolean {
   const lower: string = name.toLowerCase();
   for (let i = 0; i < SENSITIVE_NAMES.length; i++) {
@@ -211,7 +206,6 @@ export function isSensitiveName(name: string, value: string): boolean {
   return false;
 }
 
-/** 单个值：非敏感原样，敏感只给 len+hash */
 function describeValue(name: string, value: string): string {
   if (value.length === 0) {
     return '(empty)';
@@ -281,10 +275,8 @@ export function shouldLog(url: string): boolean {
 }
 
 /**
- * 打印一行脱敏 RequestOptions。返回该行文本（便于用例断言/Node 侧复用）。
- *
- * `headerValues` 与 `options` 是**真正交给 `@ohos.net.http` 的对象**，
- * 不是调用方的意图——取证必须取自实际入参。
+ * 打印一行脱敏 RequestOptions，并返回该行文本（便于用例断言与 Node 侧复用）。
+ * 取值必须来自真正交给 `@ohos.net.http` 的对象，而不是调用方的意图。
  */
 export function logRequestOptions(s: ReqOptsSnapshot): string {
   const line: string = `${PREFIX} ${formatSnapshot(s)}`;
@@ -317,7 +309,6 @@ export function summarizeHeaderNames(names: string[]): string[] {
   return out;
 }
 
-/** 一个 header 条目的文本形式：`Name:value`（值走脱敏），供 headers=[...] 使用 */
 export function describeHeader(name: string, value: string): string {
   return `${name}:${describeValue(name, value)}`;
 }

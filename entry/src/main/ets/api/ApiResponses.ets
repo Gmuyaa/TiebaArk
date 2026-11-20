@@ -33,7 +33,6 @@ import { UserProfileInfo } from '../model/UserProfile';
 import { UserSearchPage } from '../model/UserSearch';
 import { VideoFeedResult } from '../model/VideoFeed';
 
-/** 拉取主题列表的结果 */
 export class ThreadListResponse extends ApiResult {
   data: ThreadListResult = new ThreadListResult();
 }
@@ -42,7 +41,6 @@ export class NotifyUnreadResponse extends ApiResult {
   data: NotifyUnreadCounts = new NotifyUnreadCounts();
 }
 
-/** 拉取帖子详情的结果 */
 export class ThreadDetailResponse extends ApiResult {
   data: ThreadDetail = new ThreadDetail();
 }
@@ -52,7 +50,6 @@ export class HotTopicCardResponse extends ApiResult {
   data: HotTopicCardInfo = new HotTopicCardInfo();
 }
 
-/** 拉取楼中楼的结果 */
 export class SubPostResponse extends ApiResult {
   data: SubPostPage = new SubPostPage();
 }
@@ -93,7 +90,7 @@ export class FollowForumsResponse extends ApiResult {
   data: FollowForumList = new FollowForumList();
 }
 
-/** 吧签到的结果（`/c/c/forum/sign`）。bonusPoint 用于"签到成功 +N 经验"提示 */
+/** 吧签到的结果，端点为 `/c/c/forum/sign`。 */
 export class SignForumResponse extends ApiResult {
   stats: SignStats = new SignStats();
   /** 签到奖励经验值；响应缺 user_info.sign_bonus_point 时为空串 */
@@ -109,20 +106,13 @@ export class OfficialSignCapabilityResponse extends ApiResult {
   data: OfficialSignCapability = new OfficialSignCapability();
 }
 
-/**
- * 拉取 tbs 的结果。
- *
- * HTTPS APP `/c/s/login` 返回 `anti.tbs` 与 `user.id`。
- * `isLogin` 由响应校验得出，用于判断当前凭据是否有效。
- */
+/** 拉取 tbs 的结果：HTTPS APP `/c/s/login` 返回 `anti.tbs` 与 `user.id`。 */
 export class TbsResponse extends ApiResult {
-  /** 写操作令牌；未取到为空串 */
   tbs: string = '';
-  /** 服务端是否认可当前凭据 */
   isLogin: boolean = false;
 }
 
-/** 一级回复点赞的结果。写接口没有数据体，只需要成败与原因 */
+/** 一级回复点赞的结果；写接口没有数据体，只回成败与原因。 */
 export class AgreeResponse extends ApiResult {
   /** data.agree.score 仅作诊断，不能替代写后读取 has_agree 与 agree_num。 */
   agreeScore: string = '';
@@ -130,7 +120,6 @@ export class AgreeResponse extends ApiResult {
   isFirstAgree: string = '';
 }
 
-/** 收藏与取消收藏接口的业务结果。 */
 export class StoreOpResponse extends ApiResult {
 }
 
@@ -138,7 +127,7 @@ export class MemeEmojiResponse extends ApiResult {
   data: MemeEmojiData = new MemeEmojiData();
 }
 
-/** 收藏表情全量推送（`/c/e/meme/collect`）的结果。写端点没有数据体 */
+/** 收藏表情全量推送（`/c/e/meme/collect`）的结果；写端点没有数据体。 */
 export class MemeCollectResponse extends ApiResult {
 }
 
@@ -215,12 +204,7 @@ export class ForbiddenForumsResponse extends ApiResult {
   data: ForbiddenForums = new ForbiddenForums();
 }
 
-/**
- * 「屏蔽吧」写入结果。
- *
- * `confirmed` 是**读回核对**的结论：`false` 表示这次反馈提交没有得到服务端确认
- * （列表里没有该吧），此时 `ok` 也是 `false` —— 界面据此退回本机屏蔽并如实说明。
- */
+/** 「屏蔽吧」写入结果：`confirmed` 是读回屏蔽列表核对的结论，未确认时 `ok` 也为 `false`。 */
 export class ForumBlockResponse extends ApiResult {
   confirmed: boolean = false;
 }

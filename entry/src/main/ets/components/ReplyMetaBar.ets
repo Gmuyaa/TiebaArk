@@ -9,11 +9,9 @@ export struct ReplyMetaBar {
   @Param detailLayout: boolean = false;
   /** 一级评论楼层号；缺失时不补占位。 */
   @Param floor: number = 0;
-  /** 楼中楼里是否出现过楼主回复 */
   @Param hasAuthorReply: boolean = false;
 
   @Require @Param agreeState: AgreeState;
-  /** 点赞点击 */
   @Event onToggleLike: () => void = (): void => {};
   /** 详情模式的文字入口回复当前评论，由调用方区分父楼层与子评论。 */
   @Event onReply: () => void = (): void => {};

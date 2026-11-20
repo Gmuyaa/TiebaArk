@@ -13,12 +13,8 @@ import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpi
 import { FollowButton } from '../components/FollowButton';
 import { commentText, postCommentTarget, subCommentTarget } from '../model/CommentAction';
 /**
- * 帖子详情页。
- *
- * 页面只负责展示与发起已有的阅读动作：详情分页、楼中楼分页、排序筛选（正序/倒序/楼主）、
- * 跳层、回顶和图片查看器均继续交给 ThreadDetailVM；写评论走已有回复链路，分享调用华为官方面板，
- * 点赞走 VM 的"乐观更新 + 服务端写接口"，收藏走 `toggleStore`（addstore/rmstore），
- * 未登录时如实提示而不是伪造成成功。
+ * 帖子详情页：只负责展示与发起已有阅读动作，分页、楼中楼分页、排序筛选、跳层、回顶与图片查看器都交给
+ * ThreadDetailVM；点赞/收藏/回复走 VM 的乐观更新 + 服务端写接口，未登录时如实提示而不是伪造成成功。
  */
 
 import { openUserByIdentity } from '../navigation/UserNavigation';
@@ -38,10 +34,11 @@ import { FrameCallback, LengthMetrics, promptAction, UIUtils, window, display } 
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
   ContentBlock, ContentImage, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
-  REPLY_EMOTICON_CODES, collectPreviewImageUrls, emojiCodeFromReplyToken, emojiImageUrl,
+  REPLY_EMOTICON_CODES, collectPreviewImageUrls, collectViewerImages, emojiCodeFromReplyToken, emojiImageUrl,
   forumChipText, groupContentBlocks,
   isReplySortSupported, resolveForumName, subPostsHaveThreadAuthor, unsupportedSortTip
 } from '../model/ThreadDetail';
+import { ViewerImage, bodyTransitionKey } from '../model/ImageLoadPolicy';
 import { formatTimeText } from '../model/TimeText';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { POST_BODY_SIZE, POST_NICKNAME_SIZE, POST_TITLE_SIZE,
@@ -93,28 +90,22 @@ import { threadActionBarStore } from '../common/appearance/ThreadActionBarStore'
 import { NavigationService, ThreadDetailParams } from '../navigation/AppNavigation';
 
 /**
- * 正文行内表情的边长（vp）。
- *
- * 正文字号 15、行高 24，表情取 21 视觉上与汉字等高略大，且小于行高，
- * 不会把所在行撑高（撑高会让含表情的行与纯文字行不一致，行距看着一跳一跳）。
+ * 正文行内表情边长（vp）：正文字号 15、行高 24，21 与汉字等高略大又不撑高行
+ * （撑高会让含表情的行与纯文字行行距一跳一跳）。
  */
 const BODY_EMOJI_SIZE: number = 21;
 
-/** 帖子页底栏支持分离式与弹出式，切换时复用点赞、收藏和回复状态。 */
-
-/** 帖子操作胶囊内容高（vp），独立于主界面导航底栏。 */
+/** 帖子操作胶囊内容高（vp），独立于主界面导航底栏 */
 const ACTION_PILL_HEIGHT: number = 52;
-/** 左胶囊宽（vp）：现网「回复楼主…」实测 501px ÷ 3.5 */
+/** 左胶囊宽（vp） */
 const REPLY_PILL_WIDTH: number = 143;
-/** 右胶囊宽（vp）：现网四操作大胶囊实测 690px ÷ 3.5 */
+/** 右胶囊宽（vp） */
 const ACTION_PILL_WIDTH: number = 197;
-/** 两胶囊间距（vp）；143 + 8 + 197 = 348 = 屏宽 − 左右各 14vp，正好填满一行 */
+/** 两胶囊间距：143 + 8 + 197 = 348 = 屏宽 − 左右各 14vp，正好填满一行 */
 const ACTION_PILL_GAP: number = 8;
 /** 胶囊圆角（vp）= 高度的一半 */
 const ACTION_PILL_RADIUS: number = 26;
-/** 左胶囊左右内边距（vp） */
 const REPLY_PILL_PADDING: number = 17;
-/** 右胶囊内四操作的左右内边距（vp） */
 const ACTION_QUAD_PADDING: number = 8;
 /** 底部行距屏幕两侧 / 屏底的边距（vp） */
 const BOTTOM_BAR_SIDE_MARGIN: number = 14;
@@ -122,28 +113,24 @@ const BOTTOM_BAR_BOTTOM_MARGIN: number = 24;
 
 /** 弹窗左右外边距（vp）：与顶栏「更多」按钮外侧 padding(12) 同值 */
 const REPLY_SHEET_SIDE_MARGIN: number = 12;
-/** 弹窗距键盘 / 屏底的间距（vp） */
 const REPLY_SHEET_BOTTOM_GAP: number = 8;
-/** 弹窗圆角（vp） */
 const REPLY_SHEET_RADIUS: number = 16;
 /** 输入框最小高度（vp）= 两行（lineHeight 22 × 2）+ 上下内边距 16 */
 const REPLY_INPUT_MIN_H: number = 60;
-/** 工具行四个入口的间距（vp）：参考图量得相邻图标**中心距** 184px ÷ 3.5 ≈ 52，
- * 图标盒 32 → 间隙 = 52 − 32 = 20。写成间隙而不是中心距，否则加上「发布」会放不下 */
+/** 工具行四入口的间隙（vp）：图标盒 32 + 间隙 20 = 中心距 52。写成间隙而非中心距，否则加上「发布」放不下 */
 const REPLY_TOOL_GAP: number = 20;
-/** 「发布」按钮尺寸（vp）。参考图量宽 ≈112、高 ≈18；高度按可点性抬到 32（18vp 点不中） */
+/** 「发布」按钮宽（vp）；高度按可点性抬到 32，18vp 点不中 */
 const REPLY_PUBLISH_W: number = 92;
 const REPLY_PUBLISH_H: number = 32;
-/** 输入框内嵌表情的 ImageSpan 尺寸（vp）：≈15 号字两倍行高，与文本基线自然对齐 */
+/** 输入框内嵌表情的 ImageSpan 尺寸（vp）：约两倍行高，与文本基线自然对齐 */
 const REPLY_EMOJI_INLINE: number = 22;
 
 const REPLY_EMOTICON_QUICK_CODES: number[] = REPLY_EMOTICON_CODES.slice(0, 7);
-/** 常用表情行图标的显示边长（vp）：参考图量得 ≈62px ÷ 3.5 ≈ 18 → 取整 28 保可点性 */
+/** 常用表情行图标的显示边长（vp）：取整 28 保可点性 */
 const REPLY_QUICK_EMOJI_SIZE: number = 28;
 
-/** 键盘避让模式在输入卡片与键盘顶之间留下的实测距离。 */
 const REPLY_INPUT_PANEL_GAP: number = 16;
-/** 面板升降动画：跟手且避免键盘收起后长时间留白。 */
+/** 面板升降动画：跟手且避免键盘收起后长时间留白 */
 const REPLY_PANEL_TRANSITION_MS: number = 220;
 
 function replyImageSize(image: UploadedPostImage): [number, number] {
@@ -152,22 +139,15 @@ function replyImageSize(image: UploadedPostImage): [number, number] {
 }
 
 /**
- * 单条回复的最大字数。
- *
- * 贴吧网页端的限制也是数百字这个量级；这里**先在输入阶段截断**并给出计数，
- * 比写满一篇才发现被服务端拒要好。服务端另有自己的限制（未实测），
- * 真被拒时 VM 会把服务端给的原因原样透出来。
+ * 单条回复的最大字数：先在输入阶段截断并给出计数，比写满一篇才发现被服务端拒要好。
+ * 服务端另有自己的限制，真被拒时 VM 会把服务端给的原因原样透出来。
  */
 const REPLY_MAX_LENGTH: number = 500;
 
 /**
- * 弹出菜单的系统材质经SHEET槽位读取厚度设置，跟随系统时默认THICK。
- *
- * ★ `systemMaterial` 是 **popup 选项里的字段**，不是组件属性 —— 这是一条独立的官方通道
- * （`PopupCommonOptions.systemMaterial`，@since 26.0.0）。普通组件那条
- * `CommonMethod.systemMaterial` 在本机真机上是空操作（TD-12），**这条不是**。
- * 真机对照（同一弹层、材质开 / 关两组帧）：等效 α 从 ≈0.98 掉到 ≈0.90 ——
- * 选项确实被系统接受并生效，但只到"弱玻璃"（无折射 / 高光 / 边缘光学）。
+ * 弹出菜单的系统材质走 popup 选项里的 `systemMaterial`（`PopupCommonOptions.systemMaterial`，@since 26.0.0），
+ * 不是普通组件的 `CommonMethod.systemMaterial`（那在本机真机上是空操作，TD-12）。
+ * 该通道确实生效但只到"弱玻璃"（无折射 / 高光 / 边缘光学）；厚度经 SHEET 槽位读取，跟随系统时默认 THICK。
  */
 
 class ThreadCommentsFrame extends FrameCallback {
@@ -188,14 +168,14 @@ export struct ThreadDetailPage {
   @Local vm: ThreadDetailVM = new ThreadDetailVM();
   /** 从列表进入时，以列表页已经归一化的回复数为准；直接打开详情时为 -1 */
   @Local sourceReplyCount: number = -1;
-  /** 正在全屏查看的图片地址。空串表示查看器未挂载 */
+  /** 正在全屏查看的图片地址；空串表示查看器未挂载 */
   @Local viewerUrl: string = '';
   /** 正在预览的同一楼层图片集合与初始位置 */
   @Local viewerUrls: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
   // 标题栏单独控制：恢复材质必须先于图片关闭动画同步落地。
   @Local viewerHidesTitleBar: boolean = false;
-  /** 下拉刷新状态 */
   @Local refreshing: boolean = false;
   /** 非零表示正在展开该一级回复的全屏回复详情面板 */
   @Local subDetailPid: number = 0;
@@ -203,11 +183,8 @@ export struct ThreadDetailPage {
   @Local showSubSheet: boolean = false;
   private pendingUser: UserBrief | undefined = undefined;
   /**
-   * 底部操作栏「弹出式」样式的操作菜单可见性。
-   *
-   * `bindPopup` 的 `show` 参数在新 SDK 里是**单向**的（不是 `$$`），
-   * 点外部 / 按系统 Back 关闭时系统不会回写状态，必须用 `onStateChange` 自己同步，
-   * 否则开关停在 true、下次再点不再弹出。
+   * 底部操作栏「弹出式」菜单可见性。`bindPopup` 的 `show` 是单向的（不是 `$$`），
+   * 点外部 / 按系统 Back 关闭时系统不回写状态，必须用 `onStateChange` 自己同步，否则下次再点不再弹出。
    */
   @Local popupMenuShow: boolean = false;
   @Local popupViewportWidth: number = 0;
@@ -215,10 +192,8 @@ export struct ThreadDetailPage {
   @Local pageVisible: boolean = true;
 
   /**
-   * 底部系统手势区（导航条）高度，单位 vp。
-   *
-   * 由官方避让区接口在运行时读出，**不写死** —— `bottom = 34` 这类常量在换机型、
-   * 或用户从手势导航切成三键导航后必然错位。取不到时保持 0，由使用方用视觉间距兜底。
+   * 底部手势区（导航条）高度（vp）：由官方避让区接口运行时读出，不能写死 —— 换机型或切成三键导航后必然错位。
+   * 取不到时保持 0，由使用方用视觉间距兜底。
    */
   @Local safeBottomVp: number = 0;
 
@@ -233,9 +208,7 @@ export struct ThreadDetailPage {
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
 
   @Local titleBarH: number = STATUS_BAR_FALLBACK_VP + 52;
-  /** 跳层弹层是否可见 */
   @Local showJump: boolean = false;
-  /** 跳层输入框内容 */
   @Local jumpText: string = '';
 
   @Local showReply: boolean = false;
@@ -261,8 +234,7 @@ export struct ThreadDetailPage {
   /** 面板弹窗的代次守卫（同 `replyDialogSeq` 的道理） */
   private emojiDialogSeq: number = 0;
   /**
-   * 回复内容的**纯文本镜像**（RichEditor 化后）：表情以 token 形态（`#25`）
-   * 计入，由 `syncReplyMirror()` 在每次内容变化后从 RichEditor 提取刷新；
+   * 回复内容的纯文本镜像（RichEditor 化后）：表情以 token（`#25`）计入，由 `syncReplyMirror()` 每次变化后刷新；
    * 只喂字数计数与提交校验，不回写输入框。
    */
   @Local replyText: string = '';
@@ -273,8 +245,7 @@ export struct ThreadDetailPage {
   @Local videoMode: boolean = false;
   @Local videoComments: boolean = false;
   /**
-   * 回复目标楼层 pid：**0 = 对主帖发表一级评论**，>0 = 回复某一层楼。
-   * 子评论再由 replyTargetSubPost 指定，三种入口共用编辑器。
+   * 回复目标楼层 pid：0 = 对主帖发表一级评论，>0 = 回复某一层楼；子评论再由 replyTargetSubPost 指定。
    */
   @Local replyTargetPid: number = 0;
   /** 回复目标的作者昵称，资料暂不可用时作为提示行回退。 */
@@ -297,7 +268,6 @@ export struct ThreadDetailPage {
     this.richCtl.setTypingStyle({ fontColor: AppTheme.TEXT_MAIN });
     updateEmojiEditorTextColor(this.richCtl, AppTheme.TEXT_MAIN);
   }
-  /** 顶部更多菜单是否可见 */
   @Local showMore: boolean = false;
   private deleteConfirming: boolean = false;
   /** 列表滚动位置（vp），由 onDidScroll 回报；标题栏渐变由原生导航负责。 */
@@ -308,11 +278,8 @@ export struct ThreadDetailPage {
   private atEndProbeTimer: number = -1;
 
   /**
-   * 楼层列表变化后补一次"是否已停在末尾"的探测。
-   *
-   * 每页 10 层时，第一页有可能撑不满一屏，这时 List 不会触发 `onReachEnd`，
-   * 界面就停在底部不动了。数据落地后量一次滚动位置：确实在末尾且还有下一页，
-   * 就继续请求。用户还能往下滚时不动——请求时机仍然是"滑到底部"。
+   * 楼层列表变化后补一次"是否已停在末尾"的探测：每页 10 层时第一页可能撑不满一屏，List 不会触发 `onReachEnd`，
+   * 界面就停在底部。数据落地后量一次滚动位置，确实在末尾且还有下一页才继续请求；用户还能往下滚时不动。
    */
   @Monitor('vm.visiblePosts', 'vm.hasMore')
   onReplyListChanged(): void {
@@ -420,6 +387,7 @@ export struct ThreadDetailPage {
   private clearImagePreview(): void {
     this.viewerUrl = '';
     this.viewerUrls = [];
+    this.viewerItems = [];
     this.viewerIndex = 0;
     this.viewerHidesTitleBar = false;
   }
@@ -542,11 +510,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 按 `visiblePosts` 的下标定位精确到某一楼（0 = 主帖）。
-   *
-   * 楼层 2026-10-18 起不再挂在 `ListItemGroup` 里，而是与主帖、摘要条平铺在同一个 List 下，
-   * 所以只能用 `scrollToIndex`。`visibleReplies = visiblePosts.slice(1)`，第 i 个帖子在列表
-   * 里的下标是 `i + 1`（原实现调 `scrollToItemInGroup(2, i - 1)`，找不到分组、静默不滚动）。
+   * 按 `visiblePosts` 的下标定位到某一楼（0 = 主帖）。楼层与主帖、摘要条平铺在同一个 List 下，只能用 `scrollToIndex`：
+   * `visibleReplies` 是 `slice(1)`，第 i 个帖子在列表里的下标是 `i + 1`（`scrollToItemInGroup` 找不到分组、静默不滚动）。
    */
   private jumpToPost(index: number): void {
     if (index <= 0) {
@@ -584,10 +549,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 读状态栏高度（vp），供页头让位。
-   *
-   * 与 `readSafeArea` 分开是因为用途不同：那个管底部手势区（弹层用），
-   * 这个管顶部（页头用）。拿不到就保持兜底值，界面只偏差几像素，不打断加载。
+   * 读状态栏高度（vp），供页头让位。与 `readSafeArea` 分开：那个管底部手势区（弹层用），这个管顶部。
    */
   private readStatusBar(): void {
     readStatusBarVp(this.hostContext()).then((vp: number) => {
@@ -601,12 +563,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 读取底部系统避让区高度，供弹层底部悬浮胶囊避让手势条。
-   *
-   * 用官方 `getWindowAvoidArea(TYPE_NAVIGATION_INDICATOR)`：返回值随系统配置变化，
-   * 是"不写死"的正确做法。接口给的是 **px**，必须 `px2vp` 转成 vp 才能参与 ArkUI 布局
-   * （设备是 2.63 倍密度，直接用 px 当 vp 会大出两倍多）。实测本机为 28vp。
-   * 取不到时保持 0，弹层退化成纯视觉间距，不会把胶囊顶出屏幕。
+   * 读底部系统避让区高度，供弹层悬浮胶囊避让手势条。接口给的是 px，必须 `px2vp` 转换后参与 ArkUI 布局；
+   * 取不到时保持 0，弹层退化为纯视觉间距，不会把胶囊顶出屏幕。
    */
   private readSafeArea(): void {
     const seq: number = ++this.keyboardWatchSeq;
@@ -727,7 +685,11 @@ export struct ThreadDetailPage {
       if (state.errorText.length > 0) {
         this.vm.retrySubPosts(this.hostContext(), pid, authorId);
       } else {
-        this.vm.ensureSubPostPreview(this.hostContext(), pid, authorId);
+        /*
+         * 弹层要完整第 1 页：楼层内联预览只有几条，`page` 也是默认值，
+         * 走预取守卫（有预览就跳过）会让弹层停在预览上，接着"加载更多"就跳到第 2 页。
+         */
+        this.vm.ensureSubPostPage(this.hostContext(), pid, authorId);
       }
     }
   }
@@ -752,13 +714,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 点赞 / 取消点赞。
-   *
-   * 写接口需要登录态：未登录时 VM 直接返回"需要登录"，界面如实提示，不假装成功；
-   * 已登录时走"乐观更新 → 调服务端 → 失败回滚"，失败文案由 VM 给出。
-   *
-   * `objType` 只影响发给服务端的 `obj_type`/`post_id`（协议目标），**不改界面**：
-   * 楼层与楼中楼都是"对某一层 post 点赞"，主帖则要按"赞主题"发（`obj_type=3`、`post_id=0`）。
+   * 点赞 / 取消点赞：未登录时 VM 返回"需要登录"，界面如实提示，不假装成功；已登录走乐观更新 → 调服务端 → 失败回滚。
+   * `objType` 只影响发给服务端的 `obj_type`/`post_id`，不改界面：主帖按"赞主题"发（`obj_type=3`、`post_id=0`）。
    */
   private toggleLike(item: PostItem, objType: AgreeObjType = AgreeObjType.POST): void {
     this.vm.toggleAgree(this.hostContext(), item, objType).then((reason: string) => {
@@ -783,6 +740,7 @@ export struct ThreadDetailPage {
     }
     this.viewerHidesTitleBar = true;
     this.viewerUrls = [url];
+    this.viewerItems = [];
     this.viewerIndex = 0;
     this.viewerUrl = url;
   }
@@ -797,7 +755,7 @@ export struct ThreadDetailPage {
     // RichEditor 是同一 controller 跨弹窗复用：先清掉上一次的图文残留
     this.richCtl.deleteSpans();
     this.replyText = '';
-    // 表情面板回到收起态：上次展开的面板不带进下一次（参考图：打开即紧凑输入形态）
+    // 上次展开的面板不带进下一次：打开即紧凑输入形态
     this.showEmojiPanel = false;
     this.replyCardPinned = false;
     this.replyCardSwitching = false;
@@ -819,9 +777,8 @@ export struct ThreadDetailPage {
     this.replyCardSwitching = replacing;
     let oldClosed: boolean = false;
     /*
-     * 序号守卫：弹窗的消失回调是异步迟到的——「卡片交接 / 发送成功关窗」场景下，
-     * 旧弹窗的 onDidDisappear 可能在新弹窗打开之后才触发，无守卫会把新弹窗的
-     * 句柄和 showReply 一并误清。每次打开自增，回调只认自己那一代。
+     * 序号守卫：弹窗消失回调异步迟到——卡片交接或发送成功关窗时，旧弹窗的 onDidDisappear 可能在新弹窗打开后
+     * 才触发，无守卫会把新弹窗的句柄和 showReply 一并误清。每次打开自增，回调只认自己那一代。
      */
     const seq: number = ++this.replyDialogSeq;
     this.getUIContext().getPromptAction().openCustomDialog({
@@ -834,9 +791,8 @@ export struct ThreadDetailPage {
       offset: {
         dx: 0,
         /*
-         * 键盘态的卡片底边距屏底 = 实测键盘高度 + 系统默认的 16vp 避让距离。
-         * 键盘收起后弹窗容器会重新让出手势区，故这里减去 safeBottomVp，
-         * 让卡片在键盘和表情面板两态保持同一垂直位置。
+         * 键盘态卡片底边距屏底 = 键盘高度 + 系统默认的 16vp 避让。键盘收起后弹窗容器会重新让出手势区，
+         * 故这里减去 safeBottomVp，让卡片在键盘与表情面板两态保持同一垂直位置。
          */
         dy: lifted
           ? -(this.emojiPanelHeight() + REPLY_INPUT_PANEL_GAP - this.safeBottomVp)
@@ -1166,11 +1122,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 提交回复。
-   *
-   * 失败文案**由 VM 返回**（未登录 / 在途 / 缺少吧信息 / 服务端报错都在这里出），
-   * 页面只负责展示——这样以后把 toast 换成行内提示不用动业务层。
-   * 成功后保留阅读位置；主帖新评论由用户主动刷新查看。
+   * 失败文案由 VM 返回（未登录 / 在途 / 缺少吧信息 / 服务端报错），页面只负责展示；成功后保留阅读位置。
    */
   async submitReplyText(): Promise<void> {
     if (this.vm.replyPending) { return; }
@@ -1259,10 +1211,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 主帖作者名后的等级文案。
-   *
-   * 贴吧展示的是等级名（"高级粉丝""核心吧友"）而不是裸数字，所以 level_name 优先；
-   * 服务端只给了数字时才退回 `Lv.N`；两者都没有就不显示徽章，不编一个 Lv.0。
+   * 主帖作者名后的等级文案：贴吧展示等级名而不是裸数字，所以 level_name 优先，只给了数字才退回 `Lv.N`；
+   * 两者都没有就不显示徽章，不编 Lv.0。
    */
   private authorLevelText(): string {
     const author: UserBrief = this.vm.detail.author;
@@ -1273,12 +1223,9 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 作者行第二行的 `时间 · 地区 · 内容声明`。
-   *
-   * 时间取 1 楼的发布时间（与列表、楼层同一套文案，见 `model/TimeText`），
-   * 地区取作者 IP 归属地（`thread.author` 常缺这个字段，由 `mergeAuthorFallback`
-   * 从 `user_list` 补齐），声明取 `thread.content_statement`（发帖时选的那一项，
-   * 官方 App 也是把它接在时间、地区之后）。三段都缺返回空串——界面据此整行不渲染。
+   * 作者行第二行的 `时间 · 地区 · 内容声明`：时间取 1 楼发布时间（同 `model/TimeText`），地区取作者 IP 归属地
+   * （`thread.author` 常缺，由 `mergeAuthorFallback` 从 `user_list` 补齐），声明取 `thread.content_statement`。
+   * 三段都缺返回空串，界面据此整行不渲染。
    */
   private authorMetaLine(): string {
     const parts: string[] = [];
@@ -1308,11 +1255,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 导航层右侧三个图标的点击分发。
-   *
-   * 没有把回调当参数传进 `@Builder`：Builder 的参数是"按值"传入的，
-   * 传函数引用在本项目里已有过崩溃先例（`@BuilderParam` 传方法引用），
-   * 这里按 label 分发，逻辑一眼能看完，也不依赖编译器对函数参数的处理。
+   * 导航层右侧三个图标的点击分发。没把回调当参数传进 `@Builder`（Builder 参数按值传入，
+   * 传函数引用在本项目里有过崩溃先例），这里按 label 分发。
    */
   private onNavTap(label: string): void {
     if (label === '更多') {
@@ -1517,15 +1461,13 @@ export struct ThreadDetailPage {
           },
           scrollEffectStyle: {
             backgroundStyle: {
-              // maskExtraHeight 只控渐隐带长度（SDK 默认 32）；blurRadius 控模糊强度
-              //（0~128，仅两种 GRADIENT 模式生效）。取实验页同款观感值。
+              // maskExtraHeight 只控渐隐带长度（SDK 默认 32）；blurRadius 控模糊强度（0~128，仅 GRADIENT 模式生效）。
               maskExtraHeight: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 32 : 0,
               blurRadius: motionStore.isOn(MotionEffect.HDS_SCROLL_BLUR) ? 80 : 0
             }
           }
-          // systemMaterialEffect 实测与效果主体（渐变模糊本身）几乎无叠加差异，先不开；
-          // 要开：systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          //   materialLevel: hdsMaterial.MaterialLevel.EXQUISITE }（底栏同款参数）
+          // systemMaterialEffect 与渐变模糊本身几乎无叠加差异，暂不开；要开则同底栏参数：
+          // { materialType: IMMERSIVE, materialLevel: EXQUISITE }
         },
 
         content: { stackBuilder: (): void => { this.HdsNavBar(); } }
@@ -1556,8 +1498,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 回复详情面板内容。锚点回复按 pid 从已加载楼层里取，
-   * 列表数据直接挂 VM 的楼中楼状态——分页、重试与主列表走同一份逻辑。
+   * 回复详情面板：锚点回复按 pid 从已加载楼层里取，列表直接挂 VM 的楼中楼状态，分页与重试与主列表同源。
    */
   @Builder
   SubReplySheet() {
@@ -1577,6 +1518,7 @@ export struct ThreadDetailPage {
     ImageViewer({
       imageUrl: this.viewerUrl,
       imageUrls: this.viewerUrls,
+      images: this.viewerItems,
       initialIndex: this.viewerIndex,
       onBeforeClose: (): void => { this.prepareImageClose(); },
       onClose: (): void => { this.clearImagePreview(); }
@@ -1688,8 +1630,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * HDS titleBar 的内容外壳。ForumNavBar 以 52vp 内容高并下移 statusBarH，
-   * 从槽顶计算按钮位置；本外壳不重复添加状态栏 padding。
+   * HDS titleBar 的内容外壳：ForumNavBar 以 52vp 内容高并下移 statusBarH，本外壳不重复添加状态栏 padding。
    */
   @Builder
   HdsNavBar() {
@@ -1758,7 +1699,6 @@ export struct ThreadDetailPage {
     .alignItems(VerticalAlign.Center)
   }
 
-  /** 作者信息区展示头像、身份、时间与来源信息，位于主帖正文顶部。 */
   @Builder
   AuthorBar() {
     Row({ space: 10 }) {
@@ -1907,7 +1847,6 @@ export struct ThreadDetailPage {
     .id('thread-more-menu')
   }
 
-  /** 跳层弹层。暗色遮罩点击关闭；输入楼层号后跳转 */
   @Builder
   JumpDialog() {
     Stack() {
@@ -1976,7 +1915,7 @@ export struct ThreadDetailPage {
     })
   }
 
-  /** 回复弹窗内容：输入、字数与表情入口。尺寸和圆角由弹窗配置统一提供，键盘避让交由弹窗处理。 */
+  /** 回复弹窗内容；尺寸与圆角由弹窗配置提供，键盘避让交给弹窗处理。 */
   @Builder
   ReplyDialog() {
 
@@ -2260,11 +2199,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 插入收藏表情：ImageSpan 显示缩略图（任意图片，Contain 保比例）。
-   *
-   * token 不走 `emojiTokenFromUrl` 的文件名提取（收藏表情的 picId/原图尺寸
-   * 从 URL 反推不可行），而是镜像提取时查 VM 的映射表——映射在加载完成时
-   * 已全量预计算（VM 保证先建表后放列表），这里只管插图。
+   * 插入收藏表情：ImageSpan 显示缩略图（Contain 保比例）。token 不从 URL 反推（收藏表情的 picId 与原图尺寸
+   * 推不出来），而是在镜像提取时查 VM 的映射表 —— 建表先于放列表，这里只管插图。
    */
   private insertMemeEmoji(item: MemePicItem): void {
     if (this.vm.replyPending) { return; }
@@ -2279,14 +2215,9 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 右下角退格键（参考图分离式面板）：删 RichEditor 末尾一个字符位。
-   *
-   * ImageSpan 占 1 个字符位——恰好整删一个表情（含收藏表情）；文字 span 一次
-   * 退 1 字符（对齐键盘退格语义，不整段删）。API 形态（API 26 d.ts 实查）：
-   * span 结果的 `offsetInSpan: [number, number]` 是**全局文档坐标**的有效内容
-   * 区间，末尾 = 最后一个 span 的 offsetInSpan[1]；`deleteSpans(RichEditorRange)`
-   * 收 `{ start, end }` 对象（不是两个数字）。
-   * 内容为空直接吞掉；删除后镜像同步（计数联动）。
+   * 右下角退格键：删 RichEditor 末尾一个字符位。ImageSpan 占 1 个字符位，恰好整删一个表情；文字一次退 1 字符。
+   * span 的 `offsetInSpan` 是全局文档坐标，末尾 = 最后一个 span 的 `offsetInSpan[1]`；
+   * `deleteSpans` 收 `{ start, end }` 对象（不是两个数字）。
    */
   private deleteReplyLastChar(): void {
     if (this.vm.replyPending) { return; }
@@ -2388,8 +2319,7 @@ export struct ThreadDetailPage {
       .padding({ top: this.videoMode ? 0 : this.titleBarH })
       .cachedCount(2)
       /*
-       * 必须开：触底追加一页后，列表默认会跟随到新的底部，把当前读的位置往上顶。
-       * 实测关掉后分页位移从 -73～0 恶化到 +478～+1379（正数就是内容被顶走）。
+       * 必须开：触底追加一页后列表会跟随到新底部，把当前读的位置往上顶；关掉后分页位移明显恶化。
        */
       .maintainVisibleContentPosition(true)
       .clip(false)
@@ -2429,9 +2359,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 主帖标题 → 正文的堆叠间距。两者都是文本，行盒上下各自留白，按 9vp 给会让标题到正文的
-   * 墨迹间距明显大于正文到图片（真机 20.0vp 对 12.6vp），无视频时收到 2vp 后两者一致。
-   * 有视频时视频框本身没有留白，标题到视频已是 12.9vp，保持 9vp 不动。
+   * 主帖标题 → 正文的堆叠间距：两者行盒上下各自留白，按 9vp 给会让标题到正文的墨迹间距明显大于正文到图片，
+   * 无视频时收到 2vp 才一致；有视频时视频框本身无留白，保持 9vp 不动。
    */
   private introStackGap(): number {
     if (visualThemeStore.isPaper) { return 9; }
@@ -2458,10 +2387,8 @@ export struct ThreadDetailPage {
           VideoPlayer({ video: this.vm.detail.video,
             onFullscreenChange: (shown: boolean): void => { this.videoFullscreen = shown; } })
         }
-        // 正文多图走等大方格（gridImages = true），且铺开全部图片（gridAll = true）。
-        // 单图走正文几何（commentPreview = false）：宽度撑满，高度超约一屏就顶部裁切
-        // 并挂「长图」角标——以前这里传 true，正文单图被按评论口径压在 200vp 以内，
-        // 一张长截图只剩几十 vp 宽的细条。
+        // 正文多图走等大方格并铺开全部图片；单图走正文几何（commentPreview = false）：
+        // 按评论口径会把长截图压成细条，这里不能传 true。
         this.RichPieces(this.videoMode ? item.contents.filter((piece: ContentPiece): boolean =>
           !(piece.kind === ContentKind.LINK && (piece.link === this.vm.detail.video?.url || /^https?:\/\/tb-video\.bdstatic\.com\//.test(piece.link)))) : item.contents, visualThemeStore.isPaper ? PaperLayout.READING_BODY : POST_BODY_SIZE,
           visualThemeStore.isPaper ? PaperLayout.READING_LINE : 24, AppTheme.TEXT_MAIN,
@@ -2485,7 +2412,7 @@ export struct ThreadDetailPage {
     .backgroundColor(Color.Transparent)
   }
 
-  /** 回复区标题。数量来自详情模型；数量与排序字号统一复用评论昵称 */
+  /** 回复区标题；数量来自详情模型 */
   @Builder
   ReplySummary() {
     Row() {
@@ -2514,11 +2441,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 四项共用同一个胶囊容器；每项按文字和水平内边距自然撑开。
-   *
-   * 热门实测不被服务端支持（排序参数被静默忽略），所以点它不会切过去，
-   * 而是明确提示——不拿"按点赞数排当前页"伪造热门。样式上只压低透明度，
-   * 其余保持不变。
+   * 四项共用同一个胶囊容器，每项按文字和水平内边距自然撑开。
+   * 热门不受服务端支持（排序参数被静默忽略），点它只明确提示，不拿"按点赞数排当前页"伪造热门。
    */
   @Builder
   ReplySortSegment(label: string, type: ReplySortType) {
@@ -2542,11 +2466,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 评论及面板锚点正文，图片使用紧凑预览；主帖正文由 ThreadIntro 单独传入。
-   *
-   * `inCommentList` 只在真正的一级评论列表里为 true：那里图片宽度可以由
-   * 屏宽推出（评论右侧省略头像列），多图也能按方阵显示。详情面板的宽度
-   * 与列表不同，由 `SheetSubBody`/`SheetAnchorBody` 自行传 `imageWidth`。
+   * 评论及面板锚点正文。`inCommentList` 只在真正的一级评论列表里为 true（那里图片宽度可由屏宽推出）；
+   * 详情面板宽度不同，由 `SheetSubBody`/`SheetAnchorBody` 自行传 `imageWidth`。
    */
   @Builder
   RichBody(item: PostItem, mainList: boolean = false, inCommentList: boolean = true) {
@@ -2566,9 +2487,7 @@ export struct ThreadDetailPage {
 
   /**
    * 方格内容宽：调用方给的内容宽优先，没给才按评论口径兜底。
-   *
-   * 主帖正文没有头像列（可用宽 = 屏宽 − 32），评论有（屏宽 − 80）。
-   * 方格若一律按评论口径算，主帖那一行会窄 48vp、右边空出一条。
+   * 主帖无头像列（屏宽 − 32）、评论有（屏宽 − 80），一律按评论口径算会让主帖那行窄 48vp。
    */
   private gridContentWidth(widthHint: number): number {
     if (Number.isFinite(widthHint) && widthHint > 0) { return widthHint; }
@@ -2645,7 +2564,7 @@ export struct ThreadDetailPage {
         contentWidthHint: imageWidth,
         onOpenImage: (globalIndex: number): void => {
           const index: number = readingViewerIndex(pieces, globalIndex);
-          if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+          if (index >= 0) { this.openGalleryImage(imageUrls, index, pieces); }
         }
       })
     } else {
@@ -2660,27 +2579,17 @@ export struct ThreadDetailPage {
         },
         onOpenImage: (globalIndex: number): void => {
           const index: number = readingViewerIndex(pieces, globalIndex);
-          if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+          if (index >= 0) { this.openGalleryImage(imageUrls, index, pieces); }
         }
       })
     }
   }
 
   /**
-   * 内容多图方阵，两个入口共用一套瓦片：
+   * 内容多图方阵，主帖与评论共用一套瓦片：主帖（`all`）铺开全部图片、末行左对齐且不挂「共 N 张」，评论只露前三张。
    *
-   * - 主帖正文（`all`）：铺开**全部**图片，三列等大方格自动换行，最后一行不满三张时左对齐；
-   *   图都在眼前了，就不再挂「共 N 张」角标。
-   * - 评论（默认）：只露前三张，第三张右下角标总数。
-   *
-   * 瓦片直接复用首页的 `ModernThreadPreviewImage`，转场链路也与首页一致：
-   * 瓦片 `index` 用**查看器序号**注册进 gallery（首页注册的是卡片相对下标，
-   * 与查看器 initialIndex 的换算在 `openFeedImages` 的 URLs 顺序上完成），
-   * 这里 viewers 序号就是查看器页码本身，注册键与翻页后 `gallery.prepare`
-   * 查询键天然一致，切图再返回也能重新配对，不会退化成淡入淡出。
-   * 每格高度 = (行宽 − (列数−1)×间距) / 列数，首帧即定，不依赖图片实测尺寸；
-   * 列数按可见张数走 `modernFeedColumns`：2 张、4 张两列（4 张排 2+2，不留孤儿格），
-   * 3、5~9 张三列，9 张正好 3×3。
+   * 瓦片复用 `ModernThreadPreviewImage`，`index` 用查看器序号注册进 gallery，与翻页后 `gallery.prepare` 的
+   * 查询键一致，切图返回仍能配对；每格高度由行宽与列数推出，首帧即定，不依赖图片实测尺寸。
    */
   @Builder
   CommentImageGrid(block: ContentBlock, imageUrls: string[], pieces: ContentPiece[],
@@ -2696,6 +2605,7 @@ export struct ThreadDetailPage {
           ModernThreadPreviewImage({
             url: this.gridImageSource(block, i),
             origin: this.gridImageOrigin(block, i),
+            bodyImage: block.images[i],
             index: this.gridViewerIndex(pieces, block, i),
             total: block.images.length,
             columns: this.gridColumns(block.images.length, true),
@@ -2705,7 +2615,7 @@ export struct ThreadDetailPage {
             showTotalLabel: false,
             onOpen: (): void => {
               const viewer: number = this.gridViewerIndex(pieces, block, i);
-              if (viewer >= 0) { this.openGalleryImage(imageUrls, viewer); }
+              if (viewer >= 0) { this.openGalleryImage(imageUrls, viewer, pieces); }
             }
           })
         }, (i: number) => `${i}:${this.gridImageSource(block, i)}`)
@@ -2717,6 +2627,7 @@ export struct ThreadDetailPage {
           ModernThreadPreviewImage({
             url: this.gridImageSource(block, i),
             origin: this.gridImageOrigin(block, i),
+            bodyImage: block.images[i],
             index: this.gridViewerIndex(pieces, block, i),
             total: block.images.length,
             contentWidth: this.gridContentWidth(widthHint),
@@ -2724,7 +2635,7 @@ export struct ThreadDetailPage {
             transitionGallery: gallery,
             onOpen: (): void => {
               const index: number = this.gridViewerIndex(pieces, block, i);
-              if (index >= 0) { this.openGalleryImage(imageUrls, index); }
+              if (index >= 0) { this.openGalleryImage(imageUrls, index, pieces); }
             }
           })
         }, (i: number) => `${i}:${this.gridImageSource(block, i)}`)
@@ -2771,8 +2682,7 @@ export struct ThreadDetailPage {
     if (index < 0 || index >= block.images.length) {
       return '';
     }
-    const image: ContentImage = block.images[index];
-    return image.originImageUrl.length > 0 ? image.originImageUrl : image.imageUrl;
+    return bodyTransitionKey(block.images[index]);
   }
 
   /** 方阵里第 i 张在整篇内容图片序列里的查看器下标；无效返回 -1 */
@@ -2810,19 +2720,17 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 打开图集里的某一张（`globalIndex` 是它在**整篇内容图片序列**里的下标）。
-   *
-   * 查看器需要整篇的图片序列，这样进去之后还能左右滑其余图片；
-   * 初始页直接用全局下标算，不再按 URL 反查——同一张图可能在正文里出现多次，
-   * 反查会永远定位到第一处。
+   * 打开图集里的某一张（`globalIndex` 是它在整篇内容图片序列里的下标）。初始页直接用全局下标算、不按 URL 反查
+   * —— 同一张图可能在正文里出现多次，反查会永远定位到第一处。
    */
-  private openGalleryImage(imageUrls: string[], globalIndex: number): void {
+  private openGalleryImage(imageUrls: string[], globalIndex: number, pieces: ContentPiece[] = []): void {
     if (imageUrls.length === 0) {
       return;
     }
     const index: number = Math.max(0, Math.min(imageUrls.length - 1, globalIndex));
     this.viewerHidesTitleBar = true;
     this.viewerUrls = imageUrls;
+    this.viewerItems = pieces.length > 0 ? collectViewerImages(pieces) : [];
     this.viewerIndex = index;
     this.viewerUrl = imageUrls[index];
   }
@@ -2906,7 +2814,6 @@ export struct ThreadDetailPage {
     .padding({ top: 44, bottom: 44 })
   }
 
-  /** 一条楼中楼回复 */
   @Builder
   SubPostRow(sub: SubPostItem) {
     Column({ space: 5 }) {
@@ -2963,9 +2870,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 左胶囊 ——「分离式」：玻璃由 `MaterialTabs` 的**官方悬浮面**提供。
-   *
-   * 与首页底栏共用 BOTTOM_BAR 槽位，优先使用 ArkUI 官方薄材质。
+   * 「分离式」左胶囊：玻璃由 `MaterialTabs` 的官方悬浮面提供，与首页底栏共用 BOTTOM_BAR 槽位。
    * 外层只控制布局与圆角，不裁剪官方材质向外绘制的阴影。
    */
   @Builder
@@ -2979,7 +2884,6 @@ export struct ThreadDetailPage {
     .height(ACTION_PILL_HEIGHT)
   }
 
-  /** 「分离式」左胶囊内容；玻璃由外层系统材质完整渲染。 */
   @Builder
   SplitReplyTab() {
     Row({ space: 8 }) {
@@ -3003,10 +2907,7 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 右胶囊 ——「分离式」：官方悬浮面承载四个操作。
-   *
-   * 宽度钉 `ACTION_PILL_WIDTH`（现网右大胶囊实测 197vp）：底栏行可用宽 348vp，
-   * 左 143 + 间距 8 + 右 197 正好填满。
+   * 「分离式」右胶囊：官方悬浮面承载四个操作，宽度钉死使左 143 + 间距 8 + 右 197 正好填满 348vp 的底栏行。
    * 与左胶囊一样保留官方悬浮面及其外部阴影。
    */
   @Builder
@@ -3033,7 +2934,6 @@ export struct ThreadDetailPage {
     .padding({ left: ACTION_QUAD_PADDING, right: ACTION_QUAD_PADDING })
   }
 
-  /** 弹出式的全部操作；选择后先关闭菜单，再复用现有处理方法。 */
   @Builder
   PopupActionAt(index: number) {
     if (index === 0) {
@@ -3068,7 +2968,6 @@ export struct ThreadDetailPage {
 
   private popupCount(count: number): string { return count >= 0 ? `${count}` : '—'; }
 
-  /** 每个操作各有一个沉浸光感圆面，图标与计数复用原业务状态。 */
   @Builder
   PopupMenuItem(icon: Resource, label: string, action: string, description: string, onTap: () => void) {
     Stack() {
@@ -3098,7 +2997,6 @@ export struct ThreadDetailPage {
     .width(THREAD_ACTION_BUTTON_SIZE).height(THREAD_ACTION_BUTTON_SIZE)
   }
 
-  /** 按已保存偏好显示分离式双胶囊或弹出式单按钮。 */
   @Builder
   BottomActionBar() {
     if (visualThemeStore.isPaper) {
@@ -3145,7 +3043,6 @@ export struct ThreadDetailPage {
     .width('100%').height('100%')
   }
 
-  /** 「分离式」：左右各一个 `MaterialTabs`，玻璃全由官方系统材质提供 */
   @Builder
   SplitImmersiveActionBar() {
     Row({ space: ACTION_PILL_GAP }) {
@@ -3191,12 +3088,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 底栏点赞按钮。
-   *
-   * 状态与计数**读主帖对象**（`vm.mainPost()`），而不是 `vm.detail.agreeCount`：
-   * 楼层列表渲染的也是 `posts` 里的对象，读同一份才不会出现"楼里已高亮、底栏还显示未点赞"。
-   * 主帖定位不到（`mainPostId` 缺失且无 `floor===1`）时按未点赞态渲染，
-   * 点击由 `toggleMainLike()` 直接忽略。
+   * 底栏点赞按钮：状态与计数读主帖对象（`vm.mainPost()`）而不是 `vm.detail.agreeCount`，
+   * 与楼层列表读同一份，才不会"楼里已高亮、底栏还显示未点赞"。主帖定位不到时按未点赞渲染，点击被直接忽略。
    */
   @Builder
   BottomLikeAction() {
@@ -3231,12 +3124,8 @@ export struct ThreadDetailPage {
   }
 
   /**
-   * 底栏收藏 / 取消收藏。
-   *
-   * 状态读 `vm.collected`（可观察字段）：权威值来自详情响应 `thread.is_stored`
-   * （每次 load/refresh 重置），点击走 `vm.toggleStore` 的乐观翻转 + 失败回滚，
-   * 与点赞按钮同一套交互语义（成功不改文案以外的任何东西，失败弹服务端原因）。
-   * 图标与文字随状态切换（收藏 ↔ 已收藏），三种底栏形态共用本 builder。
+   * 底栏收藏 / 取消收藏：状态读 `vm.collected`（权威值来自详情响应 `thread.is_stored`，每次 load/refresh 重置），
+   * 点击走 `vm.toggleStore` 的乐观翻转 + 失败回滚，与点赞同一套语义。三种底栏形态共用本 builder。
    */
   @Builder
   BottomStoreAction() {

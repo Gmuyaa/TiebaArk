@@ -4,7 +4,8 @@ import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AvatarComponent } from './AvatarComponent';
 import { TaggedThreadText } from './TaggedThreadText';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { feedPreviewSource } from '../model/ImageLoadPolicy';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { feedImageInfo } from '../model/HomeFeedPresentation';
 import { ImageTransitionSource } from './ImageTransition';
@@ -19,7 +20,11 @@ export struct HelpThreadCard {
   @Event onOpenImage: () => void = (): void => {};
   @Local textHeight: number = 80;
 
-  /** 时间与全站一致（`model/TimeText`）；原先这里另有一套「N分钟前」口径。 */
+  /** 时间与全站一致（`model/TimeText`），不要另写一套相对时间口径。 */
+  private coverPreviewUrl(): string {
+    return feedPreviewSource(feedImageInfo(this.item.coverImage), this.item.coverImage, imageLoadStore.currentPolicy());
+  }
+
   private timeText(): string {
     return formatTimeText(this.item.lastTimeMs, Date.now());
   }
@@ -65,18 +70,22 @@ export struct HelpThreadCard {
         })
       if (this.item.coverImage.length > 0) {
         Column() {
-          if (lowFlowStore.enabled) {
+          if (imageLoadStore.isAutoLoadOff()) {
             Text('查看图片').fontSize(12).fontColor(AppTheme.ACCENT)
-          } else {
-            Image(this.item.coverImage).width('100%').height('100%').objectFit(ImageFit.Contain).borderRadius(9)
+          } else if (this.coverPreviewUrl().length > 0) {
+            ForEach([this.coverPreviewUrl()], (src: string) => {
+              Image(src).width('100%').height('100%').objectFit(ImageFit.Contain).borderRadius(9)
+            }, (src: string) => src)
           }
         }.width(80).height(this.textHeight).justifyContent(FlexAlign.Center)
-          .geometryTransition(this.imageTransition.id(this.item.coverImage), { follow: true })
+          .geometryTransition(this.coverPreviewUrl().length > 0
+            ? this.imageTransition.id(this.coverPreviewUrl()) : '', { follow: true })
           .renderFit(RenderFit.RESIZE_FILL)
           .onClick(() => {
-            this.imageTransition.open(this.getUIContext(), this.item.coverImage,
+            const preview: string = this.coverPreviewUrl();
+            this.imageTransition.open(this.getUIContext(), preview,
               feedImageInfo(this.item.coverImage).origin || this.item.coverImage,
-              (): void => { this.onOpenImage(); }, 0, !lowFlowStore.enabled);
+              (): void => { this.onOpenImage(); }, 0, preview.length > 0);
           })
       }
     }.width('100%').alignItems(VerticalAlign.Top).padding(10)

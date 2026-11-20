@@ -14,14 +14,12 @@ import { MaterialSlot } from '../common/material/MaterialConfig';
 import { MotionHoldingSource } from '../common/appearance/MotionHoldingSource';
 
 /**
- * 按压点光源强度。0 = 不发光。
- * `intensity` 的取值口径三处打架：API 参考"建议 0~1"、官方指南正文示例 10、另一份文档 0-5。
- * 按 API 参考区间定 0.8，再亮就过曝。
+ * 按压点光源强度，0 = 不发光。取值口径三处打架：API 参考"建议 0~1"、官方指南示例 10、另一份文档 0-5，
+ * 按 API 参考区间取 0.8，再亮就过曝。
  */
 const LIGHT_INTENSITY: number = 0.8;
 /**
- * 握姿换边的防抖延迟（ms）：识别到换手后等这么久再开始移动。
- * 原为 400，持有者反馈响应偏慢；`onHolding` 已对同侧重复事件去重，这里只需压住短时来回。
+ * 握姿换边的防抖延迟（ms）：`onHolding` 已对同侧重复事件去重，这里只需压住短时来回。
  */
 const HOLDING_SWITCH_DELAY_MS: number = 200;
 /** 侧滑出屏的位移（vp）：按钮 48 + 边距 20 = 68，80 足够完全出屏。 */
@@ -48,7 +46,6 @@ export struct FloatingCircleButton {
   @Param active: boolean = true;
   /** 刷新中的锁：不响应点击、不参与换边。发帖按钮保持默认 false。 */
   @Param busy: boolean = false;
-  /** 外观 */
   @Param symbol: Resource = $r('sys.symbol.plus');
   @Param diameter: number = 48;
   @Param iconSize: number = 24;
@@ -73,7 +70,7 @@ export struct FloatingCircleButton {
   @Local left: boolean = false;
   /**
    * 握姿换边的横向位移（vp）。换边按"沿当前侧滑出屏幕 → 对侧屏外就位 → 滑入"三段走，
-   * 单靠改动 `x` 会横穿内容区（2026-11-10 持有者反馈）。
+   * 单靠改动 `x` 会横穿内容区。
    */
   @Local slideOffset: number = 0;
   @Local dragging: boolean = false;
@@ -203,11 +200,8 @@ export struct FloatingCircleButton {
   /**
    * 握姿换边：先沿当前所在一侧滑出屏幕，再在对侧屏外就位、滑入。
    *
-   * 官方「侧边按钮悬浮导航」示例是用 `if/else` 渲染左右两个节点，各自挂反方向的
-   * `TransitionEffect.move`，由框架同步进出场。本项目只有一个节点（要支持自由拖拽），
-   * 因此用 `translate` 拆成三段近似同一观感，不引入第二套定位状态机。
-   *
-   * 拖拽吸附不走这里：那是短距离补间，`finishMove` 的 `dockFloatingX` 保持原样。
+   * 官方「侧边按钮悬浮导航」示例用 `if/else` 渲染左右两个节点、各挂反方向的 `TransitionEffect.move`；
+   * 本项目只有一个节点（要支持自由拖拽），因此用 `translate` 拆三段近似同一观感。拖拽吸附不走这里。
    */
   private swapSide(toLeft: boolean, b: FloatingBounds): void {
     if (this.slideTimer >= 0) { clearTimeout(this.slideTimer); this.slideTimer = -1; }
@@ -221,7 +215,7 @@ export struct FloatingCircleButton {
     /*
      * 跳位必须等滑出动画**真正结束**再做。在动画进行中直接改 `slideOffset` 的反向值，
      * ArkUI 会把它当成"改动画目标"继续补间，表现成按钮从屏幕上横穿过去
-     * （2026-11-10 持有者反馈）。用 `onFinish` 拿准结束点，另留一个兜底定时器。
+     * 用 `onFinish` 拿准结束点，另留一个兜底定时器。
      */
     const jump = (): void => {
       if (jumped || !this.alive) { return; }
@@ -305,9 +299,8 @@ export struct FloatingCircleButton {
   Button() {
     // 整个材质子树退出命中测试，触控区外的手势交给底下的列表。
     Stack() {
-      // 材质形变要求触摸真正落到持有材质的 Button 上（2026-11-09 实测的修法），
-      // 所以 `hitRegion` 必须与 `floatingButtonHitRegion` 同口径：
-      // 内层比外层小会出现"拖得到、按不出反馈"的夹心区。40 是 2026-11-10 从 32 提上来的。
+      // 材质形变要求触摸真正落到持有材质的 Button 上，所以 `hitRegion` 必须与 `floatingButtonHitRegion` 同口径：
+      // 内层比外层小会出现"拖得到、按不出反馈"的夹心区。
       GlassCircleButton({ symbol: this.symbol, diameter: this.diameter, iconSize: this.iconSize,
         slot: this.slot, iconColor: Color.White, hitRegion: Math.min(this.diameter, 40),
         composePressLight: this.pressed && motionStore.isOn(MotionEffect.HDS_POINT_LIGHT) ? LIGHT_INTENSITY : 0,
@@ -322,7 +315,7 @@ export struct FloatingCircleButton {
       // 握姿换边的"出屏 → 跳位 → 入屏"位移；静止与拖拽期间恒为 0。
       .translate({ x: this.slideOffset, y: 0 })
       // 入场从停靠侧边缘平移进来。不能改回 `.animation()` 隐式动画：它会把初始 (16,16)
-      // 到记忆位置的跳变也做成动画，表现为"按钮从屏幕左上角飞过来"（2026-11-10 持有者反馈）。
+      // 到记忆位置的跳变也做成动画，表现为"按钮从屏幕左上角飞过来"。
       .transition(motionTransition(TransitionEffect.translate({ x: this.left ? -SLIDE_OUT_DISTANCE : SLIDE_OUT_DISTANCE }),
         MotionEffect.MOVE).animation({ duration: motionDuration(300), curve: motionSpringCurve() }))
       .hitTestBehavior(this.active ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
@@ -345,9 +338,8 @@ export struct FloatingCircleButton {
         }
       })
       .scale({ x: this.pressScale, y: this.pressScale })
-      // ⚠️ 用普通 gesture 而不是 priorityGesture：优先手势一识别就把触摸从持有材质的 Button
-      // 手里拿走了，`interactive` 形变随之中断（2026-11-10 实测仍未见形变，保留此写法以备后查）。
-      // 距离阈值 8vp 仍能区分"按下拖走"与"原地点击"，拖拽实测正常。
+      // ⚠️ 用普通 gesture 而不是 priorityGesture：优先手势一识别就把触摸从持有材质的 Button 手里拿走，
+      // `interactive` 形变随之中断。距离阈值 8vp 仍能区分"按下拖走"与"原地点击"。
       .gesture(PanGesture({ direction: PanDirection.All, distance: 8 })
         .onActionStart((): void => {
           this.dragging = true; this.cancelPending(); this.originX = this.x; this.originY = this.y;

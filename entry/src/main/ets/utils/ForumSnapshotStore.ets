@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { encodeUtf8 } from '../utils/TextCodec';
 
-// Only display fields are serialized. In particular, no session, response body or thread data enters this file.
+// 只序列化展示字段：本文件不落会话、响应体与帖子数据。
 export interface StoredForumItem {
   fid: number; fname: string; avatar: string; level: number; levelName: string;
   currentScore: number; nextScore: number; isSigned: boolean; signKnown: boolean;
@@ -76,6 +76,7 @@ export function trimForumSnapshotFiles(context: common.UIAbilityContext, keepUid
   } catch (_) { /* 维护失败不影响读取；既有加载仍校验大小、内容和7天有效期。 */ }
 }
 
+/** 读取本账号的落盘快照；没有可用快照返回 `undefined`，读取时会顺带裁掉过期文件。 */
 export function loadForumSnapshot(context: common.UIAbilityContext, uid: number): StoredForumSnapshot | undefined {
   if (!Number.isSafeInteger(uid) || uid <= 0) { return undefined; }
   trimForumSnapshotFiles(context, uid);
@@ -105,7 +106,7 @@ export function loadForumSnapshot(context: common.UIAbilityContext, uid: number)
 }
 
 function fit(snapshot: StoredForumSnapshot): string {
-  // Header LRU is the only bounded collection. The guide retains the actual fetched range.
+  // 只有 Header LRU 是有界集合；guide 保留真实已抓取的范围。
   snapshot.headers.sort((a: StoredForumHeader, b: StoredForumHeader): number => a.accessedAt - b.accessedAt);
   while (snapshot.headers.length > 256) { snapshot.headers.shift(); }
   while (snapshot.headers.length > 0) {

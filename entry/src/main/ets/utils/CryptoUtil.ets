@@ -15,10 +15,9 @@ const PC_SALT: string = '36770b1f34c9bbf2e7d1a99d2b82fa9e';
 const MISC_SALT: string = '0039d79dc3cc2075129745a30237a3c4';
 
 /**
- * MD5 对空字节流的摘要。
- * 这不是"补丁值"——MD5 对空输入的输出是算法定义的常量；
- * 写在这里是因为 cryptoFramework 的 update() 拒收空数据（真机实测报 "update failed"，
- * 见 ohosTest 的 Platform.probe_empty_digest），没法走正常流程得到它。
+ * MD5 对空字节流的摘要：这是算法定义的常量，不是补丁值。
+ * 写在这里是因为 cryptoFramework 的 update() 拒收空数据（真机报 "update failed"，
+ * 见 ohosTest 的 Platform.probe_empty_digest），走不了正常流程。
  */
 const MD5_EMPTY: string = 'd41d8cd98f00b204e9800998ecf8427e';
 
@@ -55,12 +54,10 @@ export class CryptoUtil {
     return out;
   }
 
-  /** MD5 摘要，返回 32 位小写十六进制 */
   static async md5(input: string): Promise<string> {
     return CryptoUtil.md5OfBytes(encodeUtf8(input));
   }
 
-  /** MD5 摘要（二进制输入），返回 32 位小写十六进制 */
   static async md5OfBytes(input: Uint8Array): Promise<string> {
     // 空输入走常量：cryptoFramework 的 update() 不接受空数据
     if (input.length === 0) {
@@ -75,8 +72,8 @@ export class CryptoUtil {
   }
 
   /**
-   * 计算签名。传入的参数列表会被本地排序，调用方无需预先排好。
-   * 传入列表本身不会被修改——需要带 sign 参数的完整列表请用 appendSign。
+   * 传入的参数列表会被本地排序，调用方无需预先排好；传入列表本身不被修改
+   * （要带 sign 的完整列表请用 appendSign）。
    */
   static async computeSign(params: SignParam[], salt: SignSalt = SignSalt.APP): Promise<string> {
     const sorted: SignParam[] = params.slice();
@@ -99,8 +96,7 @@ export class CryptoUtil {
   }
 
   /**
-   * 计算签名并把 sign 追加到参数列表末尾（原地修改）。
-   * 这是构造请求体的常用入口。
+   * 计算签名并把 sign 追加到参数列表末尾（原地修改），构造请求体的常用入口。
    */
   static async appendSign(params: SignParam[], salt: SignSalt = SignSalt.APP): Promise<SignParam[]> {
     const sign: string = await CryptoUtil.computeSign(params, salt);

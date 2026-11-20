@@ -1,10 +1,9 @@
 /**
  * 「我的收藏」列表的增量数据源（`LazyForEach` 用）。
  *
- * **为什么不用 `Repeat`**：本 SDK 的 `Repeat` 在数据**整批替换**后不重建已实例化的
- * `ListItem` —— 2026-11-13 首页/吧页真机 A/B 已钉死（见 `model/ThreadBriefDataSource`
- * 文件头），收藏页 2026-11-13 18:07 又复现了一次（14 次吧头像补取全部成功，屏上 20 行
- * 一个都不更新）。`ForEach` 能重建但不虚拟化；这里用 `LazyForEach` + 本数据源兼顾两者。
+ * **不能用 `Repeat`**：本 SDK 的 `Repeat` 在数据**整批替换**后不重建已实例化的 `ListItem`
+ * （同一问题见 `model/ThreadBriefDataSource` 文件头）。`ForEach` 能重建但不虚拟化；
+ * 这里用 `LazyForEach` + 本数据源兼顾两者。
  *
  * 三条通知路径分开，互不打扰：
  * 1. **同行 key 变了**（吧头像逐条上屏）→ `onDataChange(i)`，只重建那一行，

@@ -148,9 +148,9 @@ export class DeviceIdentity {
       /*
        * 存储不可用：不阻断浏览，退回临时身份。
        *
-       * ⚠️ 这条分支**必须留日志**：它会让 CUID 在每次进程启动时都变一次，
+       * ⚠️ 这条分支必须留日志：CUID 会因此每次进程启动都变一次，
        * 而"点赞是否落库"高度依赖服务端是否把请求认成同一台设备。
-       * 曾经的写法是静默 catch，结果"CUID 到底固定不固定"根本无从判断。
+       * 静默 catch 写过一次，结果"CUID 到底固定不固定"无从判断。
        */
       const e: Error = err as Error;
       hilog.error(DOMAIN, TAG,
@@ -162,9 +162,7 @@ export class DeviceIdentity {
 
 /**
  * 日志用的简短摘要：空串显式标注，非空只留前缀与长度。
- *
- * 放在**模块级**而不是类里，因为模块级的 `build()` 也要用它
- * （类里的 private 方法对模块级函数不可见）。
+ * 放在模块级而不是类里，因为模块级的 `build()` 也要用它（类的 private 方法对模块级函数不可见）。
  */
 function brief(value: string): string {
   if (value.length === 0) {

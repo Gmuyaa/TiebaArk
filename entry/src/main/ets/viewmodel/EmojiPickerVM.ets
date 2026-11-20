@@ -20,12 +20,10 @@ export class EmojiPickerVM {
    * Map 不是 @Trace：界面渲染读 memePics，token 只在镜像提取时查表。 */
   private memeTokens: Map<string, string> = new Map<string, string>();
 
-  /** 面板格子的显示 URL：缩略图优先，缺则原图 */
   memeDisplayUrl(item: MemePicItem): string {
     return item.thumbnail.length > 0 ? item.thumbnail : item.picUrl;
   }
 
-  /** 镜像提取（richEditorReplyText）用的 token 查表 */
   memeTokenFor(url: string): string {
     const hit: string | undefined = this.memeTokens.get(url);
     return hit === undefined ? '' : hit;
@@ -54,7 +52,6 @@ export class EmojiPickerVM {
     await this.loadMemePics(context);
   }
 
-  /** 首次拉取收藏表情 + 预计算每个条目的发帖 token 映射 */
   async loadMemePics(context: common.UIAbilityContext): Promise<void> {
     const key: string = authSession.sessionKey();
     if (this.memeAccount !== key) {

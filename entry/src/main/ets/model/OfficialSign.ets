@@ -64,7 +64,7 @@ function itemErrorCode(error: SignError | undefined): number {
   return codes.find((value: number): boolean => value > 0) ?? 0;
 }
 
-/** 当前 22.11 upe/vpe/mpe：根 error.errno 与 error_code、逐项 signed/error 分开裁决。 */
+/** upe/vpe/mpe：根 error.errno 与 error_code、逐项 signed/error 分开裁决。 */
 export function parseOfficialSign(source: string): OfficialSignResult {
   const result: OfficialSignResult = new OfficialSignResult();
   try {

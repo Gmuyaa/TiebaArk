@@ -4,9 +4,8 @@
 const RAW_PROTOCOL: string = 'rawfile://';
 
 /**
- * 表情图源翻译：`rawfile://emoji/x.png` → `$rawfile('emoji/x.png')`；
- * 其它（https / 空串）原样返回。返回类型 ResourceStr 兼容 Image /
- * ImageSpan / RichEditorController.addImageSpan 三类消费点。
+ * `rawfile://emoji/x.png` → `$rawfile('emoji/x.png')`；其它（https / 空串）原样返回。
+ * 返回 ResourceStr 以便同时供 Image / ImageSpan / RichEditorController.addImageSpan 使用。
  */
 export function emojiSrc(src: string): ResourceStr {
   if (src.startsWith(RAW_PROTOCOL)) {

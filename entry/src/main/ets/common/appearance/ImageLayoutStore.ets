@@ -50,7 +50,7 @@ export class ImageLayoutStore {
         const valid: boolean = raw === ImageLayoutMode.MODERN || raw === ImageLayoutMode.CLASSIC;
         this.mode = normalizeImageLayoutMode(raw === undefined ? -1 : raw);
         this.loadError = valid ? '' : '图片排布设置未识别，暂用新版，请重新选择';
-        // 只有读到合法值才算"已加载"：非法值保留重读机会（与原实现一致）。
+        // 只有读到合法值才算"已加载"：非法值保留重读机会。
         if (valid) { this.gate.markLoaded(); }
       } catch (_) {
         if (revision === this.gate.revision()) {

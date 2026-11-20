@@ -5,10 +5,8 @@
  *
  * 协议形态来自参考实现（`references/code-audit-2026-10-11/ref-audit/t137458`
  * 的 `api/TiebaAPI.ets` `addThread`）：网页通道回 JSON，判定只看 `error_code`。
- * 这里的解析**比参考实现宽一点**，但不伪造成功：
- * - 结果码依次尝试 `error_code` → `no`；两者都没有算"响应不可判定"，不当成成功；
- * - `tid`/`pid` 只是锦上添花（拿来跳转新帖），取不到不影响发布判定；
- * - 超过 2^53-1 的 id 保留原文不转 number，交给调用方显示，避免静默丢精度。
+ * 比参考实现宽一点，但不伪造成功：结果码依次尝试 `error_code` → `no`，两者都没有算不可判定；
+ * `tid`/`pid` 取不到不影响发布判定；超过 2^53-1 的 id 保留原文不转 number。
  */
 
 /** 本地解析失败码，与 `ApiResult` 的本地失败区间一致。 */
@@ -26,7 +24,6 @@ interface RawAddThreadData {
 interface RawAddThreadResponse {
   error_code?: number | string;
   error_msg?: string;
-  /** 网页通道常见形态之一 */
   no?: number | string;
   error?: string;
   data?: RawAddThreadData;
@@ -98,7 +95,7 @@ function pickFirstId(primary: number | string | undefined,
   return first.length > 0 ? first : readId(secondary);
 }
 
-/** 解析 `/c/c/thread/add` 的响应文本。 */
+/** 解析发帖响应；失败不抛异常，返回对象里 `message` 有值且 `tid/pid` 为 0。 */
 export function parseAddThreadResponse(text: string): AddThreadResult {
   const result: AddThreadResult = new AddThreadResult();
   if (text.length === 0) {

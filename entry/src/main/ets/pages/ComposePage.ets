@@ -1,3 +1,8 @@
+/**
+ * 发帖页：类型页签、标题与正文编辑器、图片/表情、@ 与话题、吧选择、发布动作。
+ * 草稿与选项状态在 `ComposeVM`、`ComposeOptionsVM`，发布走 `TiebaApi`；本页只做布局、
+ * 键盘避让与面板开关。
+ */
 import { common } from '@kit.AbilityKit';
 import { KeyboardAvoidMode as PageKeyboardAvoidMode, LengthMetrics, window } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';

@@ -20,16 +20,9 @@ import { authSession } from '../auth/AuthSession';
 import { AgreeActionVM, AgreeState, AgreeTarget } from './AgreeActionVM';
 import { noteContentDeleted } from './ContentDeletionRevision';
 
-/**
- * 每页楼层数。服务端实测会按自己的 page_size 返回，这里只是请求意图。
- *
- * 10 层一页：首屏要等的楼层少，后续靠触底续读。楼中楼预览跟楼层同批拉取，
- * 每批最多 10 个楼层请求，比 30 层一页时一次性铺开更平缓。
- */
+/** 只是请求意图：服务端会按自己的 page_size 返回。 */
 const REQUEST_PAGE_SIZE: number = 10;
-/** 每页楼中楼条数。与详情页一样，服务端可能按自己的 page_size 返回 */
 const SUB_POST_PAGE_SIZE: number = 30;
-/** 单次楼中楼请求超过这个耗时就打一条告警，用来定位"哪一层在拖" */
 const SUB_POST_SLOW_MS: number = 1500;
 
 const FLOW_TAG: string = 'AgreeFlow';
@@ -38,44 +31,32 @@ const FLOW_FLAG: (v: boolean) => number = (v: boolean): number => v ? 1 : 0;
 
 @ObservedV2
 export class ThreadDetailVM {
-  /** 当前帖子 id */
   @Trace tid: number = 0;
-  /** 是否正在进行首次加载 */
   @Trace loading: boolean = false;
-  /** 是否正在下拉刷新 */
   @Trace isRefreshing: boolean = false;
-  /** 是否正在加载下一页 */
   @Trace isLoadingMore: boolean = false;
   @Trace errorText: string = '';
 
   @Trace lastErrorCode: number = 0;
-  /** 是否还没有成功加载过任何一页 */
   @Trace loadedOnce: boolean = false;
 
-  /** 主题级信息（标题、楼主、楼层总数） */
   @Trace detail: ThreadDetail = new ThreadDetail();
-  /** 已加载的楼层。每次变更都整体替换 */
+/** 每次变更都整体替换。 */
   @Trace posts: PostItem[] = [];
   @Trace hasMore: boolean = false;
   /** 定位模式只展示主帖和目标回复；通过明确入口回到完整回复列表。 */
   @Trace focusedReplyPid: number = 0;
-  /** 每层楼的楼中楼状态，按 pid 区分。数组整体替换触发 @Trace */
+/** 按 pid 区分；数组整体替换才触发 @Trace。 */
   @Trace subStates: SubPostThreadState[] = [];
-  /** 当前回复排序；贴吧默认行为是按楼层正序。 */
   @Trace sortType: ReplySortType = ReplySortType.ASC;
   /**
-   * 主帖收藏态（可观察）。
-   *
-   * **权威来源是详情响应的 `thread.is_stored`**：每次 load/refresh 成功都用
-   * 服务端值重置（与点赞的 confirmed 同思路）；点击走
-   * "乐观翻转 → 写接口 → 失败回滚"（`toggleStore`）。
-   * 放在 VM 而不是改 `ThreadDetail` 字段的原因同点赞：`ThreadDetail` 不是
-   * `@ObservedV2`，就地改它的字段不会触发界面重绘。
+   * 主帖收藏态。权威来源是详情响应的 `thread.is_stored`，每次 load/refresh 成功都重置；
+   * 点击走“乐观翻转 → 写接口 → 失败回滚”（`toggleStore`）。放 VM 而不是 `ThreadDetail`
+   * 字段：`ThreadDetail` 不是 `@ObservedV2`，就地改它的字段不会触发重绘。
    */
   @Trace collected: boolean = false;
   /**
-   * 收藏写操作在途（addstore / rmstore）。期间同一请求禁止第二笔——
-   * 收藏仍阻止在途重复点击；点赞现会即时翻转并串行处理最新点击意图。
+   * 收藏写操作在途（addstore / rmstore）；在途期间禁止第二笔。
    */
   @Trace storePending: boolean = false;
 
@@ -83,20 +64,11 @@ export class ThreadDetailVM {
   @Trace deletePending: boolean = false;
   @Trace threadDeleted: boolean = false;
   /**
-   * 最近一次**发表成功**的楼层 pid（0 = 还没有）。
-   *
-   * 用途只有一条：发表成功后让页面跳到这一层。
-   * 刷新是整页替换，页面很难从"哪些是新数据"反推位置，所以由 VM 直接把
-   * 服务端给的 pid 递出来；页面找不到（正序排在后面几页）就留在原地，不猜。
+   * 最近一次**发表成功**的楼层 pid（0 = 还没有），只用于发表成功后跳到该层；
+   * 刷新是整页替换，页面无法自行反推位置，VM 直接递出 pid，找不到就留在原地不猜。
    */
   @Trace lastReplyPid: number = 0;
-  /**
-   * 切换排序时只清空和刷新回复，主帖保持原对象不动。
-   *
-   * （历史说明）本类曾有 `@Trace agreeToggledPids: number[]` 记录"本地未同步的翻转"，
-   * 现已由 `AgreeState.toggled` 取代——那份账本与可观察态会形成两份真相，故移除。
-   * 点赞显示的基准仍是服务端 `post.agree.has_agree`，见 `resolveAgreeLiked`。
-   */
+  /** 切换排序时只清空并刷新回复，主帖保持原对象不动。 */
   @Trace isSwitchingSort: boolean = false;
 
   @Trace emojiPicker: EmojiPickerVM = new EmojiPickerVM();
@@ -111,8 +83,7 @@ export class ThreadDetailVM {
 
   private api: TiebaApi = new TiebaApi();
   /**
-   * 当前登录凭据。**每次现取**而不是构造时缓存：
-   * 用户可能在本页停留期间登录/退出，缓存一份会把旧凭据一直带下去。
+   * 每次现取而不是构造时缓存：用户可能在本页停留期间登录/退出，缓存一份会把旧凭据一直带下去。
    */
   private currentSession(): TiebaSession {
     return authSession.session();
@@ -120,23 +91,11 @@ export class ThreadDetailVM {
   /** 已成功加载到第几页（服务端的楼层页页码） */
   private loadedPage: number = 0;
   /**
-   * pid → 楼层 / 楼中楼状态的两张索引表。
-   *
-   * 这两个查询在渲染期是热点：每个楼层项都要问一次"我是谁"（`postByPid`）
-   * 和"我的楼中楼呢"（`subState`）。线性扫描会让每帧的代价随已加载楼层数
-   * 平方式增长——翻得越多越卡。索引随数组整体替换一起重建，读写语义不变。
+   * 渲染期热点：每个楼层项都要问一次“我是谁”和“我的楼中楼呢”，线性扫描的代价随已加载楼层数
+   * 平方式增长。索引随数组整体替换一起重建。
    */
   private postIndex: Map<number, PostItem> = new Map<number, PostItem>();
   private subStateIndex: Map<number, SubPostThreadState> = new Map<number, SubPostThreadState>();
-  /**
-   * 已登记、等下一个宏任务合并刷新。
-   *
-   * 仅前台加载（`prefetch=false`）之外的后台落地路径会用到，例如页面视口兜底
-   * 触发的 `ensureSubPostPreview`。
-   */
-  private subTouchPending: boolean = false;
-  /** 合并刷新的挂起帧；-1 = 无挂起。dispose 时清掉，避免已销毁实例的定时器存活到触发。 */
-  private subTouchTimer: number = -1;
   /** 楼层 pid 对应的服务端页码；确认点赞时必须读回该页。 */
   private postPages: Map<number, number> = new Map<number, number>();
   /** 楼中楼 pid 所在页与所属楼层，供点赞后读回对应的 floor 页面。 */
@@ -145,18 +104,12 @@ export class ThreadDetailVM {
   /** 正序第一页响应给出的服务端总页数，倒序首屏必须从最后一页开始。 */
   private knownTotalPage: number = 1;
   /**
-   * 每层楼的可观察点赞态，按 pid 索引。
-   *
-   * **Map 本身不需要是 @Trace**：界面读的是 `AgreeState` 自己那些 `@Trace` 字段，
-   * 只要对象引用稳定（同一 pid 始终同一个实例），局部刷新就能生效。
-   * 因此这里只做 `set`，从不在同 pid 上换新实例。
+   * 每层楼的可观察点赞态。Map 本身不需要 @Trace：界面读的是 `AgreeState` 自己的 `@Trace`
+   * 字段，只要对象引用稳定即可。因此这里只做 `set`，从不在同一 pid 上换新实例。
    */
   private agreeStates: Map<number, AgreeState> = new Map<number, AgreeState>();
   private agreeActions: AgreeActionVM = new AgreeActionVM();
-  /** 请求版本号。每次"重来一次"的操作（首次加载 / 刷新 / 切排序）都 +1，
-   * 请求返回时比对：版本号对不上说明期间又发起了新请求，旧结果直接丢弃，
-   * 避免慢响应覆盖新状态造成数据串页。
-   */
+  /** 每次“重来一次”（首次加载 / 刷新 / 切排序）+1；回来时对不上说明期间又发了请求，旧结果丢弃。 */
   private requestSeq: number = 0;
   private disposed: boolean = false;
   private deleteOperation: number = 0;
@@ -170,16 +123,14 @@ export class ThreadDetailVM {
 
   forumNameHint: string = '';
 
-  /** 设定来源吧名兜底。空串等同没设；调用方必须"确实知道"，不许猜 */
+  /** 来源吧名兜底。空串等同没设；调用方必须“确实知道”，不许猜。 */
   setForumNameHint(name: string | undefined): void {
     this.forumNameHint = name === undefined ? '' : name.trim();
   }
 
   /**
-   * 详情响应落地前的最后一道归一：把来源吧名补进空着的 `forumName`。
-   *
-   * 放在这里而不是 `ThreadDetail.fromRaw`：那是"照响应建模型"的纯函数，
-   * 不该知道路由层的事；兜底是**页面语境**，属于 VM。
+   * 详情落地前的最后一道归一：把来源吧名补进空着的 `forumName`。兜底是页面语境，
+   * 不进 `ThreadDetail.fromRaw`（那是“照响应建模型”的纯函数）。
    */
   private absorbDetail(source: ThreadDetail): ThreadDetail {
     source.forumName = resolveForumName(source.forumName, this.forumNameHint);
@@ -198,7 +149,11 @@ export class ThreadDetailVM {
     if (this.errorText.startsWith('评论已删除，')) { this.errorText = ''; }
   }
 
-  private deletionPageMatches(currentPage: number, totalPage: number, requested: number): boolean {
+  /**
+   * 服务端是否接受了这次请求的页码。`/c/f/pb/floor` 每页固定 30 条且忽略 `rn`；`pn` 超过末页
+   * 不报错，而是把 `current_page` 夹到 `total_page` 并返回空列表——夹页算“已经到底”，不算错页。
+   */
+  private subPageAccepted(currentPage: number, totalPage: number, requested: number): boolean {
     return currentPage === requested || (totalPage > 0 && totalPage < requested && currentPage === totalPage);
   }
 
@@ -208,14 +163,11 @@ export class ThreadDetailVM {
     if (this.rereadPageAfterDelete > totalPage) { this.rereadPageAfterDelete = totalPage; }
   }
 
-  /**
-   * 加载第一页。重复调用会重置到第一页。
-   * 失败时保留 errorText 供界面展示，不抛异常。
-   */
+  /** 加载第一页（重复调用重置到第一页）；失败写入 errorText 供界面展示，不抛异常。 */
   async load(context: common.UIAbilityContext, tid: number, targetPid: number = 0): Promise<void> {
     /*
-     * 已 dispose 的实例不得复用：页面销毁时调 dispose()，重进帖子是新的页面实例 + 新的 VM。
-     * 这里不再把 disposed 复位成 false —— 迟到的 load 会把已销毁的 VM 复活并继续写 @Trace 状态。
+     * 已 dispose 的实例不得复用：页面销毁时调 dispose()，重进帖子是新的页面实例 + 新 VM。
+     * 不能把 disposed 复位成 false——迟到的 load 会复活已销毁的 VM 并继续写 @Trace 状态。
      */
     if (this.disposed || this.deletePending) { return; }
     if (tid <= 0) {
@@ -225,9 +177,9 @@ export class ThreadDetailVM {
     const sameThread: boolean = this.tid === tid;
     if (!sameThread) { this.deletedPid = 0; this.deletedParentPid = 0; }
     /*
-     * load 是整页重置：必须同时清掉上一轮翻页的在途标记。本方法会推进 requestSeq，
-     * 在途 loadMore 的 finally 因此不再复位 isLoadingMore；而 refresh/loadMore/switchReplySort
-     * 的入口守卫都包含该标记，漏清会让三处入口永久被挡（只有删除路径能解）。
+     * load 是整页重置，必须同时清掉上一轮翻页的在途标记：本方法推进 requestSeq 后，在途
+     * loadMore 的 finally 不再复位 isLoadingMore，而 refresh/loadMore/switchReplySort 的入口
+     * 守卫都含该标记，漏清会让三处入口永久被挡。
      */
     this.isLoadingMore = false;
     this.threadDeleted = false;
@@ -289,7 +241,7 @@ export class ThreadDetailVM {
         return;
       }
 
-      // 整体替换，触发 @Trace（兜底吧名在这一步合并进去）
+      // 整体替换触发 @Trace（兜底吧名在这一步合并进去）
       this.detail = this.absorbDetail(response.data);
       // 收藏态跟详情一起从服务端重置（本地乐观值随权威值落地）
       this.collected = response.data.isStored;
@@ -306,9 +258,7 @@ export class ThreadDetailVM {
       this.knownTotalPage = Math.max(1, response.data.page.totalPage);
       this.loadedOnce = true;
       this.syncVisiblePosts();
-      // 新数据到位后重建可观察点赞态（整批换新实例）
       this.rebuildAgreeStates('reload');
-      // 新建/重置楼中楼状态；已有楼层数据不再保留，状态也应从零开始
       this.syncSubStates(this.posts, true);
       this.agreeFlowSnapshot('load-done');
     } catch (err) {
@@ -320,10 +270,7 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 刷新当前帖子第一页。
-   *
-   * 与首次 load 不同，刷新保留当前 tid 和排序；非正序模式保留主帖对象，
-   * 只替换回复列表并重置分页、楼中楼状态。
+   * 刷新第一页：保留当前 tid 与排序；非正序模式保留主帖对象，只替换回复并重置分页与楼中楼状态。
    */
   async refresh(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || this.tid <= 0 || this.loading || this.isRefreshing || this.isLoadingMore ||
@@ -384,11 +331,8 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 加载下一页楼层并追加。
-   *
-   * 有并发保护：滚动到底会连续触发，不挡住会重复请求同一页。
-   * 注意翻页依据是**页码**而不是已加载条数——服务端会跳号（实测缺 4/10/13 楼），
-   * 用条数推算页码迟早对不上。
+   * 加载下一页并追加。滚动到底会连续触发，必须挡住重复请求。翻页依据是**页码**而不是已加载
+   * 条数：服务端会跳号，用条数推算页码迟早对不上。
    */
   async loadMore(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || this.loading || this.isRefreshing || this.isLoadingMore || this.isSwitchingSort ||
@@ -427,17 +371,16 @@ export class ThreadDetailVM {
       this.updatePaging(response.data.page.currentPage, response.data.page.totalPage,
         response.data.page.hasMore);
       /*
-       * 页码没推进、也没有新楼层：再触底只会把同一页再要一遍（服务端 has_more
-       * 偶尔不实时）。停在原地并明说，别让"触底→加载→触底"原地打转。
+       * 页码没推进也没有新楼层：再触底只会把同一页再要一遍（服务端 has_more 偶尔不实时）。
+       * 停在原地并明说，别让“触底→加载→触底”原地打转。
        */
       if (this.hasMore && this.posts.length === countBefore && this.loadedPage === pageBefore) {
         this.hasMore = false;
         this.errorText = '这一页没有新楼层，下拉刷新可重新对齐分页';
       }
       /*
-       * 尾部追加走增量通知：`syncVisiblePosts(appendFrom)` 只把新楼层推给数据源，
-       * 已有项保持原位，滚动位置不动。楼中楼预览不再在这里预取——没有内联预览的层
-       * 一旦被二次请求撑高，正是"顶走内容"的来源；用户点开弹层时再拉完整页。
+       * 尾部追加走增量通知：已有项保持原位、滚动位置不动。楼中楼预览不在这里预取——没有内联
+       * 预览的层被二次请求撑高正是“顶走内容”的来源；用户点开弹层时再拉完整页。
        */
       this.syncSubStates(this.posts, false);
       this.syncVisiblePosts(countBefore - 1);
@@ -479,25 +422,19 @@ export class ThreadDetailVM {
   /** 界面实际渲染的楼层；整体替换保证 @Trace 列表稳定刷新。 */
   @Trace visiblePosts: PostItem[] = [];
   /**
-   * 主帖之外的楼层，专门给回复列表的 `Repeat` 用。
-   *
-   * 单独持有是刻意的：直接在 build 里 `visiblePosts.slice(1)` 会让 Repeat 的入参
-   * 每一帧都是新数组，追加一页数据时看起来像"整个列表换了一遍"。
+   * 主帖之外的楼层，专给回复列表的 `Repeat`。单独持有是刻意的：在 build 里
+   * `visiblePosts.slice(1)` 会让入参每帧都是新数组，追加一页就像“整个列表换了一遍”。
    */
   @Trace visibleReplies: PostItem[] = [];
   /**
-   * 楼层列表的增量数据源（`LazyForEach` 用）。
-   *
-   * 追加一页时只通知"末尾多了 N 项"，已有项不重建、位置不动——整体替换数组会让
-   * List 重算所有子项高度，滚动位置跟着跳。
+   * 楼层列表的增量数据源（`LazyForEach` 用）。追加时只通知“末尾多了 N 项”，已有项不重建；
+   * 整体替换数组会让 List 重算所有子项高度，滚动位置跟着跳。
    */
   readonly floors: FloorDataSource = new FloorDataSource();
 
   /**
-   * 同步界面用的楼层列表。
-   *
-   * `appendFrom >= 0` 表示这是一次"尾部追加"：只把新楼层推给数据源（`onDataAdd`），
-   * 已有项保持原样；否则整表 reload（首屏、刷新、换排序、定位回复）。
+   * 同步界面用的楼层列表。`appendFrom >= 0` 表示尾部追加：只把新楼层推给数据源；
+   * 否则整表 reload（首屏、刷新、换排序、定位回复）。
    */
   private syncVisiblePosts(appendFrom: number = -1): void {
     // 列表项逐个按 pid 回查，索引跟这次整体替换一起重建
@@ -517,7 +454,7 @@ export class ThreadDetailVM {
 
   /**
    * 切换回复排序。服务端真实能力：r=0 正序、r=1 倒序、r=2 热门、lz=1 楼主。
-   * 倒序从最后一页开始并逐页递减；不会对当前已加载页做 reverse。
+   * 倒序从最后一页开始逐页递减，不对当前已加载页做 reverse。
    */
   async switchReplySort(context: common.UIAbilityContext, newType: ReplySortType): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || newType === this.sortType || this.tid <= 0 || this.loading || this.isRefreshing ||
@@ -536,7 +473,6 @@ export class ThreadDetailVM {
     this.errorText = '';
     this.requestSeq++;
     const seq: number = this.requestSeq;
-    // 换了一批楼层，本地未同步的点赞翻转不再对应任何可见楼层
     // 保留同一个主帖对象，只清空回复。
     this.posts = [previousPosts[0]];
     this.syncVisiblePosts();
@@ -630,10 +566,8 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 展开/收起某层楼中楼。
-   *
-   * 首次展开时自动加载第一页。首次加载失败后再次点击是收起而不是重试；
-   * 重试由独立的 retrySubPosts 负责，避免"重试"按钮把区域收起来。
+   * 展开/收起某层楼中楼。首次展开自动加载第一页；首次加载失败后再次点击是收起而不是重试，
+   * 重试由 retrySubPosts 负责，避免“重试”按钮把区域收起来。
    */
   async toggleSubPosts(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
@@ -660,39 +594,23 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 静默拉取某层楼中楼第一页，供一级回复下方的预览灰块使用。
-   *
-   * 与 toggleSubPosts 的区别：不改 expanded，也不要求用户点开。
-   * 现在只由页面视口回调兜底（楼层滚进视口时触发），靠 loadedOnce/loading 去重，
-   * 一层只请求一次。楼层落地时不再批量预取——没有内联预览的层预取会把高度撑高、
-   * 把下方内容顶走。
+   * 用户主动打开某层楼中楼详情：还没有完整第 1 页就补拉一次（不改 expanded，弹层不是就地展开）。
+   * **带内联预览的层也要补**：预览只有几条、`page` 还是默认值，不补这页，后面的“加载更多”
+   * 会按 currentPage+1 直接跳到第 2 页。
    */
-  async ensureSubPostPreview(context: common.UIAbilityContext, pid: number,
+  async ensureSubPostPage(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     const state: SubPostThreadState | undefined = this.findSubState(pid);
-    // previewOnly：楼层已经带了内联预览，不必再为一层灰块发一次 floor 请求。
-    if (state === undefined || state.loadedOnce || state.loading || state.previewOnly) {
+    if (state === undefined || state.loading || state.loadedOnce) {
       return;
     }
-    /*
-     * 服务端不是每层都给内联预览。没有预览的层**不要预取**：二次请求必然在楼层
-     * 插入之后才回来，把这一层从"只有入口"撑成"带内容"，就是把下面内容顶走的源头。
-     * 这类层只保留入口行（高度固定），用户点开时 `toggleSubPosts` 再拉完整页。
-     */
-    const post: PostItem | undefined = this.postByPid(pid);
-    if (post === undefined || post.inlineSubPosts.length === 0) {
-      return;
-    }
-    await this.loadSubPosts(context, pid, threadAuthorId, 1, true);
+    await this.loadSubPosts(context, pid, threadAuthorId, 1);
   }
 
   /**
-   * 取某层楼的可观察点赞态（**引用稳定**：同一 pid 永远返回同一个实例）。
-   *
-   * 这是给 UI 读的唯一入口。界面不再从 `PostItem` 派生点赞显示值——
-   * 那样在 `ForEach` 复用下不会更新（见 `AgreeState` 注释）。
-   * 首次取到时按当前服务端值建一次；之后只更新字段，不换对象。
+   * 取某层的可观察点赞态，**引用稳定**：同一 pid 永远返回同一实例。这是给 UI 读的唯一入口，
+   * 界面不再从 `PostItem` 派生点赞显示值（`ForEach` 复用下不会更新，见 `AgreeState`）。
    */
   agreeState(pid: number): AgreeState {
     const found: AgreeState | undefined = this.agreeStates.get(pid);
@@ -705,9 +623,8 @@ export class ThreadDetailVM {
       post === undefined ? 0 : post.agreeCount);
     this.agreeStates.set(pid, created);
     /*
-     * AgreeFlow 追踪：惰性建项是"UI 显示未点赞"的头号嫌疑——
-     * 若主帖 pid 不在 agreeStates（例如重建时主帖不在 posts 里），
-     * 这里会静默造出 isAgreed=false 的默认态。
+     * AgreeFlow 追踪：惰性建项会静默造出 isAgreed=false 的默认态——若主帖 pid 不在
+     * agreeStates（例如重建时主帖不在 posts 里），界面就显示为未点赞。
      */
     hilog.info(FLOW_DOMAIN, FLOW_TAG,
       'source=lazyCreate pid=%{public}d isMain=%{public}s postFound=%{public}s'
@@ -730,10 +647,8 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 用服务端数据重建全部可观察态（首次加载 / 下拉刷新 / 切排序后调用）。
-   *
-   * 这里**换新实例**是有意的：整批数据都换了，旧引用不该再被复用。
-   * `source` 仅用于 AgreeFlow 追踪（reload / refresh / switchSort）。
+   * 用服务端数据重建全部可观察态（首次加载 / 刷新 / 切排序后调用）。这里**换新实例**是有意的：
+   * 整批数据都换了，旧引用不该再被复用。`source` 仅用于 AgreeFlow 追踪。
    */
   private rebuildAgreeStates(source: string): void {
     const mainId: number = this.detail.mainPostId;
@@ -762,10 +677,7 @@ export class ThreadDetailVM {
     }
   }
 
-  /**
-   * AgreeFlow 追踪：输出 C 层（UI/VM）四项读数。
-   * `agreeState(mainPostId)` 与界面读的是同一个入口（含惰性建项的副作用，这正是要观测的）。
-   */
+  /** AgreeFlow 追踪：输出 C 层（UI/VM）四项读数；与界面读同一入口（含惰性建项的副作用）。 */
   private agreeFlowSnapshot(source: string): void {
     const mainId: number = this.detail.mainPostId;
     const main: PostItem | undefined = this.mainPost();
@@ -782,12 +694,12 @@ export class ThreadDetailVM {
       String(FLOW_FLAG(state.liked())), String(FLOW_FLAG(state.toggled)), state.count);
   }
 
-  /** 界面显示的点赞态。读 `AgreeState`（可观察），不再从 PostItem 派生 */
+  /** 界面显示的点赞态，读 `AgreeState`（可观察），不从 `PostItem` 派生。 */
   isLiked(item: PostItem): boolean {
     return this.agreeState(item.pid).liked();
   }
 
-  /** 界面显示的点赞数。读 `AgreeState`（可观察） */
+  /** 界面显示的点赞数，读 `AgreeState`。 */
   agreeCountOf(item: PostItem): number {
     return this.agreeState(item.pid).displayCount();
   }
@@ -817,10 +729,9 @@ export class ThreadDetailVM {
     state.toggled = false;
 
     /*
-     * 改的若是主帖，必须同时同步 `detail`：
-     * 底栏读 `detail.agreeCount` / `detail.isAgreed`，而楼层列表读 `posts`——
-     * 只改一边会让底栏与楼内显示分叉（点完赞，楼里变了、底栏没变）。
-     * 按 pid 与 `mainPostId` 比对，不用数组位置。
+     * 改的若是主帖，必须同时同步 `detail`：底栏读 `detail.agreeCount` / `detail.isAgreed`，
+     * 楼层列表读 `posts`，只改一边会让底栏与楼内显示分叉。按 pid 与 `mainPostId` 比对，
+     * 不用数组位置。
      */
     if (this.detail.mainPostId > 0 && pid === this.detail.mainPostId) {
       this.detail.agreeCount = count;
@@ -838,12 +749,9 @@ export class ThreadDetailVM {
   }
 
   /**
-   * 当前主帖（首楼）。定位规则见 `ThreadDetail.locateMainPost`：
-   * 先按 `mainPostId`（权威），缺失时才退到 `floor === 1`，**绝不用数组位置**。
-   * 定位不到返回 undefined —— 调用方据此不提供该操作，而不是拿 `posts[0]` 顶上。
-   *
-   * 有 `mainPostId` 时直接查 pid 索引：这个方法在渲染期会被每个楼层调用一次，
-   * 用 `locateMainPost` 的线性扫描会变成"楼层越多越慢"的平方级开销。
+   * 当前主帖（首楼）。定位规则见 `ThreadDetail.locateMainPost`：先按 `mainPostId`，缺失时才退到
+   * `floor === 1`，**绝不用数组位置**；定位不到返回 undefined，调用方据此不提供该操作。
+   * 有 `mainPostId` 时直接查索引：本方法在渲染期每层调一次，线性扫描会变成平方级开销。
    */
   mainPost(): PostItem | undefined {
     if (this.detail.mainPostId > 0) {
@@ -1041,7 +949,7 @@ export class ThreadDetailVM {
         if (response.data.posts.some((post: PostItem): boolean => post.pid === this.deletedPid)) {
           this.errorText = '评论已删除，服务端列表尚未更新，请稍后下拉刷新'; return;
         }
-        if (!this.deletionPageMatches(response.data.page.currentPage, response.data.page.totalPage, page)) {
+        if (!this.subPageAccepted(response.data.page.currentPage, response.data.page.totalPage, page)) {
           this.errorText = '评论已删除，返回页码不一致，请下拉刷新核对'; return;
         }
         this.finishDeletionSync();
@@ -1065,7 +973,7 @@ export class ThreadDetailVM {
         const response: SubPostResponse = await this.api.fetchSubPosts(device, session, this.tid,
           this.deletedParentPid, this.detail.author.id, this.deletedPage, SUB_POST_PAGE_SIZE);
         if (!current() || owner !== authSession.sessionKey() || pid !== this.deletedPid) { return; }
-        if (response.ok && this.deletionPageMatches(response.data.currentPage, response.data.totalPage, this.deletedPage) &&
+        if (response.ok && this.subPageAccepted(response.data.currentPage, response.data.totalPage, this.deletedPage) &&
           !response.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === pid)) {
           const parentPid: number = this.deletedParentPid;
           const state: SubPostThreadState | undefined = this.findSubState(parentPid);
@@ -1085,7 +993,7 @@ export class ThreadDetailVM {
         const response: ThreadDetailResponse = await this.api.fetchThreadDetail(device, session, this.tid,
           this.deletedPage, REQUEST_PAGE_SIZE, this.deletedSort);
         if (!current() || owner !== authSession.sessionKey() || pid !== this.deletedPid) { return; }
-        if (response.ok && this.deletionPageMatches(response.data.page.currentPage, response.data.page.totalPage, this.deletedPage) &&
+        if (response.ok && this.subPageAccepted(response.data.page.currentPage, response.data.page.totalPage, this.deletedPage) &&
           !response.data.posts.some((post: PostItem): boolean => post.pid === pid)) {
           this.updateDeletedTotalPage(response.data.page.totalPage);
           this.finishDeletionSync(); return;
@@ -1104,9 +1012,6 @@ export class ThreadDetailVM {
     this.deletePending = false;
     this.deletedPid = 0;
     this.deletedParentPid = 0;
-    // 合并刷新的挂起帧一并作废：回调里的 disposed 判断仍然保留，这里只是不留存活定时器。
-    if (this.subTouchTimer >= 0) { clearTimeout(this.subTouchTimer); this.subTouchTimer = -1; }
-    this.subTouchPending = false;
   }
 
   /** 页面只提供目标身份与读回位置，写入串行化由共享状态机负责。 */
@@ -1443,26 +1348,42 @@ export class ThreadDetailVM {
     await this.loadSubPosts(context, pid, threadAuthorId, 1);
   }
 
-  /** 加载更多楼中楼。失败时保留已加载内容，只在区域底部提示 */
+  /**
+   * 加载更多楼中楼。失败保留已加载内容，只在区域底部提示。
+   *
+   * **没有真实分页基线就不要从“下一页”开始**：楼层自带的内联预览铺进状态时 `page` 还是默认值
+   * （currentPage=1 只是占位），按 currentPage+1 会直接请求第 2 页：只有一页的楼层会被服务端
+   * 夹回第 1 页并返回空列表，两页以上的则跳过第 1 页、缺掉中间那些回复。首次翻页一律从第 1 页开始。
+   */
   async loadMoreSubPosts(context: common.UIAbilityContext, pid: number,
     threadAuthorId: number): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted) { return; }
     const state: SubPostThreadState | undefined = this.findSubState(pid);
-    if (state === undefined || state.loading || !state.hasMore || state.page.currentPage <= 0) {
+    if (state === undefined || state.loading) {
+      return;
+    }
+    if (!state.loadedOnce || state.previewOnly) {
+      await this.loadSubPosts(context, pid, threadAuthorId, 1);
+      return;
+    }
+    if (!state.hasMore || state.page.currentPage <= 0) {
+      return;
+    }
+    // 已知到达末页就不再发请求：服务端只会再夹一次（返回空列表），白跑一趟网络
+    if (state.page.totalPage > 0 && state.page.currentPage >= state.page.totalPage) {
+      state.hasMore = false;
+      this.touchSubStates();
       return;
     }
     await this.loadSubPosts(context, pid, threadAuthorId, state.page.currentPage + 1);
   }
 
   /**
-   * 拉某页楼中楼。page=1 替换，page>1 追加。
-   *
-   * `prefetch` 只表示"这次是后台预览队列发的"，用来决定落地后要不要立刻刷新状态表。
-   * 用户点开 / 重试 / 加载更多一律走默认 false —— 数据到了就得马上画出来，
-   * 不能因为后台还有预取批次在跑，就让界面对着已到达的数据继续转圈。
+   * 拉某页楼中楼。page=1 替换，page>1 追加。落地后立刻刷新状态表：数据到了就得画出来，
+   * 用户点开 / 重试 / 加载更多都一样。
    */
   private async loadSubPosts(context: common.UIAbilityContext, pid: number,
-    threadAuthorId: number, page: number, prefetch: boolean = false): Promise<void> {
+    threadAuthorId: number, page: number): Promise<void> {
     const initial: SubPostThreadState | undefined = this.findSubState(pid);
     if (initial === undefined || initial.loading) {
       return;
@@ -1493,7 +1414,16 @@ export class ThreadDetailVM {
         return;
       }
 
-      if (response.data.currentPage !== page) { state.errorText = '返回页码不一致，请重试'; return; }
+      const servedPage: number = response.data.currentPage;
+      if (!this.subPageAccepted(servedPage, response.data.totalPage, page)) {
+        hilog.warn(FLOW_DOMAIN, FLOW_TAG,
+          'subposts page mismatch pid=%{public}d request=%{public}d served=%{public}d total=%{public}d',
+          pid, page, servedPage, response.data.totalPage);
+        state.errorText = '返回页码不一致，请重试';
+        return;
+      }
+      // 被夹到末页（page > total_page）：这是"已经到底"，下面按没有更多收尾
+      const clamped: boolean = servedPage !== page;
       if (this.deletedPid > 0 && this.deletedParentPid === pid) {
         if (response.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === this.deletedPid)) {
           state.errorText = '评论已删除，服务端列表尚未更新，请稍后重试';
@@ -1520,9 +1450,15 @@ export class ThreadDetailVM {
         const added: SubPostItem[] = response.data.subPosts.filter((item: SubPostItem): boolean => {
           if (seen.has(item.pid)) { return false; } seen.add(item.pid); return true;
         });
-        if (response.data.currentPage !== page || added.length === 0) {
+        if (added.length === 0) {
+          /*
+           * 空页有两种：服务端把请求页夹回末页（评论被删/计数变小），或这页全是已加载条目。
+           * 都按“到底了”收尾并保留已加载内容；只有服务端仍声称有下一页时才提示无进展。
+           */
+          state.page = response.data;
+          state.loadedOnce = true;
           state.hasMore = false;
-          state.errorText = response.data.hasMore ? '分页没有进展，请刷新后重试' : '';
+          state.errorText = clamped || !response.data.hasMore ? '' : '分页没有进展，请刷新后重试';
           return;
         }
         state.subPosts = state.subPosts.concat(added);
@@ -1561,29 +1497,19 @@ export class ThreadDetailVM {
     } finally {
       const state: SubPostThreadState | undefined = this.findSubState(pid);
       /*
-       * 复位 loading **不要求 current()**：状态实例被换掉（回复后刷新本层）或在途请求
-       * 被判过期时，旧引用已失效，若因此跳过复位，界面会永久停在"加载中"。
-       * 按 pid 查当前状态即可——换帖后 pid 查不到，自然跳过。
+       * 复位 loading **不要求 current()**：状态实例被换掉（回复后刷新本层）或在途请求被判过期时
+       * 旧引用已失效，若因此跳过复位，界面会永久停在“加载中”。按 pid 查当前状态即可。
        */
       if (state !== undefined) {
         state.loading = false;
       }
-      /*
-       * 落地刷新分两种：用户发起的请求立刻刷；后台兜底（`prefetch=true`，例如视口回调）
-       * 登记后按宏任务合并刷一次。早先这里按"在途批次计数归零"判断刷新，一旦有队列
-       * 没收尾就永远不刷，界面会停在"正在加载"而网络早已 200。
-       */
-      if (prefetch) {
-        this.scheduleSubStatesTouch();
-      } else {
-        this.touchSubStates();
-      }
+      this.touchSubStates();
       const elapsed: number = Date.now() - startedAt;
       // 只在"慢"或"失败"时留一行：正常落地不刷屏。
       if (state === undefined || elapsed >= SUB_POST_SLOW_MS || state.errorText.length > 0) {
         hilog.warn(FLOW_DOMAIN, FLOW_TAG,
-          'subposts pid=%{public}d page=%{public}d ms=%{public}d prefetch=%{public}s hasState=%{public}s loaded=%{public}s n=%{public}d err=%{public}s',
-          pid, page, elapsed, String(prefetch), String(state !== undefined),
+          'subposts pid=%{public}d page=%{public}d ms=%{public}d hasState=%{public}s loaded=%{public}s n=%{public}d err=%{public}s',
+          pid, page, elapsed, String(state !== undefined),
           String(state === undefined ? false : state.loadedOnce),
           state === undefined ? -1 : state.subPosts.length,
           state === undefined ? 'nostate' : state.errorText);
@@ -1609,20 +1535,6 @@ export class ThreadDetailVM {
     this.subStates = next;
   }
 
-  /**
-   * 预取落地时的合并刷新：同一轮里若干层几乎同时回来，只真正替换一次 `subStates`，
-   * 避免整页列表被重算 N 次；但**不等批次结束**——批次可能永远收不了尾。
-   */
-  private scheduleSubStatesTouch(): void {
-    if (this.subTouchPending || this.disposed) { return; }
-    this.subTouchPending = true;
-    this.subTouchTimer = setTimeout((): void => {
-      this.subTouchTimer = -1;
-      this.subTouchPending = false;
-      if (!this.disposed) { this.touchSubStates(); }
-    }, 0);
-  }
-
   /** 让 @Trace 数组产生一次整体替换，通知 UI 重新读取状态 */
   private touchSubStates(): void {
     const next: SubPostThreadState[] = [];
@@ -1639,11 +1551,9 @@ export class ThreadDetailVM {
       existing = this.subStates;
     } else if (posts.length > 0) {
       /*
-       * 刷新时**唯独保留首楼**的楼中楼状态。
-       *
-       * 普通楼层走弹层，列表上只显示内联预览几条，重建状态看不出来；首楼是在地展开的
-       * （`SubPostEntry` → `SubPostList`），重建会把 `expanded` 打回 false、已加载内容退回
-       * 内联简版，用户正在读的那块会被收起来、下方内容跟着上移。
+       * 刷新时**唯独保留首楼**的楼中楼状态：普通楼层走弹层，列表上只有内联预览，重建看不出来；
+       * 首楼是在地展开的（`SubPostEntry` → `SubPostList`），重建会把 `expanded` 打回 false、
+       * 已加载内容退回内联简版，用户正在读的那块会被收起来。
        */
       const mainPid: number = posts[0].pid;
       for (let i = 0; i < this.subStates.length; i++) {
@@ -1655,9 +1565,8 @@ export class ThreadDetailVM {
     }
     const next: SubPostThreadState[] = syncSubPostThreadStates(existing, posts);
     /*
-     * 楼层自带的楼中楼预览直接铺进状态：预览块在楼层落地那一刻就有内容，
-     * 不再等 floor 二次请求，高度也就不会"先矮后高"。
-     * `previewOnly` 让预取跳过这些层，同时保留"点开详情再拉完整页"的能力。
+     * 楼层自带的楼中楼预览直接铺进状态：预览块在楼层落地那一刻就有内容，高度不会“先矮后高”。
+     * `previewOnly` 让预取跳过这些层，同时保留“点开详情再拉完整页”的能力。
      */
     const byPid: Map<number, PostItem> = new Map<number, PostItem>();
     for (let i = 0; i < posts.length; i++) {

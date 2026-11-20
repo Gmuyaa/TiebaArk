@@ -2,11 +2,9 @@
  * 帖子列表的领域模型。
  *
  * 与 `model/RawFrsPage.ets` 的分工：那边照抄服务端字段，这边只保留界面真正要用的、
- * 且保证有确定值的信息。转换集中在 `ThreadListResult.fromRaw`，服务端字段缺失时
- * 给安全默认值——这样 UI 层永远不必写 `?? 0` 这类防御代码。
- *
- * 命名用「驼峰 + 语义化」，而不是服务端的下划线字段名：
- * 服务端哪天改字段名，改动只落在这个文件的 fromRaw 里，不会渗到页面。
+ * 且保证有确定值的信息。转换集中在 `ThreadListResult.fromRaw`，服务端字段缺失时给安全
+ * 默认值——UI 层永远不必写 `?? 0`。命名用「驼峰 + 语义化」而不是服务端的下划线字段名：
+ * 服务端改字段名时，改动只落在 fromRaw 里，不会渗到页面。
  */
 
 import {
@@ -22,26 +20,21 @@ import { putForumAvatar } from './ForumAvatarStore';
 import { normalizeForumColor } from '../common/appearance/ForumHeroStyle';
 import { wireString } from './Wire';
 
-/** 把 0/1 标志位转成布尔 */
 function flag(value: number | string | undefined): boolean {
   return value === 1 || value === '1';
 }
 
-/** 把可空的数字转成有默认值的数字 */
 function num(value: number | string | undefined): number {
   if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) { return 0; }
   const parsed: number = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-/** 把可空的字符串转成有默认值的字符串 */
-
 /** 旧格式 user_list 给的是 portrait 标识，需要拼成可加载的头像地址。 */
 function listPortraitUrl(portrait: string): string {
   return portrait.length === 0 ? '' : `https://himg.bdimg.com/sys/portrait/item/${portrait}`;
 }
 
-/** 把富文本片段数组拼成纯文本 */
 function joinAbstract(items: RawAbstractItem[] | undefined): string {
   if (items === undefined || items.length === 0) {
     return '';
@@ -57,19 +50,14 @@ function joinAbstract(items: RawAbstractItem[] | undefined): string {
   return text;
 }
 
-/** 吧的简要信息，用于列表页顶部 */
 export class ForumBrief {
   followed: boolean | undefined = undefined;
   id: number = 0;
   name: string = '';
-  /** 主题数 */
   threadCount: number = 0;
-  /** 帖子数（含回复） */
   postCount: number = 0;
-  /** 关注人数 */
   memberCount: number = 0;
   avatar: string = '';
-  /** 一级分类，如"个人贴吧" */
   category: string = '';
   slogan: string = '';
 
@@ -148,7 +136,6 @@ export class ThreadBrief {
   targetPid: number = 0;
   isVideo: boolean = false;
   video: VideoClip | undefined = undefined;
-  /** 帖子 id */
   tid: number = 0;
   title: string = '';
   /**
@@ -185,7 +172,7 @@ export class ThreadBrief {
   summary: string = '';
   isGood: boolean = false;
   isNotice: boolean = false;
-  /** 置顶。认 `is_top`；mtop/bakan/activity 实测恒为 0，保留是防服务端换用它们 */
+  /** 置顶。认 `is_top`；mtop/bakan/activity 恒为 0，保留是防服务端换用它们 */
   isTop: boolean = false;
   /**
    * 来源吧名。首页推荐流里每条帖子可能来自不同吧，卡片展示与进吧跳转都要带上；
@@ -236,7 +223,6 @@ export function mergeThreadPages(current: ThreadBrief[], incoming: ThreadBrief[]
   return merged;
 }
 
-/** 一次列表请求的完整结果 */
 export class ThreadListResult {
   forum: ForumBrief = new ForumBrief();
   page: PageInfo = new PageInfo();
@@ -320,7 +306,7 @@ export class ThreadListResult {
     }
 
     // 两种响应形态二选一：小吧给 `thread_list`，大吧给 `page_data.feed_list`。
-    // 实测 harmonyos 走前者、iphone（114 万主题）走后者，必须都支持。
+    // harmonyos 走前者、iphone 走后者，必须都支持。
     const list: RawThread[] | undefined = raw.thread_list;
     if (list !== undefined && list.length > 0) {
       const users: RawListUser[] = raw.user_list === undefined ? [] : raw.user_list;
@@ -354,16 +340,19 @@ export class ThreadListResult {
     if (Array.isArray(raw.media)) {
       for (const pic of raw.media) {
         if (pic === undefined || pic === null || num(pic.type) !== 3) { continue; }
-        const url: string = wireString(pic.src_pic) || wireString(pic.big_pic) || wireString(pic.origin_pic);
+        const high: string = wireString(pic.src_pic);
+        const thumb: string = wireString(pic.big_pic);
+        const origin: string = wireString(pic.origin_pic);
+        const url: string = high || thumb || origin;
         if (url.length === 0) { continue; }
         t.images.push(url);
         rememberFeedImage(url, num(pic.width), num(pic.height), flag(pic.is_long_pic),
-          wireString(pic.origin_pic) || wireString(pic.src_pic));
+          origin || high, { thumb: thumb, high: high, originBytes: num(pic.origin_size) });
       }
       t.coverImage = t.images.length > 0 ? t.images[0] : '';
     }
 
-    // tid 与 id 实测相等，优先取 tid，缺失时退回 id
+    // tid 与 id 相等，优先取 tid，缺失时退回 id
     const tid: number = num(raw.tid);
     t.tid = tid === 0 ? num(raw.id) : tid;
 
@@ -391,10 +380,10 @@ export class ThreadListResult {
     const summary: string = joinAbstract(raw.rich_abstract);
     t.summary = summary.length > 0 ? summary : joinAbstract(raw.abstract);
 
-    // 精品：两个候选字段都认（实测都无非零样本，等遇到精品帖再收敛）
+    // 精品：两个候选字段都认（都没见过非零样本，等遇到精品帖再收敛）
     t.isGood = flag(raw.is_good) || flag(raw.is_excellent_thread);
     t.isNotice = flag(raw.is_notice);
-    // 置顶实测只由 is_top 标识；另三个字段实测恒为 0，保留以防服务端改回
+    // 置顶只由 is_top 标识；另三个字段恒为 0，保留以防服务端改回
     t.isTop = flag(raw.is_top) || flag(raw.is_membertop) || flag(raw.is_bakan) || flag(raw.is_activity);
 
     return t;
@@ -417,9 +406,8 @@ export class ThreadListResult {
   /* ==========================================================================
    * 新版卡片流（page_data.feed_list）
    *
-   * 实测背景：iphone 吧在设备上显示"这个吧还没有帖子"，但它有 114 万主题。
-   * 原因是该吧不返回 `thread_list`，而返回 `page_data.feed_list`——
-   * 一个混合卡片流（热话题卡 + 帖子卡），帖子卡的内容又分散在 components 数组里。
+   * 大吧不返回 `thread_list`，而返回 `page_data.feed_list`——一个混合卡片流
+   * （热话题卡 + 帖子卡），帖子卡的内容又分散在 components 数组里。
    * ========================================================================== */
 
   /** 新版卡片流 → 领域模型。非帖子卡会被过滤掉 */
@@ -490,7 +478,7 @@ export class ThreadListResult {
     const map: RawFeedBizMap | undefined = feed.business_info_map;
     t.viewCount = ThreadListResult.bizNumber(feed.business_info, 'view_num', map);
     t.isHelp = ThreadListResult.bizNumber(feed.business_info, 'thread_type', map) === 71;
-    // 新版卡片实测不带这些标记，保持默认值而不是猜
+    // 新版卡片不带这些标记，保持默认值而不是猜
     t.isGood = false;
     t.isTop = false;
     t.isNotice = false;
@@ -536,9 +524,11 @@ export class ThreadListResult {
           }
           const imageUrl: string = wireString(pic.small_pic_url);
           if (imageUrl.length > 0) {
+            const high: string = wireString(pic.big_pic_url);
+            const origin: string = wireString(pic.origin_pic_url);
             t.images.push(imageUrl);
             rememberFeedImage(imageUrl, num(pic.width), num(pic.height), pic.is_long_pic === 1,
-              wireString(pic.origin_pic_url) || wireString(pic.big_pic_url));
+              origin || high, { thumb: imageUrl, high: high, originBytes: num(pic.origin_size) });
           }
         }
         if (t.images.length > 0) {
@@ -628,7 +618,7 @@ export class ThreadListResult {
     return out;
   }
 
-  /** 昵称在 `main_data[0].text.text` —— 两层嵌套，实测 `text` 是对象不是字符串 */
+  /** 昵称在 `main_data[0].text.text` —— 两层嵌套，`text` 是对象不是字符串 */
   private static headNickname(head: RawFeedHead): string {
     const main = head.main_data;
     if (main === undefined || main.length === 0) {
@@ -644,7 +634,7 @@ export class ThreadListResult {
 
   /**
    * 新版卡片只给时间戳，要自己在本地格式化成旧格式那种 "M-D"（日补零、月不补）。
-   * 实测旧格式服务端给的就是这个样式，保持两边一致，界面才不用分情况处理。
+   * 旧格式服务端给的就是这个样式，保持两边一致，界面才不用分情况处理。
    */
   private static monthDayText(sec: number): string {
     const d: Date = new Date(sec * 1000);

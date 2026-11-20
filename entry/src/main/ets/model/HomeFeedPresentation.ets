@@ -5,32 +5,56 @@ export class FeedImageInfo {
   height: number = 0;
   long: boolean = false;
   origin: string = '';
+  /** 列表小缩略图（media.big_pic / feed_pic.small_pic_url） */
+  thumb: string = '';
+  /** 列表高清图（media.src_pic / feed_pic.big_pic_url） */
+  high: string = '';
+  /** 原图字节数 */
+  originBytes: number = 0;
+}
+
+export interface FeedImageVariants {
+  thumb?: string;
+  high?: string;
+  originBytes?: number;
 }
 
 const imageInfo: Map<string, FeedImageInfo> = new Map();
 const measuredInfo: Map<string, FeedImageInfo> = new Map();
 
 export function rememberFeedImage(url: string, width: number, height: number,
-  long: boolean, origin: string): void {
+  long: boolean, origin: string, variants?: FeedImageVariants): void {
   if (url.length === 0) { return; }
   const info: FeedImageInfo = new FeedImageInfo();
   info.width = width > 0 ? width : 0;
   info.height = height > 0 ? height : 0;
   info.long = long;
   info.origin = origin;
+  if (variants !== undefined) {
+    info.thumb = variants.thumb ?? '';
+    info.high = variants.high ?? '';
+    const bytes: number = variants.originBytes ?? 0;
+    info.originBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  }
   if (imageInfo.size >= 1200 && !imageInfo.has(url)) { imageInfo.clear(); }
   imageInfo.set(url, info);
 }
 
-/** 记下一次 `Image.onComplete` 确认过的实际加载尺寸（无效值直接丢弃）。 */
+/** 记下一次 `Image.onComplete` 确认过的实际加载尺寸（无效值直接丢弃），并保留已登记的多档位地址。 */
 export function rememberMeasuredImage(url: string, width: number, height: number,
   long: boolean, origin: string): void {
   if (url.length === 0 || !(width > 0) || !(height > 0)) { return; }
+  const declared: FeedImageInfo | undefined = imageInfo.get(url);
   const info: FeedImageInfo = new FeedImageInfo();
   info.width = width;
   info.height = height;
   info.long = long;
-  info.origin = origin;
+  info.origin = origin.length > 0 ? origin : (declared !== undefined ? declared.origin : '');
+  if (declared !== undefined) {
+    info.thumb = declared.thumb;
+    info.high = declared.high;
+    info.originBytes = declared.originBytes;
+  }
   if (measuredInfo.size >= 1200 && !measuredInfo.has(url)) { measuredInfo.clear(); }
   measuredInfo.set(url, info);
 }
@@ -87,7 +111,6 @@ export class FeedImageBox {
 }
 
 export class ImageBoxSpec {
-  /** 最终宽度硬上限 */
   maxWidth: number = PREVIEW_MULTI_MAX_W;
   /** 最终高度硬上限（长图走 `cropLong` 分支时由 `rowHeight` 决定） */
   maxHeight: number = PREVIEW_SINGLE_MAX_H;
@@ -118,7 +141,6 @@ export function imageBox(info: FeedImageInfo, density: number, spec: ImageBoxSpe
     box.width = Math.max(1, Math.min(spec.maxWidth, nativeWidth));
     box.height = Math.max(1, spec.rowHeight);
   } else {
-    // 常规：高度上限换算成宽度上限，宽高成对，图片完整显示
     box.width = Math.max(1, Math.min(spec.maxWidth, nativeWidth, spec.maxHeight * ratio));
     box.height = Math.max(1, Math.min(spec.maxHeight, box.width / ratio));
   }

@@ -15,12 +15,9 @@ import { SubReplyDetailItem } from './SubReplyDetailItem';
 const PILL_HEIGHT: number = 52;
 /** 圆角取高度的一半 → 两端正好是半圆 */
 const PILL_RADIUS: number = PILL_HEIGHT / 2;
-/** 胶囊距左右边缘，约 16vp */
 const PILL_GUTTER: number = 16;
 /**
- * 列表底部预留（vp）。
- *
- * 末尾留出胶囊与 8vp 间距，再加胶囊实际的底部偏移；最后一条操作可完整滚到胶囊上方。
+ * 列表底部预留（vp）：留出胶囊与 8vp 间距，再加胶囊实际的底部偏移，最后一条操作可完整滚到胶囊上方。
  */
 const LIST_BOTTOM_PAD: number = PILL_HEIGHT + 8;
 
@@ -45,11 +42,9 @@ export struct SubReplyDetailSheet {
   /** 服务端回复总数；未知时传 -1 */
   @Param totalReplies: number = -1;
   @Require @Param subAgreeState: (sub: SubPostItem) => AgreeState;
-  /** 是否正在加载（首屏或翻页） */
   @Param loading: boolean = false;
   /** 加载失败提示；为空表示没有失败 */
   @Param errorText: string = '';
-  /** 还有更多可加载 */
   @Param hasMore: boolean = false;
   /** 顶部状态栏高度（vp），全屏内容层自行避让标题 */
   @Param safeTopVp: number = 0;
@@ -59,24 +54,19 @@ export struct SubReplyDetailSheet {
   @BuilderParam anchorBody: () => void = this.emptyBody;
   /** 一条楼中楼回复的正文（富文本） */
   @BuilderParam subBody: (sub: SubPostItem) => void = this.emptySubBody;
-  /** 关闭面板 */
   @Event onClose: () => void = (): void => {};
-  /** 锚点回复点赞 */
   @Event onToggleAnchorLike: () => void = (): void => {};
   @Event onToggleSubLike: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
   /** 回复入口：调用方打开父楼层的回复框 */
   @Event onReply: () => void = (): void => {};
   /** 单条子评论保留自身目标，不能复用父楼层入口。 */
   @Event onReplySub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
-  /** 首屏/翻页失败重试 */
   @Event onRetry: () => void = (): void => {};
-  /** 加载更多 */
   @Event onLoadMore: () => void = (): void => {};
 
   /**
-   * 悬浮胶囊宽度（vp）= 屏宽 − 左右各 `PILL_GUTTER`。
-   * `barFloatingStyle` 不显式钉宽时官方悬浮面会被系统压到 84vp（详情页同款问题），
-   * 而本胶囊要通栏（左右各留 `PILL_GUTTER`），只能运行时读屏宽算出来。
+   * 悬浮胶囊宽度（vp）= 屏宽 − 左右各 `PILL_GUTTER`。`barFloatingStyle` 不显式钉宽时官方悬浮面会被系统压到
+   * 84vp，而本胶囊要通栏，只能运行时读屏宽算。
    */
   @Local pillWidthVp: number = 0;
 

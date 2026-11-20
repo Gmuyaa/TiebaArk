@@ -14,6 +14,10 @@ import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { NotifyUnreadKind } from '../model/NotifyUnread';
 import { NotifyUnreadVM, notifyUnreadVM } from '../viewmodel/NotifyUnreadVM';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from './RefreshSpinner';
+import { ChatConversationRow } from './ChatConversationRow';
+import { ChatGroup } from '../model/Chat';
+import { ChatListVM, chatListVM } from '../viewmodel/ChatListVM';
+import { chatStore } from '../viewmodel/ChatStore';
 
 /** 通知页一行分类的静态描述 */
 interface NotifyRow {
@@ -22,7 +26,6 @@ interface NotifyRow {
   subtitle: string;
 
   bg: ResourceColor;
-  /** 图标颜色 */
   fg: ResourceColor;
   /** 通知列表或当前账号的粉丝列表。 */
   action: NotifyUnreadKind;
@@ -78,6 +81,7 @@ export struct MessageView {
   @Param active: boolean = true;
   @Local auth: AuthSession = authSession;
   @Local unread: NotifyUnreadVM = notifyUnreadVM;
+  @Local chat: ChatListVM = chatListVM;
   @Local refreshing: boolean = false;
   @Local pullRefreshDragging: boolean = false;
   @Local readDialogPending: boolean = false;
@@ -90,8 +94,11 @@ export struct MessageView {
 
   @Monitor('active', 'msgTabIndex', 'auth.snapshot')
   onVisibleChanged(): void {
-    if (this.active && this.msgTabIndex === 0 && authSession.isLoggedIn()) { void this.reload(); }
-    else { this.viewRevision++; this.finishRefreshing(); }
+    if (this.active && authSession.isLoggedIn()) {
+      // 切到聊天页会让未决的「全部标记为已读」确认失效（与旧行为一致），同时触发聊天列表加载
+      if (this.msgTabIndex !== 0) { this.viewRevision++; }
+      void this.reload();
+    } else { this.viewRevision++; this.finishRefreshing(); }
   }
 
   @Monitor('unread.marking')
@@ -106,8 +113,14 @@ export struct MessageView {
   private async reload(): Promise<void> {
     const revision: number = ++this.refreshRevision;
     try {
-      await this.unread.refresh(this.context());
-    } finally { if (revision === this.refreshRevision) { this.refreshing = false; } }
+      if (this.msgTabIndex === 1) {
+        await this.chat.refresh(this.context());
+      } else {
+        await this.unread.refresh(this.context());
+      }
+    } finally {
+      if (revision === this.refreshRevision) { this.refreshing = false; }
+    }
   }
 
   private preview(row: NotifyRow): string {
@@ -150,6 +163,16 @@ export struct MessageView {
         }
       }.width(40).height(40).justifyContent(FlexAlign.Center)
       .id('message-mark-all-read').enabled(!this.readDialogPending && !this.unread.marking)
+    } else {
+      Row() {
+        if (this.chat.loading) {
+          LoadingProgress().width(24).height(24).color(AppTheme.ACCENT)
+        } else {
+          GlassCircleButton({ symbol: $r('sys.symbol.arrow_clockwise'), iconWeight: FontWeight.Regular,
+            accessibilityLabel: '刷新私信会话', onTap: (): void => { void this.reload(); } })
+        }
+      }.width(40).height(40).justifyContent(FlexAlign.Center)
+      .id('message-chat-refresh').enabled(!this.chat.loading)
     }
   }
 
@@ -219,7 +242,7 @@ export struct MessageView {
         if (this.msgTabIndex === 0) {
           this.notifyList()
         } else {
-          this.chatEmpty()
+          this.chatList()
         }
       }
       .width('100%')
@@ -314,10 +337,72 @@ export struct MessageView {
     }).onRefreshing((): void => { void this.reload(); })
   }
 
-  /** 聊天页：空态占位（私信端点尚未移植，不给假入口） */
+  /** 左滑露出的操作：置顶 / 删除（都是本地行为，贴吧没有对应接口）。 */
   @Builder
-  chatEmpty() {
-    PageState({ fillRemaining: true, title: '聊天暂未开放' })
+  swipeEnd(group: ChatGroup) {
+    Row({ space: 8 }) {
+      Text(group.pinned ? '取消置顶' : '置顶')
+        .fontSize(13)
+        .fontColor(Color.White)
+        .backgroundColor(AppTheme.ACCENT)
+        .borderRadius(12)
+        .width(92)
+        .height(64)
+        .textAlign(TextAlign.Center)
+        .onClick((): void => { void chatStore.togglePin(this.context(), group.groupIdText); })
+      Text('删除')
+        .fontSize(13)
+        .fontColor(Color.White)
+        .backgroundColor(AppTheme.DANGER_TEXT)
+        .borderRadius(12)
+        .width(72)
+        .height(64)
+        .textAlign(TextAlign.Center)
+        .onClick((): void => { void chatStore.removeGroup(this.context(), group.groupIdText); })
+    }
+    .padding({ left: 8, right: 0 })
+  }
+
+  /** 聊天页：真实会话列表（数据来自 IM 通道；连接失败如实展示，不显示成"没有会话"）。 */
+  @Builder
+  chatList() {
+    Refresh({ refreshing: $$this.refreshing, builder: (): void => { this.PullHeader(); } }) {
+      List({ space: 10 }) {
+        if (this.chat.error.length > 0) {
+          ListItem() {
+            PageState({ compact: true, title: '私信连不上', message: this.chat.error, actionLabel: '重试',
+              onAction: (): void => { void this.reload(); } })
+          }
+        } else if (!this.chat.loaded && this.chat.loading) {
+          ListItem() { PageState({ compact: true, loading: true, message: '正在连接私信…' }) }
+        }
+        ForEach(this.chat.groups, (group: ChatGroup) => {
+          ListItem() {
+            ChatConversationRow({
+              group: group,
+              onTap: (): void => {
+                NavigationService.openChat({
+                  groupIdText: group.groupIdText,
+                  peerUidText: group.peer.uidText,
+                  peerName: group.title(),
+                  peerPortrait: group.peer.portrait
+                });
+              }
+            })
+          }
+          .swipeAction({ end: this.swipeEnd.bind(this, group), edgeEffect: SwipeEdgeEffect.Spring })
+        }, (group: ChatGroup) => `${group.groupIdText}:${group.lastMsgIdText}:${group.pinned}`)
+        if (this.chat.loaded && this.chat.groups.length === 0 && this.chat.error.length === 0) {
+          ListItem() { PageState({ message: '还没有私信会话' }) }
+        }
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 12 })
       .layoutWeight(1)
+      .edgeEffect(motionEdgeEffect()).scrollBar(BarState.Off)
+    }.layoutWeight(1).refreshOffset(PULL_REFRESH_OFFSET)
+    .onStateChange((state: RefreshStatus): void => {
+      this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;
+    }).onRefreshing((): void => { void this.reload(); })
   }
 }

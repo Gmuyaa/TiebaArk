@@ -23,7 +23,6 @@ export class RecommendVM {
   @Trace mode: string = '';
   @Trace loading: boolean = false;
   @Trace errorText: string = '';
-  /** 是否成功加载过至少一次（区分首次加载与刷新） */
   @Trace loadedOnce: boolean = false;
   /** 正在翻下一页（列表尾部的"正在加载更多"+ 触底重复触发守卫） */
   @Trace loadingMore: boolean = false;
@@ -80,7 +79,7 @@ export class RecommendVM {
     this.errorText = '';
     this.loadMoreError = '';
     this.hasMore = false;
-    /** 耗时打点（真机优化用） */
+    // 耗时打点。
     const t0: number = Date.now();
 
     try {
@@ -156,12 +155,9 @@ export class RecommendVM {
   }
 
   /**
-   * 推荐模式（官方流）续页：`load_type=2, pn+1`，官方序**追加**（不洗牌 ——
-   * 官方流有它自己的推荐序，洗牌会毁掉"相关推荐"的局部性），`mergeThreadPages`
-   * 按 tid 去重。
-   *
-   * 终止判据（防死循环）：某页 0 条 → 到底；整页全是已见过的 tid（`added=0`）
-   * 也停 —— 那说明服务端没理会 pn 的推进，继续翻只会无限重刷同一批。
+   * 推荐模式（官方流）续页：`load_type=2, pn+1`，官方序**追加**（不洗牌——官方流有自己的推荐序，
+   * 洗牌会毁掉“相关推荐”的局部性）。终止判据（防死循环）：某页 0 条 → 到底；整页全是已见过的 tid
+   * （`added=0`）也停——那说明服务端没理会 pn 的推进，继续翻只会无限重刷同一批。
    */
   private async loadMoreRecommend(context: common.UIAbilityContext): Promise<void> {
     this.loadingMore = true;
@@ -189,9 +185,7 @@ export class RecommendVM {
       const added: number = this.threads.length - before;
       this.recommendPage = this.recommendPage + 1;
       this.hasMore = canContinue;
-      /*
-       * 打点给真机取证用：`added` 是去重后实际进流的条数，`total` 是追加后的总条数。
-       */
+      /* 打点给真机取证用：`added` 是去重后实际进流的条数，`total` 是追加后的总条数。 */
       hilog.info(0x0000, 'RecommendVM',
         'loadMore official page=%{public}d added=%{public}d total=%{public}d hasMore=%{public}s ms=%{public}d',
         this.recommendPage, added, this.threads.length, String(this.hasMore), Date.now() - t0);
@@ -262,7 +256,7 @@ export class RecommendVM {
     }
   }
 
-  /** 进入指定吧。与旧 ThreadListVM.refresh 相同的链路，但给帖子打上来源吧名 */
+  /** 进入指定吧：与 `ThreadListVM.refresh` 同一链路，但给帖子打上来源吧名。 */
   async openForum(context: common.UIAbilityContext, forumName: string): Promise<void> {
     this.syncAccount();
     if (this.loading || this.loadingMore) {
@@ -328,7 +322,6 @@ export class RecommendVM {
     await this.refreshRecommend(context);
   }
 
-  /** 下拉刷新入口：按当前模式刷新 */
   async refresh(context: common.UIAbilityContext): Promise<void> {
     if (this.mode.length === 0) {
       await this.refreshRecommend(context);

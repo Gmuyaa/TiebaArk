@@ -1,18 +1,16 @@
 /**
  * 吧头像按需反查队列：合并同一贴吧的请求并限制并发；回调前检查任务有效性。
  *
- * 2026-11-13（吧头像提速）：并发上限 2 → 4；入队时可带 fid，交给注入的 fetcher
- * 走更轻的 `getforumdetail`（只回吧信息）。首页推荐卡片数据一到达就批量入队，
- * 不再等卡片 `onAppear`——冷启动实测原实现最后一张吧头像要 ~2.4s 才出现。
- * 去重、缺图优先、60s 失败冷却的语义未变。
+ * 入队时可带 fid，交给注入的 fetcher 走更轻的 `getforumdetail`（只回吧信息）。首页推荐
+ * 卡片数据一到就批量入队，不等卡片 `onAppear`，否则冷启动时最后几张吧头像是空的。
+ * 去重、缺图优先、失败冷却的语义见各字段说明。
  */
 
 import { getForumAvatar, markForumAvatarFetched, putForumAvatar } from './ForumAvatarStore';
 
 /**
  * 同时在飞的反查请求数上限。
- * 原值 2 是按"每次反查都拉一整页 frs/page"定的；现在已知 fid 时走 getforumdetail，
- * 与 MyListVM（并发 3）、UserPageVM（并发 4）同量级，取 4。
+ * 与 MyListVM（并发 3）、UserPageVM（并发 4）同量级。
  */
 const MAX_INFLIGHT: number = 4;
 /** 反查失败后的冷却窗（毫秒）：冷却内同名入队静默忽略 */
@@ -27,7 +25,7 @@ export type ForumAvatarDone = (avatarUrl: string) => void;
 export class ForumAvatarQueue {
   private readonly fetcher: ForumAvatarFetcher;
   private readonly nowFn: () => number;
-  /** 已入队未完成的吧名（去重集合，两条队列的镜像） */
+  /** 已入队未完成的吧名；两条队列共用这一份去重 */
   private readonly pending: Set<string> = new Set();
   /** 待发任务的 fid（可能为 0 = 只知道吧名）；同吧后面带 fid 入队时更新为已知值 */
   private readonly pendingForumId: Map<string, number> = new Map();
@@ -37,9 +35,7 @@ export class ForumAvatarQueue {
   private readonly refreshQueue: string[] = [];
   /** 同名的全部回调：fetch 中新入队的卡也要收到同一次结果 */
   private readonly callbacks: Map<string, ForumAvatarDone[]> = new Map();
-  /** 最近一次失败的时刻（毫秒），冷却判定用 */
   private readonly failedAt: Map<string, number> = new Map();
-  /** 在飞计数 */
   private inflight: number = 0;
 
   constructor(fetcher: ForumAvatarFetcher,
@@ -109,12 +105,10 @@ export class ForumAvatarQueue {
     return this.refreshQueue.length;
   }
 
-  /** 当前在飞请求数（诊断 / 测试用） */
   inflightCount(): number {
     return this.inflight;
   }
 
-  /** 该吧是否处于失败冷却期内（测试用） */
   isCoolingDown(forumName: string): boolean {
     const failed: number | undefined = this.failedAt.get(forumName.trim());
     return failed !== undefined && this.nowFn() - failed < COOLDOWN_MS;

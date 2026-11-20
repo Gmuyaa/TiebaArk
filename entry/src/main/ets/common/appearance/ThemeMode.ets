@@ -17,7 +17,6 @@ export enum ThemeModePref {
 /** 默认偏好：跟随系统（不做过设置的老用户 = 维持系统行为，应用不变样） */
 export const DEFAULT_THEME_MODE_PREF: ThemeModePref = ThemeModePref.FOLLOW_SYSTEM;
 
-/** 设置页展示顺序（默认项在最前） */
 export const ALL_THEME_MODE_PREFS: ThemeModePref[] = [
   ThemeModePref.FOLLOW_SYSTEM,
   ThemeModePref.LIGHT,
@@ -55,16 +54,8 @@ export function themeModeDesc(pref: ThemeModePref): string {
 }
 
 /**
- * 把持久化里读到的值归一到合法档位。
- *
- * 映射表（**这就是全部规则，不要再加分支**）：
- * ```
- *   无值 / 未知值 / NaN / 越界  → 跟随系统（默认）
- *   0                          → 跟随系统
- *   1                          → 浅色模式
- *   2                          → 深色模式
- * ```
- * 任何情况下都返回合法档：颜色模式坏了**不能**让应用渲染不出界面。
+ * 把持久化里读到的值归一到合法档位：无值 / 未知 / NaN / 越界 → 跟随系统，1 → 浅色，2 → 深色。
+ * 任何情况下都返回合法档：颜色模式坏了不能让应用渲染不出界面。
  */
 export function normalizeThemeModePref(raw: number): ThemeModePref {
   switch (raw) {

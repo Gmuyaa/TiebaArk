@@ -52,7 +52,7 @@ export struct SettingsGroupTitle {
   build() {
     Text(this.title)
       .fontSize(SettingsLayout.SUB_SIZE)
-      // app_note_text：实测 5.27（页面底）/ 5.74（卡片），TEXT_SUB 只有 2.62 不达标
+      // 用 app_note_text：TEXT_SUB 的对比度在页面底与卡片底上都不达标
       .fontColor(AppTheme.NOTE_TEXT)
       .width('100%')
       .padding({ left: 4, right: 4 })
@@ -178,10 +178,8 @@ struct RowChevron {
 }
 
 /**
- * 入口行：图标（可选）+ 名称 + 摘要 + 箭头。
- *
- * 摘要位置由 `summaryBelow()` 决定：**过长或当前字号挤不下就移到名称下方**，
- * 不跟名称和箭头争宽度（16fp 走行右，24fp 落到名称下方）。
+ * 入口行：图标（可选）+ 名称 + 摘要 + 箭头。摘要位置由 `summaryBelow()` 决定：过长或当前字号挤不下就移到名称下方，
+ * 不跟名称和箭头争宽度。
  */
 @ComponentV2
 export struct SettingsEntryRow {
@@ -447,7 +445,6 @@ export struct SettingsActionRow {
   }
 }
 
-/** 状态区的性质。 */
 export enum SettingsStatusKind {
   LOADING = 0,
   EMPTY = 1,

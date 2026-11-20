@@ -11,12 +11,8 @@ import { CacheStatsVM } from '../viewmodel/CacheStatsVM';
 import { AvatarCropPage } from '../components/AvatarCropPage';
 import { AvatarCrop } from '../model/AvatarUpload';
 /**
- * 设置页：分类首页、子页和锚定选项菜单。
- * 信息结构由 SettingsModel 提供，尺寸由 SettingsLayout 提供，颜色读取 AppTheme。
- * 页面与选项菜单沿用共享材质槽位。
- * 列表 key 必须包含实时展示值，避免偏好变化后复用旧节点而保留旧文案。
- * 设置内容底部间距遵循 SettingsLayout.PAGE_BOTTOM_GAP。
- * 历史视觉与迁移过程见项目开发记录和设置系统设计规范。
+ * 设置页：分类首页、子页与锚定选项菜单。信息结构来自 SettingsModel，尺寸来自 SettingsLayout，颜色读 AppTheme。
+ * 列表 key 必须包含实时展示值，否则偏好变化后会复用旧节点、保留旧文案；内容底部间距按 SettingsLayout.PAGE_BOTTOM_GAP。
  */
 
 import { common } from '@kit.AbilityKit';
@@ -60,7 +56,11 @@ import { homeTopNavStore } from '../common/appearance/HomeTopNavStore';
 import { HomeTopNav } from '../components/HomeTopNav';
 import { HomeDualRowTopBar } from '../components/HomeDualRowTopBar';
 import { HomeNavigationPart, homeNavigationHideStore } from '../common/appearance/HomeNavigationHideStore';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import {
+  ALL_GIF_AUTO_PLAYS, ALL_IMAGE_QUALITIES, GifAutoPlay, ImageQuality,
+  gifAutoPlayLabel, imageQualityLabel
+} from '../model/ImageLoadPolicy';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { ImageLayoutMode, imageLayoutLabel } from '../model/ImageLayout';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
@@ -98,8 +98,7 @@ import { AvatarComponent } from '../components/AvatarComponent';
 import { SETTINGS_ACTION_LOGIN, SETTINGS_ACTION_LOGOUT, SettingsAboutItem, SettingsEntry, SettingsEntryKind, SettingsGroup, SettingsOptionItem, SettingsPane, SettingsPanePresentation, SettingsState, SETTINGS_APP_VERSION, SETTINGS_VERSION_CODE, aboutItems, aboutNotes, buildOptions, buildSettingsCategoryEntries, buildSettingsGroups, settingsEntryRenderKey, settingsGroupRenderKey, settingsPageTitle, settingsPanePresentation, settingsParentPane } from '../model/SettingsModel';
 
 const TOP_NAV_PREVIEW_H: number = 108;
-// 「官方沉浸」预览：整片玻璃面板（statusBarHeight 传 0）= 48 + 6 + 56 + 上下内距 8 = 118，
-// 再露出 28vp 内容让玻璃有东西可透。
+// 「官方沉浸」预览：整片玻璃面板（statusBarHeight 传 0）= 48 + 6 + 56 + 上下内距 8 = 118，再露出 28vp 内容让玻璃有东西可透。
 const TOP_NAV_PREVIEW_DUAL_H: number = 119 + 28;
 const PANE_ENTRY_DISTANCE: number = 18;
 /** 吧页分类栏三选一（顺序与 ForumTabsStyle 枚举一致：0 常规吸顶 / 1 胶囊 / 2 悬浮） */
@@ -143,12 +142,8 @@ struct SettingsPage {
   @Local cropOpen: boolean = false;
 
   /**
-   * 哪个入口行的弹层是开着的（存行的 `key`，空串 = 全关）。
-   *
-   * 为什么用 `key` 而不是 `boolean` + 记录面板：`bindPopup` 要挂在**行自己**身上
-   * （弹层的锚点是那一行的 bounds），而每行都要写一句"该不该显示"，
-   * 于是 `show = this.popupKey === entry.key` 天然保证**任何时刻最多只有一层弹层**，
-   * 不会出现两个行同时为 true 的中间态。
+   * 哪个入口行的弹层是开着的（存行的 `key`，空串 = 全关）。用 key 而不是 `boolean` + 记录面板：`bindPopup` 要挂在
+   * 行自己身上（锚点是那一行的 bounds），`show = this.popupKey === entry.key` 天然保证任何时刻最多只有一层弹层。
    */
   @Local popupKey: string = '';
 
@@ -192,12 +187,8 @@ struct SettingsPage {
   }
 
   /**
-   * 页面销毁时收掉页面自己创建的流程。头像上传已发出但读回还没回来时，`dispose()` 会把这次读回
-   * 交接给共享刷新队列（换号则放弃），不是静默丢弃 —— 语义在 `AvatarEditVM.handOffSync`。
-   *
-   * `forbiddenVm` 也在这里兜底：它由页面创建（`navigateTo` 进屏蔽吧前重建），
-   * `ForbiddenForumsPane` 离开面板时已 dispose 过一次（离开即停在途准备/取消），
-   * `dispose()` 幂等（只置位、递增代次、清标志），这里再收一次不改变停止时机。
+   * 页面销毁时收掉页面自己创建的流程：头像上传已发出但读回未回时，`dispose()` 把读回交接给共享刷新队列而非静默丢弃；
+   * `forbiddenVm` 这里再收一次是幂等的，不改变停止时机。
    */
   aboutToDisappear(): void {
     this.leavePage();
@@ -211,9 +202,8 @@ struct SettingsPage {
   }
 
   /**
-   * 离页的公共两件事：标记页面不可见（挡住迟到的前台刷新写回）、收掉进入动画的中间态。
-   * `finishPaneEntry` 里是 0 时长 `animateTo`，它在销毁期调用是否安全**仍未实测**；
-   * 这里只做去重，不改它的行为。
+   * 离页的公共两件事：标记页面不可见（挡住迟到的前台刷新写回）、收掉进入动画的中间态。`finishPaneEntry` 的 0 时长
+   * `animateTo` 在销毁期调用是否安全仍未实测，这里只做去重。
    */
   private leavePage(): void {
     this.pageVisible = false;
@@ -221,15 +211,9 @@ struct SettingsPage {
   }
 
   /**
-   * 系统返回：先退出关于页内层或其它设置的数据说明，再回分类列表。
-   *
-   * 返回 `true` = 已消费。不做这一步的话，用户在二级页里按返回会**直接关掉设置页**，
-   * 而顶栏那枚返回按钮却是回列表 —— 两个返回走两条路是最容易被忽略的不一致。
-   *
-   * 弹层**不走这里**：`bindPopup` 自己管蒙层与返回键的关闭（`autoCancel` 默认开），
-   * 它关掉时会回调 `onStateChange`，我们在那里清 `popupKey`。
-   *
-   * 裁剪页盖在最上层时同理：返回键先收裁剪页（等同点「✕」），不退设置页。
+   * 系统返回：先退出关于页内层或数据说明，再回分类列表，返回 `true` = 已消费。不做这一步的话二级页按返回会直接关掉
+   * 设置页，而顶栏返回按钮是回列表 —— 两个返回走两条路。弹层不走这里（`bindPopup` 自己管蒙层与返回键）；
+   * 裁剪页盖在最上层时返回键先收裁剪页。
    */
   onBackPress(): boolean {
     if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.executing) {
@@ -251,9 +235,8 @@ struct SettingsPage {
 
 
   /**
-   * 入口列表模型。**唯一真值源**：三档文案分别读三个全局单例（都是 `@Trace`），
-   * 登录态读 `authSession.snapshot`。所以"选完档位返回列表，值已经变了"、
-   * "退出登录后整张卡片消失"都是自动的，不需要手动刷新。
+   * 入口列表模型，唯一真值源：三档文案读三个全局单例（都是 `@Trace`），登录态读 `authSession.snapshot`，
+   * 所以"返回列表值已变""退出登录后卡片消失"都自动发生。
    */
   private state(): SettingsState {
     return {
@@ -269,7 +252,9 @@ struct SettingsPage {
       hideStatusBar: homeNavigationHideStore.hideStatusBar,
       hideTopNavigation: homeNavigationHideStore.hideTopNavigation,
       hideBottomNavigation: homeNavigationHideStore.hideBottomNavigation,
-      lowFlow: lowFlowStore.enabled,
+      imageQualityWifiLabel: imageQualityLabel(imageLoadStore.wifi),
+      imageQualityMobileLabel: imageQualityLabel(imageLoadStore.mobile),
+      gifAutoPlayLabel: gifAutoPlayLabel(imageLoadStore.gif),
       superResolution: superResolutionStore.enabled,
       smartReach: this.smartReach.enabled,
       homeComposeSmartReach: this.smartReach.homeComposeEnabled,
@@ -405,11 +390,8 @@ struct SettingsPage {
   }
 
   /**
-   * 待恢复的偏移与它的导航代号。
-   *
-   * ⚠️ 不能用 `setTimeout(0)` 当"布局已就绪"：那只是晚一拍执行，内容可能还没换完，
-   * 于是 `scrollTo` 作用在**旧内容**上（或被旧的最大偏移夹取）。真正的就绪信号是
-   * 内容容器的 `onAreaChange` —— 新内容参与布局后才会回调，这里才做恢复。
+   * 待恢复的偏移与它的导航代号。⚠️ 不能用 `setTimeout(0)` 当"布局已就绪"：那只是晚一拍，内容可能还没换完，
+   * `scrollTo` 会作用在旧内容上或被旧的最大偏移夹取。真正的就绪信号是内容容器的 `onAreaChange`。
    */
   @Local pendingRestore: number = -1;
   private pendingRestoreSeq: number = -1;
@@ -424,15 +406,13 @@ struct SettingsPage {
     this.pendingRestore = -1;
     this.scroller.scrollTo({ xOffset: 0, yOffset: y });
     /*
-     * 这里**故意不写 navGlass**：`y` 只是目标值，内容变短时实际偏移会被夹取到更小的值。
-     * 顶栏状态必须来自恢复后的真实偏移 —— 由 `Scroll.onScroll → updateNavGlass()` 负责。
+     * 这里故意不写 navGlass：`y` 只是目标值，内容变短时实际偏移会被夹取；顶栏状态必须来自恢复后的真实偏移。
      */
     this.updateNavGlass();
   }
 
   /**
-   * 统一的"返回上一级"：记住当前页偏移 → 换页 → 交给内容布局回调去恢复。
-   * 期间若再次导航，`navSeq` 已变，本次恢复作废（不会出现迟到滚动）。
+   * 统一的"返回上一级"：记住当前页偏移 → 换页 → 交给内容布局回调恢复。期间若再次导航，`navSeq` 已变，本次恢复作废。
    */
   private leaveToParent(): void {
     const from: SettingsPane = this.pane;
@@ -471,7 +451,7 @@ struct SettingsPage {
         } else {
           // 从入口进入是"新页面"：统一走导航方法（保存父页偏移 + 新页从顶部开始）
           this.navigateTo(entry.pane);
-          // G-03：进缓存清理页**先统计**，行右侧的占用必须是进去那一刻的真实值
+          // 进缓存清理页先统计：行右侧的占用必须是进去那一刻的真实值
           if (entry.pane === SettingsPane.CACHE) {
             this.refreshCacheStats();
           }
@@ -491,25 +471,21 @@ struct SettingsPage {
   }
 
   /**
-   * 打开某一行的选项弹层。
-   *
-   * 先设 `popupPane` 再设 `popupKey`：`popupKey` 是"显示"的开关，它会立刻触发弹层
-   * 创建并渲染内容 —— 顺序反了的话，弹层第一帧会渲染到**上一次**那一组选项。
+   * 打开某一行的选项弹层。必须先设 `popupPane` 再设 `popupKey`：后者是显示开关，会立刻触发弹层创建并渲染内容，
+   * 顺序反了第一帧会渲染到上一次那组选项。
    */
   private openPopup(entry: SettingsEntry): void {
     this.popupPane = entry.pane;
     this.popupKey = entry.key;
   }
 
-  /** 关掉弹层（选中一项、点面板外、或页面切走时都走这里） */
   private closePopup(): void {
     this.popupKey = '';
   }
 
   /**
-   * 某一组设置的全部选项。三组共用 `buildOptions()` 的结构规则，
-   * 档位文案从各自的来源取（`MaterialConfig` 带 `@kit.UIDesignKit`，
-   * 进不了 `SettingsModel`，所以在这里拼）。
+   * 某一组设置的全部选项。三组共用 `buildOptions()` 的结构规则；`MaterialConfig` 带 `@kit.UIDesignKit`、
+   * 进不了 `SettingsModel`，所以档位文案在这里拼。
    */
   private optionsFor(pane: SettingsPane): SettingsOptionItem[] {
     if (pane === SettingsPane.SIGN_SETTINGS) {
@@ -531,6 +507,18 @@ struct SettingsPage {
       return buildOptions([imageLayoutLabel(ImageLayoutMode.MODERN), imageLayoutLabel(ImageLayoutMode.CLASSIC)],
         imageLayoutStore.mode, 'image_layout');
     }
+    if (pane === SettingsPane.IMAGE_QUALITY_WIFI) {
+      return buildOptions(ALL_IMAGE_QUALITIES.map((q: ImageQuality): string => imageQualityLabel(q)),
+        ALL_IMAGE_QUALITIES.indexOf(imageLoadStore.wifi), 'image_quality_wifi');
+    }
+    if (pane === SettingsPane.IMAGE_QUALITY_MOBILE) {
+      return buildOptions(ALL_IMAGE_QUALITIES.map((q: ImageQuality): string => imageQualityLabel(q)),
+        ALL_IMAGE_QUALITIES.indexOf(imageLoadStore.mobile), 'image_quality_mobile');
+    }
+    if (pane === SettingsPane.GIF_AUTOPLAY) {
+      return buildOptions(ALL_GIF_AUTO_PLAYS.map((g: GifAutoPlay): string => gifAutoPlayLabel(g)),
+        ALL_GIF_AUTO_PLAYS.indexOf(imageLoadStore.gif), 'gif_autoplay');
+    }
     if (pane === SettingsPane.MATERIAL) {
       return buildOptions(
         ALL_MODES.map((mode: MaterialMode): string => modeLabel(mode)),
@@ -546,9 +534,7 @@ struct SettingsPage {
         ALL_ACTION_BAR_STYLES.indexOf(threadActionBarStore.style), 'actionbar');
     }
     if (pane === SettingsPane.TOP_NAV) {
-      /*
-       * 仅提供官方沉浸（默认）与一体玻璃；按展示表取持久化值，不把下标当枚举值。
-       */
+      // 只提供官方沉浸（默认）与一体玻璃；按展示表取持久化值，不把下标当枚举值。
       return buildOptions(
         ALL_HOME_TOP_NAV_OPTIONS.map((option: HomeTopNavOption): string => option.label),
         homeTopNavOptionIndexOf(homeTopNavStore.style), 'topnav');
@@ -566,11 +552,28 @@ struct SettingsPage {
     return [];
   }
 
-  /** 选中弹层里的第 `index` 项：按组分发到对应的单例，然后关掉弹层。 */
   private pickOption(pane: SettingsPane, index: number): void {
     if (pane === SettingsPane.IMAGE_LAYOUT) {
       if (index !== ImageLayoutMode.MODERN && index !== ImageLayoutMode.CLASSIC) { return; }
       void imageLayoutStore.setMode(index as ImageLayoutMode,
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.IMAGE_QUALITY_WIFI) {
+      if (index < 0 || index >= ALL_IMAGE_QUALITIES.length) { return; }
+      void imageLoadStore.setWifi(ALL_IMAGE_QUALITIES[index],
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.IMAGE_QUALITY_MOBILE) {
+      if (index < 0 || index >= ALL_IMAGE_QUALITIES.length) { return; }
+      void imageLoadStore.setMobile(ALL_IMAGE_QUALITIES[index],
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.GIF_AUTOPLAY) {
+      if (index < 0 || index >= ALL_GIF_AUTO_PLAYS.length) { return; }
+      void imageLoadStore.setGif(ALL_GIF_AUTO_PLAYS[index],
         this.getUIContext().getHostContext() as common.UIAbilityContext);
       this.closePopup(); return;
     }
@@ -633,25 +636,19 @@ struct SettingsPage {
   }
 
   /**
-   * 切换沉浸光感强度。
-   *
-   * 写的是全局单例 `materialManager`，持久化与失效广播都在里面：
-   * 落盘成功后，所有**读到它**的组件（V2）下一帧就是新观感 —— 包括本页顶栏
-   * 那枚返回按钮，所以选完关掉弹层就能看到顶栏变了。
-   * 保存失败由 Store 暴露，当前分类页提供明确提示和重试。
+   * 切换沉浸光感强度。写的是全局单例 `materialManager`，持久化与失效广播都在里面：落盘成功后所有读到它的
+   * V2 组件下一帧就是新观感（包括本页顶栏的返回按钮）；保存失败由 Store 暴露，当前分类页给提示与重试。
    */
   private pickMaterialMode(mode: MaterialMode): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void materialManager.setMode(mode, context);
   }
 
-  /** 切换帖子详情页底部操作栏样式（与 pickMaterialMode 同一条链路）。 */
   private pickActionBarStyle(style: ThreadActionBarStyle): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void threadActionBarStore.setStyle(style, context);
   }
 
-  /** 切换首页顶栏样式（同一条链路）。 */
   private pickTopNavStyle(style: HomeTopNavStyle): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void homeTopNavStore.setStyle(style, context);
@@ -661,12 +658,6 @@ struct SettingsPage {
   private setHidePart(part: HomeNavigationPart, checked: boolean): void {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void homeNavigationHideStore.set(part, checked, context);
-  }
-
-  /** 低流量模式（本机偏好；与三个隐藏开关**不是**同一个存储）。 */
-  private setLowFlow(checked: boolean): void {
-    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    void lowFlowStore.setEnabled(checked, context);
   }
 
   /** 图像超分入口开关（本机偏好；又一个独立存储，只管查看器里那枚按钮的显隐）。 */
@@ -703,10 +694,6 @@ struct SettingsPage {
         .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
       return;
     }
-    if (entry.action === 'low_flow') {
-      this.setLowFlow(checked);
-      return;
-    }
     if (entry.action === 'super_resolution') {
       this.setSuperResolution(checked);
       return;
@@ -735,8 +722,8 @@ struct SettingsPage {
   }
 
   /**
-   * 退出登录。先确认再执行：退出会让点赞等写操作立刻不可用，属于不可逆操作。
-   * 失败如实提示（存储清理失败时内存态仍已清空，重启后可能仍是登录态——这点必须说清）。
+   * 退出登录。先确认再执行（退出会让点赞等写操作立刻不可用）；失败如实提示 —— 存储清理失败时内存态已清空，
+   * 重启后可能仍是登录态，这点必须说清。
    */
   private async confirmLogout(): Promise<void> {
     let confirmed: boolean = false;
@@ -779,10 +766,8 @@ struct SettingsPage {
   }
 
   /**
-   * 清理入口：**没有可清内容就直接说明**（不弹假确认框），有内容先二次确认。
-   *
-   * 统计中与读取失败都**不进入**这里 —— 阶段判定在 `cachePhaseCanClear()`：
-   * 连占用都没读出来就提供"清理"，只会让用户点进去看到"没有可清理的内容"。
+   * 清理入口：没有可清内容就直接说明（不弹假确认框），有内容先二次确认。统计中与读取失败都不进入这里 ——
+   * 阶段判定在 `cachePhaseCanClear()`，连占用都没读出来就提供"清理"只会让用户点进去看到"没有可清理的内容"。
    */
   private async confirmClearCache(): Promise<void> {
     if (this.cacheBusy || !cachePhaseCanClear(this.cacheStats.phase)) {
@@ -822,8 +807,7 @@ struct SettingsPage {
       this.lastFailed = result.failed;
       this.lastFreedBytes = result.freedBytes;
     } finally {
-      // 正常结束**自动重新统计**（回读成功就是"现在还剩多少"）；
-      // 只有"删了一部分又删不掉"时才停在"部分完成"，因为那时剩余占用本身未确认。
+      // 正常结束自动重新统计（回读成功就是"现在还剩多少"）；只有"删了一部分又删不掉"时才停在部分完成。
       await this.cacheStats.refresh(this.getUIContext().getHostContext() as common.UIAbilityContext);
       this.cacheBusy = false;
       // 读取失败优先于"部分完成"：回读都没成功时不能宣称部分完成，否则会掩盖 READ_FAIL 并误报剩余占用
@@ -834,8 +818,7 @@ struct SettingsPage {
   }
 
   /**
-   * 卡片下面的结果与剩余说明：文案由纯逻辑 `cacheResultLines()` 给
-   * （部分完成必须写明"剩余占用暂未确认"，**不宣称已清空**）。
+   * 卡片下面的结果与剩余说明：文案由纯逻辑 `cacheResultLines()` 给（部分完成必须写明"剩余占用暂未确认"，不宣称已清空）。
    */
   @Builder
   CacheResultNotes() {
@@ -846,9 +829,8 @@ struct SettingsPage {
   }
 
   /**
-   * 「缓存清理」页（P2 第二个用公共组件的页面）：**一张卡**装名称 + 占用/阶段 + 简短说明
-   * + 一个明确动作；结果与剩余状态放在卡片下方。
-   * 统计中与读取失败**都不提供清理**，读取失败给就近重试。
+   * 「缓存清理」页：一张卡装名称 + 占用/阶段 + 简短说明 + 一个明确动作，结果与剩余状态放在卡片下方。
+   * 统计中与读取失败都不提供清理，读取失败给就近重试。
    */
   @Builder
   CachePane() {
@@ -920,10 +902,8 @@ struct SettingsPage {
 
   build() {
     /*
-     * ── 结构 ──
-     * `Scroll` 占满全高（不为顶栏让位），玻璃顶栏 + 返回按钮悬浮其上（Stack 后声明者在上）。
-     * 列表首项是一个与顶栏等高的占位 `Row` —— 参考图里第一张卡片的顶边**正好压在
-     * 顶栏渐隐的终点**上，所以这里不留任何额外间距。
+     * 结构：`Scroll` 占满全高（不为顶栏让位），玻璃顶栏 + 返回按钮悬浮其上（Stack 后声明者在上）。
+     * 列表首项是与顶栏等高的占位 `Row` —— 首张卡片的顶边正好压在顶栏渐隐终点上，不留额外间距。
      */
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.pane === SettingsPane.FORBIDDEN_FORUMS) {
@@ -1012,8 +992,8 @@ struct SettingsPage {
       }
 
       /*
-       * 头像裁剪页：全屏浮层，盖在设置页所有内容之上（含顶栏与返回按钮）。
-       * 与看图器同一模式 —— 这里只管开关，倍率/位移/裁剪换算都由 `AvatarCropPage` 自己持有。
+       * 头像裁剪页：全屏浮层，盖在设置页所有内容之上（含顶栏与返回按钮）。与看图器同一模式 ——
+       * 这里只管开关，倍率/位移/裁剪换算由 `AvatarCropPage` 自己持有。
        */
       if (this.cropOpen) {
         AvatarCropPage({
@@ -1185,10 +1165,8 @@ struct SettingsPage {
   }
 
   /**
-   * 首页的一个入口行：**自己就是一张卡**（圆角 + 卡底 + 裁剪），行间 10vp。
-   *
-   * 不再靠外层 `SettingsCard` 提供底色 —— 一层 `Column` 只是承载卡面属性的壳，
-   * 行内组件照旧读 `SettingsLayout` 的高度/内距，分隔线恒为 `false`（一卡一行）。
+   * 首页的一个入口行：自己就是一张卡（圆角 + 卡底 + 裁剪）。不靠外层 `SettingsCard` 提供底色 ——
+   * 那层 `Column` 只是承载卡面属性的壳，行内照旧读 `SettingsLayout` 的高度/内距，分隔线恒为 false。
    */
   @Builder
   HomeRow(entry: SettingsEntry) {
@@ -1232,8 +1210,7 @@ struct SettingsPage {
   }
 
   /**
-   * 一条「保存失败 → 重试」提示。所有设置项共用：`kind` 与按钮文案不再各写各的
-   * （历史上出现过「重试保存」与「重新读取」混用），空消息自动不渲染。
+   * 一条「保存失败 → 重试」提示，所有设置项共用：`kind` 与按钮文案不再各写各的，空消息自动不渲染。
    */
   @Builder
   SaveErrorLine(message: string, retryLabel: string, retry: (context: common.UIAbilityContext) => void) {
@@ -1265,8 +1242,8 @@ struct SettingsPage {
         (context: common.UIAbilityContext): void => { void imageLayoutStore.load(context); });
       this.SaveErrorLine(imageLayoutStore.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void imageLayoutStore.retrySave(context); });
-      this.SaveErrorLine(lowFlowStore.saveError, '重试保存',
-        (context: common.UIAbilityContext): void => { void lowFlowStore.retrySave(context); });
+      this.SaveErrorLine(imageLoadStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void imageLoadStore.retrySave(context); });
       this.SaveErrorLine(superResolutionStore.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void superResolutionStore.retrySave(context); });
     } else if (this.pane === SettingsPane.MATERIAL_EFFECTS) {
@@ -1575,7 +1552,7 @@ struct SettingsPage {
     SettingsInfoRow({ label: '昵称', value: this.accountNickname() })
     SettingsInfoRow({
       label: '贴吧 ID',
-      value: authSession.snapshot.userName.length > 0 ? authSession.snapshot.userName : '—'
+      value: this.accountTiebaId()
     })
     SettingsInfoRow({
       label: '用户 ID',
@@ -1586,6 +1563,18 @@ struct SettingsPage {
 
   private accountNickname(): string {
     return authSession.snapshot.nickname.length > 0 ? authSession.snapshot.nickname : '—';
+  }
+
+  /**
+   * 「贴吧 ID」按官方 App 口径显示：优先贴吧号（`tieba_uid`），没设置时退回用户名。
+   *
+   * 数字 `uid` 是协议用的那套编号，和官方「贴吧ID」不是同一个数，单独放在「用户 ID」。
+   */
+  private accountTiebaId(): string {
+    const snapshot = authSession.snapshot;
+    if (snapshot.tiebaUid.length > 0) { return snapshot.tiebaUid; }
+    if (snapshot.userName.length > 0) { return snapshot.userName; }
+    return '—';
   }
 
   @Builder
@@ -1715,9 +1704,12 @@ struct SettingsPage {
     SettingsGroupTitle({ title: '内容浏览' })
     SettingsCard({
       content: (): void => {
-        this.CategoryRows(SettingsPane.BROWSING, ['forum_default_tab', 'image_layout', 'low_flow'])
+        this.CategoryRows(SettingsPane.BROWSING, [
+          'forum_default_tab', 'image_layout', 'image_quality_wifi', 'image_quality_mobile', 'gif_autoplay'
+        ])
       }
     })
+    SettingsNote({ text: '切换网络后新加载的图片按新档位生效；热点 Wi-Fi 也按 Wi-Fi 计。' })
     SettingsGroupTitle({ title: '看图' })
     SettingsCard({
       content: (): void => {

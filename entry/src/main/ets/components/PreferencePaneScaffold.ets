@@ -1,13 +1,8 @@
 /**
- * 设置子页的公共渲染脚手架：说明文字 + 设置卡片 + 读取/保存失败行。
+ * 设置子页的公共渲染脚手架：说明文字 + 设置卡片 + 读取/保存失败行。行内容仍由各页自己的 `@Builder` 提供
+ * （`rows` 尾随闭包），本组件只管外壳。
  *
- * 6 个偏好子页（个人资料、官方消息、隐私标记、小尾巴、图片水印等）原本各写一遍
- * 同样的「卡片 + 错误行 + 重试」，文案与 `kind` 容易改一处漏一处。行内容仍由各页自己的
- * `@Builder` 提供（`rows` 尾随闭包），本组件只管外壳。
- *
- * 不适用的两个：
- * - `MessageSettingsPane`：说明文字位于卡片与错误行**之间**；
- * - `AppPermissionsPane`：两张卡片、两条各自重试的错误行。
+ * 不适用：`MessageSettingsPane`（说明文字在卡片与错误行之间）、`AppPermissionsPane`（两张卡片、两条各自重试的错误行），
  * 这两处保留自己的布局，不做硬套。
  */
 import { SettingsCard, SettingsNote, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
@@ -22,7 +17,6 @@ export struct PreferencePaneScaffold {
   @Param message: string = '';
   /** 失败行按钮文案：读取失败用「重新读取」，保存失败用「重试」 */
   @Param retryLabel: string = '重试';
-  /** 失败行点击：由各页决定重读还是重存 */
   @Event onRetry: () => void = (): void => {};
 
   @BuilderParam rows: () => void = this.EmptyRows;

@@ -55,7 +55,7 @@ export struct ForumFollowButton {
     return this.identity.pending || this.identity.reading ||
       (this.identity.verifying && !this.identity.known());
   }
-  /** 进行中只由按钮内的转圈表示，文案保持状态本身（2026-11-13 持有者要求去掉「…中…」字样）。 */
+  /** 进行中只由按钮内的转圈表示，文案保持状态本身，不加「…中…」字样。 */
   private label(): string {
     if (!this.identity.known()) { return '重试'; }
     return this.identity.follows() ? '已关注' : '关注';

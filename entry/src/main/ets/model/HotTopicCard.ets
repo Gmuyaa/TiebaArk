@@ -23,6 +23,7 @@ function knownCount(value: number | string | undefined): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : -1;
 }
 
+/** 解析热榜卡；tid 不符或响应非法时返回 `undefined`，调用方必须判空。 */
 export function parseHotTopicCard(raw: RawThreadPage, expectedTid: number): HotTopicCardInfo | undefined {
   if (!Number.isSafeInteger(expectedTid) || expectedTid <= 0 || raw === undefined || raw === null ||
     typeof raw !== 'object' || Array.isArray(raw)) { return undefined; }
@@ -51,8 +52,7 @@ export function parseHotTopicCard(raw: RawThreadPage, expectedTid: number): HotT
       result.forumAvatar = hotTopicImageUrl(forum.avatar);
     }
   }
-  // pb/page 的 thread.author 是主题作者；rn=2 的三帖公开核对与 post_id 指向的首楼用户完全一致。
-  // 不使用 PC 列表的 author，也不根据 post_list[0] 的数组位置推断楼主。
+  // pb/page 的 thread.author 是主题作者；不使用 PC 列表的 author，也不根据 post_list[0] 的数组位置推断楼主。
   const author: RawUser | undefined = thread.author;
   if (author !== undefined && author !== null && typeof author === 'object' && !Array.isArray(author)) {
     const authorId: number = knownCount(author.id);

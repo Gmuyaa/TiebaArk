@@ -13,32 +13,27 @@ export interface RawContentItem {
    * 实际响应里 type=0 的普通文本也可能内嵌一个或多个表情编码。
    */
   text?: string;
-  /** type=1 时的目标地址 */
   link?: string;
-  /** type=2 时的表情中文名（如"欢呼"） */
+  /** 表情中文名（如"欢呼"） */
   c?: string;
-  /** type=3 原图地址 */
   origin_src?: string;
-  /** type=3 常规展示图（宽度 720） */
+  /** 常规展示图（宽度 720） */
   cdn_src?: string;
-  /** type=3 活动图，优先用这个 */
+  /** 活动图，优先用这个 */
   cdn_src_active?: string;
-  /** type=3 大图（宽度 960） */
+  /** 大图（宽度 960） */
   big_cdn_src?: string;
-  /** type=3 尺寸，形如 "560,919" */
+  /** 尺寸，形如 "560,919" */
   bsize?: string;
-  /** type=3 原图字节数 */
-  origin_size?: number;
-  /** type=3 图片 id */
+  /** 原图字节数 */
+  origin_size?: number | string;
   pic_id?: number;
-  /** type=3 是否长图 */
   is_long_pic?: number;
-  /** type=3 是否展示"查看原图" */
+  /** 是否展示"查看原图" */
   show_original_btn?: number;
   is_native_app?: number;
 }
 
-/** 点赞信息 */
 export interface RawAgree {
   agree_num?: number;
   disagree_num?: number;
@@ -47,7 +42,6 @@ export interface RawAgree {
   diff_agree_num?: number;
 }
 
-/** 吧务等级信息 */
 export interface RawBazhuGrade {
   desc?: string;
   level?: string;
@@ -56,9 +50,8 @@ export interface RawBazhuGrade {
 /** 用户信息。既用于详情页顶层 `user_list`，也用于楼中楼内联的 `author` */
 export interface RawUser {
   id?: number;
-  /** 用户名 */
   name?: string;
-  /** 显示名（昵称）。实测常与 name 不同，展示优先用这个 */
+  /** 显示名（昵称）。常与 name 不同，展示优先用这个 */
   name_show?: string;
   /** 头像标识，需要拼成 URL（见 model/ThreadDetail.ets 的 portraitUrl） */
   portrait?: string;
@@ -79,16 +72,13 @@ export interface RawCommentUserGrowth {
   level_id?: number | string;
 }
 
-/** 详情页里的一个楼层 */
 export interface RawPost {
-  /** 楼层 id */
   id?: number;
-  /** 楼层号。实测会跳号；热门序的部分回复不返回此字段 */
+  /** 楼层号。会跳号；热门序的部分回复不返回此字段 */
   floor?: number;
   /** 发帖时间（秒） */
   time?: number;
   title?: string;
-  /** 富文本正文 */
   content?: RawContentItem[];
   /** 作者 uid，去 user_list 里查 */
   author_id?: number;
@@ -170,7 +160,7 @@ export interface RawThreadHead {
   collect_status?: number;
   /**
    * 发帖时选的内容声明文案，例如「帖子含AI内容」「帖子原创声明」。
-   * 真机取证：详情响应 `thread.content_statement`（2026-10-25）。
+   * 取证位置：详情响应 `thread.content_statement`。
    */
   content_statement?: string;
   /**

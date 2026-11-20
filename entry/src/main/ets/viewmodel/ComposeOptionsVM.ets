@@ -1,3 +1,7 @@
+/**
+ * 发帖页的选项数据：关注的吧、最近逛过的吧（按时间倒序去重、能对上就补关注信息）、
+ * 吧搜索分页与热门话题。只做数据，不涉及布局。
+ */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';

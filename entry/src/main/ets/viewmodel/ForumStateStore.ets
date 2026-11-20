@@ -1,29 +1,12 @@
 /**
- * 吧级身份的单一真相层（2026-11-13，1.0.268）。
+ * 吧级身份的单一真相层：关注、今日签到、等级经验按「账号 + fid」收敛为一份实例，页面只拿
+ * `forumIdentity(fid, name)` 的引用读 `@Trace` 字段；同吧并发单飞，写成功立即广播。
  *
- * 关注关系、今日签到、贴吧等级/经验/连签原本由三处各自维护：`FollowActionVM`（关注态）、
- * `ForumHeaderVM`（签到态）、`ForumReadCache`/`FollowVM`（关注列表）。同一份数据在三个位置
- * 各有自己的"已知/读取中/已过期"标志，于是同一个吧在吧页、吧资料、进吧列表里显示不一致，
- * 而且每进一次页面就要再读一次。
+ * 边界：仅内存 + 既有落盘快照（`utils/ForumSnapshotStore`）；换号清空；日期按北京日判定；失败
+ * 不清空已知值；未知（undefined）不等于“未关注/未签到”。
  *
- * 本模块把这些状态收敛到「账号 + fid」一份实例上：
- * - 页面只持有 `forumIdentity(fid, name)` 的引用并读它的 `@Trace` 字段，不再各自发读取；
- * - 读取按新鲜期与「今日已确认签到」单调规则决定，同吧并发请求合并为一次（单飞）；
- * - 写成功（关注/签到）立即广播，关注列表、吧资料按钮、吧页头同时生效；
- * - 吧页首包（FRS 第一页同时带 `is_like` 与 `sign_in_info`）直接回填，不再单独发 rn=1 请求；
- * - 关注吧列表一次覆盖所有已关注吧的签到/等级，作为批量真相源回填；
- * - 冷启动从既有落盘快照（`utils/ForumSnapshotStore`，沿用原预算与账号隔离）预热，不新增磁盘容器。
- *
- * 边界：仅内存 + 既有快照；换号清空；日期按北京日（`forumCacheDay`）判定；
- * 失败不清空已知值；未知（undefined）不等于"未关注/未签到"。
- *
- * 生命周期（2026-11-14 定，审计 C9）：本模块**没有也刻意不提供 `dispose`**。它是进程级单例，
- * 状态按「账号 + fid」存在模块内的 `identities` 表里，唯一的失效入口是 `bind()` 检测到
- * `forumCacheSessionKey()` 变化时的整体清空——这条路径已经在换号、登出、冷启动各走过。
- * 页面（`ForumHeaderVM`、`ForumIdentity` 等）销毁时只清自己持有的引用与本页临时状态，
- * 不会、也不应该去停用共享身份：否则返回再进同一个吧就会退化成"每次重建再读一次"，
- * 正是 1.0.268 之前的状态。真要回收，只需要在 `bind()` 里加一条（例如低内存回调），
- * 不需要给每个页面一个销毁入口；在没有这样的真实需求之前不加。
+ * 生命周期：进程级单例，**刻意不提供 `dispose`**；唯一失效入口是 `bind()` 发现账号会话变化时
+ * 的整体清空。页面销毁只清自己的引用，不停用共享身份（否则返回再进同一个吧就每次重建再读一次）。
  */
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -101,15 +84,13 @@ export class ForumIdentity {
     return this.follows() && !this.pending && this.signKnown(day) && this.signed === true;
   }
 
-  /** 关注关系是否需要重新读取。 */
   followStale(now: number = Date.now()): boolean {
     return this.following === undefined || now - this.followAt > FORUM_FOLLOW_FRESH_MS;
   }
 
   /**
-   * 签到态是否需要重新读取。
-   * 今天已确认「已签到」是单调事实（一天只能签一次），不再重读；
-   * 未签到/未知则按当天新鲜期重新读取，以捕捉在其它客户端签到的情况。
+   * 今天已确认「已签到」是单调事实（一天只能签一次），不再重读；未签/未知按当日新鲜期重读，
+   * 以捕捉在其它客户端签到的情况。
    */
   signStale(day: string = forumSignDay(), now: number = Date.now()): boolean {
     if (this.signed === true && this.signDay === day) { return false; }

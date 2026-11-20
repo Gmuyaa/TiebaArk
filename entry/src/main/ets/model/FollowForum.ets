@@ -30,22 +30,17 @@ function displayCount(value: string | number | undefined): string {
   return value;
 }
 
-/** 一条关注吧 */
 export class FollowForumItem {
   fid: number = 0;
   /** 吧名（kw，签到与进吧都用它） */
   fname: string = '';
-  /** 用户在该吧的等级 */
   level: number = 0;
-  /** 今天是否已签到 */
   isSigned: boolean = false;
   /** 缺 is_sign 时不能据默认 false 向吧头宣称未签到。 */
   signKnown: boolean = false;
-  /** 吧头像 URL（原始体确认前可能拿不到，界面退占位图） */
+  /** 原始体确认前可能拿不到，界面退占位图 */
   avatar: string = '';
-  /** 关注数展示串 */
   concernNum: string = '';
-  /** 帖子数展示串 */
   postNum: string = '';
 
   levelName: string = '';
@@ -71,7 +66,6 @@ export class FollowForumItem {
   }
 }
 
-/** 一页关注吧列表 */
 export class FollowForumList {
   items: FollowForumItem[] = [];
   hasMore: boolean = false;

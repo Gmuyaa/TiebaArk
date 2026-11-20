@@ -42,7 +42,7 @@ export class HomeNavigationHideStore {
       } catch (e) {
         hilog.warn(0x0, 'TiebaNav', 'navigation preferences load failed: %{public}s', String(e));
       } finally {
-        // 读失败也不重试：与原实现一致。
+        // 读失败也不重试：直接标记已加载，避免反复读盘。
         this.gate.markLoaded();
       }
     });

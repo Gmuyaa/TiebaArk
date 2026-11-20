@@ -9,13 +9,10 @@ import { TiebaDevice } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 
 /**
- * 用户关注关系的共享实例（粉丝/关注列表、用户主页、帖子作者入口）。
- *
- * 2026-11-13（1.0.268）：**吧的关注关系已迁到 `ForumStateStore`**（与今日签到、等级经验
- * 同一份实例，见该模块注释）。这里只保留用户关注，避免"这个吧是否关注"同时存在两套缓存。
- * `kind === 'forum'` 分支保留类型但不再有调用方，`followAction('forum', …)` 不要再用；
- * 真要再写吧关注请用 `components/ForumFollowButton`（走 `ForumStateStore`）。
- * `toggle()` 里加了显式拒绝，误接时给出可读失败而不是静默走旧协议。
+ * 用户关注关系的共享实例（粉丝/关注列表、用户主页、帖子作者入口）。吧的关注关系不在这里：它和今日
+ * 签到、等级经验一起收在 `ForumStateStore`，避免“这个吧是否关注”同时存在两套缓存。
+ * `kind === 'forum'` 分支保留类型但没有调用方，`followAction('forum', …)` 不要再用；真要写吧关注
+ * 请用 `components/ForumFollowButton`。`toggle()` 里有显式拒绝，误接时给可读失败而不是静默走旧协议。
  */
 
 /** 账号隔离，不将凭据作为缓存键；返回旧页面也共享已确认的关系。 */

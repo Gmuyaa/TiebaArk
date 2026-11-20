@@ -23,8 +23,7 @@ export class TransferStats {
   /**
    * 成功拿到响应后调用：记下这一条统计，并丢弃此前被取走待确认的那条。
    *
-   * 错误计数**不在这里清零**：官方只在写请求构造时 `getErrorNumsAndSet(0)` 读后清零，
-   * 没有取证表明成功响应会清错误数，故本实现只由 `takeErrorNums()` 清零。
+   * 错误计数不在这里清零：官方只在写请求构造时 `getErrorNumsAndSet(0)` 读后清零。
    */
   static recordSuccess(elapsedMs: number, bytes: number): void {
     const snapshot: TransferStatsSnapshot = new TransferStatsSnapshot();

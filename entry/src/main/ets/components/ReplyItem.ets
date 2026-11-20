@@ -16,16 +16,12 @@ import { SubReplyPreviewBox } from './SubReplyPreviewBox';
 import { CommentActionHost } from './CommentActionHost';
 import { postCommentTarget } from '../model/CommentAction';
 
-/** 头像边长 */
 const AVATAR_SIZE: number = 36;
 /** 头像与右栏的横向间距；右栏缩进全靠它，不要再给右栏加 padding-left */
 const AVATAR_GAP: number = 12;
 
-/** 时间／IP 行 → 正文第一行。 */
 const NAME_BODY_GAP: number = 8;
-/** 正文 → 操作行。 */
 const BODY_META_GAP: number = 10;
-/** 操作行 → 楼中楼预览灰块。 */
 const SUB_BOX_GAP: number = 10;
 
 @ComponentV2
@@ -37,34 +33,22 @@ export struct ReplyItem {
   @Param canDeleteSub: (sub: SubPostItem) => boolean = (_sub: SubPostItem): boolean => false;
   @Event onDelete: () => void = (): void => {};
   @Event onDeleteSub: (sub: SubPostItem) => void = (_sub: SubPostItem): void => {};
-  /** 一级回复 */
   @Require @Param item: PostItem;
-  /** 作者是否是楼主 */
   @Param isThreadAuthor: boolean = false;
 
   @Require @Param agreeState: AgreeState;
-  /** 已加载的楼中楼预览数据 */
   @Param subPosts: SubPostItem[] = [];
-  /** 该楼层的楼中楼总数 */
   @Param subTotalCount: number = 0;
-  /** 楼中楼是否正在加载 */
   @Param subLoading: boolean = false;
-  /** 楼中楼首页失败提示 */
   @Param subErrorText: string = '';
   /** 楼中楼里是否出现过楼主回复 */
   @Param hasAuthorReply: boolean = false;
-  /** 一级回复正文（富文本），由页面提供 */
   @BuilderParam bodyBuilder: () => void = this.emptyBody;
 
-  /** 点赞点击（本地乐观更新） */
   @Event onToggleLike: () => void = (): void => {};
-  /** 单击正文打开当前楼层的回复框 */
   @Event onReply: () => void = (): void => {};
-  /** 打开完整楼中楼 */
   @Event onOpenSubDetail: () => void = (): void => {};
-  /** 楼中楼预览加载失败后重试 */
   @Event onRetrySubPosts: () => void = (): void => {};
-  /** 楼中楼预览里的图片点击 */
   @Event onViewImage: (url: string) => void = (): void => {};
 
   @Builder

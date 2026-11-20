@@ -1,14 +1,14 @@
 /** 图片超分的尺寸校验、内存预算、淘汰策略与任务有效性。输出边长按输入的四倍估算，RGBA 内存按宽×高×4计算；实际占用以 PixelMap 返回值为准。 */
 
-/** 官方下限：文档写"须严格大于"，本机实测 16 也成功；取保守值（16 判为过小） */
+/** 官方下限：文档写"须严格大于"，这里按保守取值处理（16 判为过小） */
 export const SR_MIN_SIDE: number = 16;
-/** 官方上限：文档写"须严格小于"，本机实测 2048 成功、2049 回 401；取保守值 */
+/** 官方上限：文档写"须严格小于"，超过会被服务端拒绝，按保守取值 */
 export const SR_MAX_SIDE: number = 2048;
 /** 官方"建议"上限：超过它仍可尝试，但要受内存预算与超时约束 */
 export const SR_RECOMMENDED_SIDE: number = 1024;
-/** 实测：输出边长是输入的 4 倍（1024→4096） */
+/** 输出边长是输入的 4 倍 */
 export const SR_UPSCALE_FACTOR: number = 4;
-/** 实测：输出是 RGBA_8888，行距 = 宽×4 */
+/** 输出是 RGBA_8888，行距 = 宽×4 */
 export const SR_BYTES_PER_PIXEL: number = 4;
 
 /** 解码后一张图的字节数（RGBA_8888 口径） */
@@ -20,9 +20,8 @@ export function srDecodedBytes(width: number, height: number): number {
 }
 
 /**
- * 预测的**增强图**字节数。实测输出边长×4，所以是输入解码字节的 **16 倍**
- * （1024×1024 输入 4MB → 输出 64MB，与真机 `getPixelBytesNumber()` 一致）。
- * 这只是预算用的预估；实际结果落地时以 `getPixelBytesNumber()` 的实测值为准。
+ * 预测的**增强图**字节数：输出边长是输入的 4 倍，所以是输入解码字节的 **16 倍**。
+ * 这只是预算用的预估；实际结果落地时以 `getPixelBytesNumber()` 返回值为准。
  */
 export function srPredictedOutputBytes(width: number, height: number): number {
   const side: number = SR_UPSCALE_FACTOR;
@@ -30,31 +29,28 @@ export function srPredictedOutputBytes(width: number, height: number): number {
 }
 
 /**
- * 单张增强图允许占用的内存上限。这不是"设备做不到"（真机实测 8192×8192 = 256MB 也能分配），
+ * 单张增强图允许占用的内存上限。这不是"设备做不到"，
  * 而是**看图场景的预算**：超分结果要和原图、ArkUI 的纹理、导出缓冲同时活着，
  * 超过这条线就如实报不可用，不拿进程稳定性去换一张更大的图。
- * 64MB 对应输入约 100 万像素（1024×1024、720×1280 这一档）。
  */
 export const SR_MAX_OUTPUT_BYTES: number = 64 * 1024 * 1024;
 
 /**
- * 会话内增强图结果缓存预算（按**实测字节**计量，不按张数）。
+ * 会话内增强图结果缓存预算（按**实际解码字节**计量，不按张数）。
  * 当前图永不淘汰；这条线约束的是"回看别的图还能不能命中缓存"。
  */
 export const SR_CACHE_BUDGET_BYTES: number = 64 * 1024 * 1024;
 
-/** 超分单次处理的超时上限（ms）。实测 100 万像素约 1.3s，这条线只用来兜住异常长尾 */
+/** 超分单次处理的超时上限（ms），只用来兜住异常长尾 */
 export const SR_TIMEOUT_MS: number = 30000;
 
 /** 每张图在查看器会话里的超分状态 */
 export enum SrStatus {
   /** 设备或这张图本身不满足条件，按钮灰显，点击只解释原因 */
   UNAVAILABLE = 0,
-  /** 关闭：显示原图 */
   OFF = 1,
   /** 处理中：显示原图 + 进度动画，期间不接受重复提交 */
   PROCESSING = 2,
-  /** 开启：显示已生成的增强图 */
   ON = 3,
   /** 失败：保留原图，允许重试 */
   ERROR = 4
@@ -258,7 +254,6 @@ export function srExportFileName(index: number, stamp: number, extension: string
   return `tieba_sr_${stamp}_${index}.${extension}`;
 }
 
-/** `image/jpeg` → `jpg`、`image/png` → `png`；未知按 jpg */
 export function srFormatExtension(format: string): string {
   if (format === 'image/png') {
     return 'png';

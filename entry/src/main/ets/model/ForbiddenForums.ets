@@ -1,4 +1,4 @@
-/** E-04：当前官方 GetDislikeList，响应 error=1/data=2；仅账号屏蔽吧读取。 */
+/** 当前官方 GetDislikeList 响应，error=1/data=2；只读账号屏蔽吧。 */
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 import { normalizeForumName } from './ThreadBlock';
 

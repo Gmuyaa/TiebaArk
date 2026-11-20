@@ -1,3 +1,7 @@
+/**
+ * 目录页分页 VM（吧目录 / 用户目录）：首屏、续页、去重与成员移除；换号或换目标即重置，
+ * 续页失败不推进页码。数据形状见 `model/PageDirectory`。
+ */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi, DirectoryResponse } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';

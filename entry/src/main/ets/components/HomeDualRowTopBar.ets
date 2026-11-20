@@ -18,13 +18,13 @@ import { MotionStore, motionStore } from '../common/appearance/MotionStore';
 export const DUAL_SEARCH_ROW_H: number = 40;
 
 export const DUAL_CHANNEL_ROW_H: number = 30;
-/** 搜索行与频道行间距（vp）—— 6 → 4 → 2 */
+/** 搜索行与频道行间距（vp） */
 export const DUAL_ROW_GAP: number = 2;
 /** 玻璃面板内容高（搜索 + 间距 + 频道，不含状态栏与系统内容盒内距） */
 export const DUAL_CONTENT_H: number = DUAL_SEARCH_ROW_H + DUAL_ROW_GAP + DUAL_CHANNEL_ROW_H;
-/** 官方悬浮面内容盒上下各留的内距（真机实测，barHeight 48 → 内容盒 40） */
+/** 官方悬浮面内容盒上下各留的内距（barHeight 48 → 内容盒 40） */
 export const DUAL_BOX_INSET: number = 4;
-/** 官方悬浮面内容盒左右各留的内距（真机实测，与栏高无关） */
+/** 官方悬浮面内容盒左右各留的内距，与栏高无关 */
 const DUAL_BOX_INSET_X: number = 12;
 /** 首帧可见宽度兜底（vp）：最窄宿主是设置页预览卡 */
 const FALLBACK_VIS_W: number = 300;
@@ -125,14 +125,11 @@ export struct HomeDualRowTopBar {
 
   build() {
     /*
-     * 关键几何：**面板节点比宿主可见区宽**（左右各多出半径 = 面板高/2）。
-     * Stack 的 `Alignment.Top` 让超宽节点水平居中 —— 左沿落在 −半径、右沿落在
-     * 可见宽 + 半径，两端的圆弧因此整个落在可见区之外，可见区里只剩一整片
-     * 上下边笔直、左右铺满的矩形玻璃。
+     * 关键几何：面板节点比宿主可见区宽（左右各多出半径 = 面板高/2）。Stack 的 `Alignment.Top` 让超宽节点水平居中，
+     * 左沿落在 −半径、右沿落在 可见宽 + 半径，两端圆弧整个落在可见区外，可见区里只剩上下边笔直、左右铺满的矩形玻璃。
      *
-     * ⚠️ 早前版本把超宽放在父容器内用 translate 偏移，被父宽钳制（barWidth 被压回
-     * 屏宽 → 变成一枚大圆角药丸）。**必须让承载节点自身的宽度就是超宽值**。
-     * 垂直方向由宿主负责顶部对齐（Index 的浮层用 `.align(Alignment.Top)`）。
+     * ⚠️ 把超宽放在父容器内用 translate 偏移会被父宽钳制（barWidth 被压回屏宽 → 变成一枚大圆角药丸）：
+     * 必须让承载节点自身的宽度就是超宽值。垂直方向由宿主负责顶部对齐。
      */
     if (visualThemeStore.isPaper) {
       this.PaperHeader()

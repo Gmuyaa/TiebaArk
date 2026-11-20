@@ -1,10 +1,7 @@
 import { ForumCacheGuard, publishForumRead } from './ForumReadCache';
 /**
- * 帖子列表的状态与行为。
- *
- * V2 状态管理：`@ObservedV2` + `@Trace` 让页面能观察到字段变化。
- * 注意 `@Trace` 对数组只跟踪**整体替换**，不跟踪元素增删——
- * 所以本类每次都赋新数组，不做 `push`。
+ * 帖子列表的状态与行为。`@Trace` 对数组只跟踪**整体替换**，不跟踪元素增删——本类每次都赋新数组，
+ * 不做 `push`。
  */
 
 import { common } from '@kit.AbilityKit';
@@ -19,10 +16,7 @@ import { applyForumRead, clearFirstPageRead, markFirstPageRead } from './ForumSt
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { preferredForumTabId } from '../model/ForumDefaultTab';
 
-/**
- * 请求条数。注意服务端有自己的 page_size（实测返回 13 条），
- * 这个值只是"请求意图"，真实条数以响应里的 page.pageSize 为准。
- */
+/** 只是请求意图：服务端有自己的 page_size，真实条数以响应的 `page.pageSize` 为准。 */
 const REQUEST_PAGE_SIZE: number = 30;
 
 class ThreadListTabSnapshot {
@@ -43,13 +37,11 @@ class ThreadListTabSnapshot {
 
 @ObservedV2
 export class ThreadListVM {
-  /** 当前吧名 */
   @Trace forumName: string = '';
   @Trace loading: boolean = false;
   @Trace isLoadingMore: boolean = false;
   @Trace errorText: string = '';
   @Trace loadMoreError: string = '';
-  /** 是否成功加载过至少一次（用于区分"首次加载"与"刷新"） */
   @Trace loadedOnce: boolean = false;
   @Trace switchingTab: boolean = false;
   /** 选择可先响应；正文只在目标分类读取成功后替换。 */
@@ -61,6 +53,7 @@ export class ThreadListVM {
   @Trace threads: ThreadBrief[] = [];
   @Trace tabs: ForumTab[] = [];
   @Trace selectedTabId: number = 0;
+  @Trace tabSnapshotRevision: number = 0;
   @Trace helpPartition: number = 0;
   @Trace private categorySorts: Map<number, number> = new Map<number, number>();
   hasPostOrder(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.supportsPostOrder); }
@@ -133,6 +126,32 @@ export class ThreadListVM {
 
   private ownerKey(): string { return `${authSession.sessionKey()}:${this.forumName}`; }
 
+  hasTabSnapshot(tabId: number): boolean {
+    return this.ownerKey() === this.tabOwner && this.tabSnapshots.has(tabId);
+  }
+
+  threadsForTab(tabId: number): ThreadBrief[] {
+    if (tabId <= 0 || tabId === this.selectedTabId) { return this.threads; }
+    const snapshot: ThreadListTabSnapshot | undefined = this.tabSnapshots.get(tabId);
+    return snapshot !== undefined ? snapshot.threads : [];
+  }
+
+  pageForTab(tabId: number): PageInfo {
+    if (tabId <= 0 || tabId === this.selectedTabId) { return this.page; }
+    const snapshot: ThreadListTabSnapshot | undefined = this.tabSnapshots.get(tabId);
+    return snapshot !== undefined ? snapshot.page : new PageInfo();
+  }
+
+  isTabCached(tabId: number): boolean {
+    if (tabId <= 0 || tabId === this.selectedTabId) { return this.loadedOnce; }
+    return this.hasTabSnapshot(tabId);
+  }
+
+  isTabReading(tabId: number): boolean {
+    if (tabId <= 0 || tabId === this.selectedTabId) { return this.loading && !this.loadedOnce; }
+    return this.tabReads.has(tabId) || (this.switchingTab && this.pendingTabId === tabId);
+  }
+
   /** 相邻分类预读与点击共用同一请求，避免用户切过去后重复等待。 */
   private readTab(context: common.UIAbilityContext, tabId: number): Promise<ThreadListResponse> {
     const existing: Promise<ThreadListResponse> | undefined = this.tabReads.get(tabId);
@@ -145,6 +164,7 @@ export class ThreadListVM {
       return this.fetchCategory(device, name, 1, tabId);
     });
     this.tabReads.set(tabId, request);
+    ++this.tabSnapshotRevision;
     request.then((response: ThreadListResponse) => {
       if (owner !== this.ownerKey() || owner !== this.tabOwner || version !== this.tabVersion) { return; }
       if (response.ok && response.data.forum.id === this.forum.id &&
@@ -153,8 +173,14 @@ export class ThreadListVM {
         this.tagSourceForum(threads, name, this.forum.id);
         this.tabSnapshots.set(tabId, new ThreadListTabSnapshot(response.data.forum, response.data.page,
           threads, response.data.tabs.length > 0 ? response.data.tabs : this.tabs, tabId));
+        ++this.tabSnapshotRevision;
       }
-    }).catch(() => {}).finally(() => { if (this.tabReads.get(tabId) === request) { this.tabReads.delete(tabId); } });
+    }).catch(() => {}).finally(() => {
+      if (this.tabReads.get(tabId) === request) {
+        this.tabReads.delete(tabId);
+        ++this.tabSnapshotRevision;
+      }
+    });
     return request;
   }
 
@@ -193,6 +219,7 @@ export class ThreadListVM {
     ++this.contentVersion;
     if (!currentCategoryOnly || !sameOwner) { this.tabSnapshots.clear(); }
     else { this.tabSnapshots.delete(selected); }
+    ++this.tabSnapshotRevision;
     this.tabOwner = this.ownerKey(); this.tabReads.clear(); this.warmingOwner = '';
     this.loading = true;
     this.errorText = '';
@@ -396,6 +423,7 @@ export class ThreadListVM {
     }
     this.tabSnapshots.set(this.selectedTabId, new ThreadListTabSnapshot(
       this.forum, this.page, this.threads.slice(), this.tabs, this.selectedTabId));
+    ++this.tabSnapshotRevision;
   }
 
   private async loadHeroHeadline(context: common.UIAbilityContext, forumName: string): Promise<void> {

@@ -20,33 +20,24 @@ const CHANNEL_LABELS: string[] = ['关注', '推荐', '热榜'];
 
 /** 玻璃容器 / 独立搜索按钮高度 */
 const CONTAINER_H: number = 48;
-/** 频道点击区最小高度 */
 const HIT_H: number = 44;
 /** 选中底高度（36~38vp 区间内） */
 const SELECTED_H: number = 37;
-/** 频道之间的间距 */
 const CHANNEL_GAP: number = 6;
-/** 频道文字左右内距 */
 const CHANNEL_PADDING: number = 12;
-/** 选中底切换动画时长 */
-/** 独立搜索按钮尺寸 */
 const SEARCH_BOX: number = 48;
-/** 搜索图标字号 */
 const SEARCH_ICON: number = 23;
 
 /** 两岛统一高度（频道岛外壳 / 搜索岛直径） */
 const ISLAND_H: number = 48;
 /** 频道岛圆角：整颗胶囊（48 / 2） */
 const ISLAND_RADIUS: number = ISLAND_H / 2;
-/** 两岛之间的固定间隔 */
 const ISLAND_GAP: number = 12;
 /** 频道岛最大宽度：宽屏不再无限拉伸（超出部分由 justifyContent 分到两侧，整组居中） */
 const CHANNEL_MAX_W: number = 320;
 /**
- * 官方悬浮面在栏内**上下各留的内距**（`barHeight 48` → 系统内容盒 40vp，真机实测）。
- *
- * 选中底就按这个内高做：高 40vp、四周各留 4vp —— 正好是需求里的
- * "选中底四周内缩 4vp、高 40vp"，而且这个 4vp **由系统承载器给**，不是我们自己 pad 的。
+ * 官方悬浮面在栏内上下各留的内距（`barHeight 48` → 系统内容盒 40vp）。
+ * 选中底就按这个内容高做：高 40vp、四周各留 4vp，且这 4vp 由系统承载器给，不是我们自己 pad 的。
  */
 const ISLAND_PAD: number = 4;
 
@@ -64,13 +55,9 @@ const ISLAND_ANIM_MS: number = 200;
 
 const ISLAND_SEARCH_ICON: number = 22;
 /**
- * 首帧的整行宽度兜底（vp）。
- *
- * 频道岛宽度要喂给 `barFloatingStyle.barWidth`（官方悬浮面**不显式钉宽就会被压到
- * 84vp 下限**，见 `pages/ThreadDetail` 的注释），所以它必须先知道本行有多宽。
- * 真值由外层 Row 的 `onAreaChange` 在首次布局时就给出；这里取 **200vp**
- * ——本项目里最窄的真实宿主是设置页预览（临时收窄到 200vp 做窄视口验证），
- * 兜底值比它再小就等于"首帧不会溢出"，宁可首帧略窄也不要把搜索岛挤出屏幕。
+ * 首帧的整行宽度兜底（vp）。频道岛宽度要喂给 `barFloatingStyle.barWidth`（官方悬浮面不显式钉宽会被压到
+ * 84vp 下限），所以必须先知道本行多宽；真值由外层 Row 的 `onAreaChange` 首次布局给出，兜底取最窄真实宿主
+ * 200vp 以下，宁可首帧略窄也不要把搜索岛挤出屏幕。
  */
 const ISLAND_ROW_FALLBACK: number = 200;
 /** 「一体玻璃」容器左右内距（搜索那侧更小，靠右但不贴边） */
@@ -159,12 +146,8 @@ export struct HomeTopNav {
   private isIslands(): boolean { return this.style === HomeTopNavStyle.FLOATING_ISLANDS; }
 
   /**
-   * 频道岛宽度（vp）：吃满本行剩余宽度，上限 `CHANNEL_MAX_W`。
-   *
-   * 这个值要**同时**喂给两个地方，否则官方悬浮面与节点对不上：
-   *   - `MaterialTabs.width(...)`：节点尺寸；
-   *   - `barFloatingStyle.barWidth`：官方悬浮面尺寸（不显式钉宽会被压到 84vp 下限）。
-   * 本行宽度由外层 Row 的 `onAreaChange` 实测（首帧用 `ISLAND_ROW_FALLBACK` 兜底）。
+   * 频道岛宽度（vp）：吃满本行剩余宽度，上限 `CHANNEL_MAX_W`。这个值要同时喂给 `MaterialTabs.width(...)`
+   * 与 `barFloatingStyle.barWidth`，否则官方悬浮面与节点对不上（不显式钉宽会被压到 84vp 下限）。
    */
   private islandWidth(): number {
     const rowW: number = this.islandsRowW > 0 ? this.islandsRowW : ISLAND_ROW_FALLBACK;
@@ -181,15 +164,8 @@ export struct HomeTopNav {
   }
 
   /**
-   * 「悬浮双岛」的频道槽位宽度：**三个槽位等宽**，按岛内可视宽度三等分。
-   *
-   * - 宽屏：`viewportW / 3` ≥ 文字所需最小宽 → 三个槽位正好铺满，`stripWidth` = 视口宽，
-   *   横向滚动量恒为 0（默认手机宽度下三个频道全部可见）。
-   * - 窄屏 / 大字号：`viewportW / 3` 小于最小宽 → 槽位取最小宽、总宽溢出视口，
-   *   由既有 `ensureSelectedVisible` 把选中项滚进视野（**优先保证搜索岛完整可见**）。
-   *
-   * 文字宽度是**实测**的（`firstWidth` 等，岛内 Text 无 padding，量到的就是字形宽）；
-   * 视口宽取 `islandContentW()`（官方悬浮面的内容盒，见该常量注释）。
+   * 「悬浮双岛」的频道槽位宽度：三个槽位等宽，按岛内可视宽度三等分。宽屏时正好铺满、不滚动；
+   * 窄屏或大字号时取最小宽、总宽溢出视口，由 `ensureSelectedVisible` 把选中项滚进视野（优先保证搜索岛完整可见）。
    */
   private islandSlotWidth(): number {
     const scale: number = this.scaleValue();
@@ -315,15 +291,10 @@ export struct HomeTopNav {
   }
 
   /**
-   * 选中底。
+   * 选中底。`FILL_ISLAND`：高 40vp（官方悬浮面的内容盒高）、宽 = 槽位 − 左右各 4vp，不加投影、描边、
+   * 单独模糊与下划线，字号字位都不变。视觉层级：外壳给官方材质，这一层只给"选中的是哪一个"。
    *
-   * `FILL_ISLAND`（悬浮双岛）：非常浅的蓝圆角底面，**高 40vp**（官方悬浮面的内容盒高，
-   * 也就是"岛内四周各留 4vp"），宽度 = 槽位 − 左右各 4vp。**不加投影、不加描边、
-   * 不单独模糊、不加下划线**，字号与字位都不变 —— 切换时只有底面平移 +
-   * 文字颜色/字重过渡（200ms）。视觉层级：外壳给官方材质，这一层只给"选中的是哪一个"。
-   *
-   * ⚠️ 选中底是**前景**（画在官方材质面之上），横向只占一个槽位（约 1/3 岛宽），
-   * 不会把整个材质面盖住。
+   * ⚠️ 选中底是前景（画在官方材质面之上），横向只占一个槽位，不会把整个材质面盖住。
    */
   @Builder
   SelectedFill(kind: number) {
@@ -365,12 +336,8 @@ export struct HomeTopNav {
   }
 
   /**
-   * 频道区域的横向滚动视口（**一体玻璃 / 轻盈标签**用；「悬浮双岛」走
-   * `FloatingChannelIsland` 的官方悬浮面，见下）。
-   *
-   * 默认字号下三频道全部可见（不滚动）；窄屏或大字号放不下时，搜索固定可见、
-   * 频道区域横向滚动、选中项自动进入可视范围（见 `ensureSelectedVisible`）。
-   * **不缩小用户字号、不截断标签。**
+   * 频道区域的横向滚动视口（一体玻璃 / 轻盈标签用；「悬浮双岛」走 `FloatingChannelIsland` 的官方悬浮面）。
+   * 窄屏或大字号放不下时搜索固定可见、频道横向滚动、选中项自动进入可视范围；不缩小字号、不截断标签。
    */
   @Builder
   ChannelViewport(fillKind: number) {
@@ -407,11 +374,8 @@ export struct HomeTopNav {
   }
 
   /**
-   * 频道岛的 tabBar 内容：横向滚动视口 + 选中底 + 三个频道。
-   *
-   * 系统内容盒 = 栏高 − 上下各 4vp（48 → 40vp），所以这里用 `100%` 撑满，
-   * 选中底正好 40vp 高、四周各留 4vp（需求里的"内缩 4vp"由承载器天然给出）。
-   * 横向也必须 `100%`：容器内内容默认水平居中，不撑满就没法按槽位等宽铺开。
+   * 频道岛的 tabBar 内容：横向滚动视口 + 选中底 + 三个频道。系统内容盒 = 栏高 − 上下各 4vp（48 → 40vp），
+   * 所以这里用 `100%` 撑满，选中底正好 40vp 高；横向也必须 `100%`，否则内容居中、无法按槽位等宽铺开。
    */
   @Builder
   IslandChannelTab() {
@@ -432,12 +396,9 @@ export struct HomeTopNav {
   }
 
   /**
-   * 「悬浮双岛」的**官方材质承载器**（搜索岛）。
-   *
-   * 与频道岛同一个 `MaterialTabs` + 同一个 `HOME_TOP_ISLAND` 槽位，只把节点/悬浮面钉成
-   * 48×48 —— 官方悬浮面是"高 = 栏高、圆角 = 半高"的胶囊，方节点即整圆。
-   * 图标 22vp、容器居中；点击区覆盖整个圆（内容盒只有 40vp 高，用 `responseRegion`
-   * 把命中区补回 48vp，见 `IslandSearchTab`）。
+   * 「悬浮双岛」的搜索岛官方材质承载器：与频道岛同一个 `MaterialTabs` + `HOME_TOP_ISLAND` 槽位，
+   * 只把节点/悬浮面钉成 48×48（悬浮面是"高 = 栏高、圆角 = 半高"的胶囊，方节点即整圆）。
+   * 内容盒只有 40vp 高，点击区要用 `responseRegion` 补回 48vp（见 `IslandSearchTab`）。
    */
   @Builder
   FloatingSearchIsland() {
@@ -551,7 +512,7 @@ export struct HomeTopNav {
       Row() {
         Stack({ alignContent: Alignment.TopStart }) {
           // 顶栏不再铺「明度保护层」渐隐：内容滚到顶栏下时直接压在文字底下，
-          // 不再用同色渐变把上沿压暗/压白（持有者 2026-11-09 决定去掉）。
+          // 不再用同色渐变把上沿压暗/压白。
           Row() {
             if (this.style === HomeTopNavStyle.FLOATING_ISLANDS) {
               this.FloatingIslandsContent()

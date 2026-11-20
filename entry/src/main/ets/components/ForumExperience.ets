@@ -16,11 +16,11 @@ export struct ForumExperience {
 
   build() {
     if (this.compact) {
-      // 2026-11-11：紧凑版要放进吧头「头像框 − 20vp」的 52vp 里（名称行 32 + 本条约 19），
-      // 行距收到 1；浮在图上时数字/进度条换浅色，否则压在照片上看不清。
+      // 紧凑版要放进吧头「头像框 − 20vp」的 52vp 里（名称行 32 + 本条约 19），行距收到 1；
+      // 浮在图上时数字/进度条换浅色，否则压在照片上看不清。
       Column({ space: 1 }) {
         Row({ space: 8 }) {
-          // 2026-11-11 持有者定：等级在左、经验值在右，比原来「数值左 / 徽章右」看着不那么挤；
+          // 等级在左、经验值在右，比原来「数值左 / 徽章右」看着不那么挤；
           // 徽章再单独上抬 2vp，视觉上不跟右侧数字贴同一条基线。
           ForumLevelBadge({ level: this.level, levelName: this.levelName, forceOfficial: true })
             .translate({ y: -FORUM_EXP_BADGE_LIFT })

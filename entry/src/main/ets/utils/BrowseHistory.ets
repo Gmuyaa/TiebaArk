@@ -17,12 +17,10 @@ function enqueueHistory<T>(write: () => Promise<T>): Promise<T> {
 /** 历史上限。超出后从最旧的（尾部）开始淘汰 */
 export const BROWSE_HISTORY_MAX: number = 200;
 
-/** 一条浏览记录 */
 export class BrowseItem {
   tid: number = 0;
   title: string = '';
   forumName: string = '';
-  /** 浏览时间（毫秒） */
   timeMs: number = 0;
 
   coverUrl: string = '';
@@ -90,12 +88,8 @@ export function mergeBrowseEntry(existing: BrowseItem, incoming: BrowseItem): Br
 }
 
 /**
- * 记录一次浏览：去重置顶 + 上限淘汰，返回**更新后的完整历史**。
- *
- * 返回值给界面直接刷新用（详情页不刷界面，所以调用方通常忽略返回值）。
- *
- * 同一个 tid 已存在时**不整条替换**，走 `mergeBrowseEntry` 逐字段合并
- * （旧的非空值不会被新的空值擦掉），合并后同样置顶。
+ * 记录一次浏览：去重置顶 + 上限淘汰，返回更新后的完整历史（详情页通常忽略返回值）。
+ * 同一 tid 走 `mergeBrowseEntry` 逐字段合并，旧的非空值不会被新的空值擦掉。
  */
 export async function addBrowseHistory(context: common.UIAbilityContext,
   item: BrowseItem): Promise<BrowseItem[]> {
@@ -117,7 +111,7 @@ async function addBrowseHistoryNow(context: common.UIAbilityContext,
       updated.push(it);
     }
   }
-  // 重看过的这条排到最前（与改动前"去重置顶"的语义一致）
+  // 重看过的这条排到最前
   if (merged !== undefined) {
     updated.unshift(merged);
   } else {
@@ -168,7 +162,6 @@ async function markBrowseDeletedNow(context: common.UIAbilityContext,
   return true;
 }
 
-/** 清空全部浏览历史 */
 export async function clearBrowseHistory(context: common.UIAbilityContext): Promise<void> {
   return enqueueHistory((): Promise<void> => clearBrowseHistoryNow(context));
 }

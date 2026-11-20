@@ -2,6 +2,8 @@ import { motionEdgeEffect } from '../common/appearance/MotionPolicy';
 import { PageState, ListFooter } from '../components/PageState';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
 import { FollowButton } from '../components/FollowButton';
+import { ForumActionButton } from '../components/ForumActionButton';
+import { UserGrowthBadge } from '../components/UserGrowthBadge';
 import { followChanges } from '../viewmodel/FollowActionVM';
 /** 官方公开个人主页：资料、社交列表、帖子/回复/关注的吧，沿用鸿蒙共享导航。 */
 import { common } from '@kit.AbilityKit';
@@ -11,6 +13,10 @@ import { AvatarComponent } from '../components/AvatarComponent';
 import { PageHeader } from '../components/PageHeader';
 import { PostContentInline } from '../components/PostContentInline';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import {
+  ImageQuality, ViewerImage, avatarSource, avatarVariantForQuality, viewerImagesForFeed
+} from '../model/ImageLoadPolicy';
+import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
 import { ImageViewer } from '../components/ImageViewer';
 import { ImageTransitionSource, closeImageTransition, imageLayerRetentionTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
@@ -18,7 +24,7 @@ import { formatTimeText } from '../model/TimeText';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
 import { profilePortrait } from '../model/PageDirectory';
 import { ContentPiece, portraitUrl } from '../model/ThreadDetail';
-import { displayName, formatCount, ProfileForum } from '../model/UserProfile';
+import { displayName, formatCount, ProfileForum, UserProfileInfo } from '../model/UserProfile';
 import { NavigationService, UserPageParams } from '../navigation/AppNavigation';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { UserPageVM } from '../viewmodel/UserPageVM';
@@ -27,6 +33,10 @@ import { AppTheme } from '../theme/Theme';
 import { avatarTrace } from '../utils/AvatarTrace';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
+
+/** 卡片右上按钮在布局里只占视觉高度 32（触控由 `ForumActionButton` 的 responseRegion 补到 44）。
+ *  用 44 占位会让视觉底边离行底 6vp，右排按钮与头像底边就对不齐。 */
+const PROFILE_ACTION_LAYOUT_H: number = 32;
 
 @ComponentV2
 export struct UserPage {
@@ -75,7 +85,9 @@ export struct UserPage {
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private cardImageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
   @Local viewerImages: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
   private avatarTransition: ImageTransitionSource = new ImageTransitionSource();
 
   private imageScroller(tid: number): ListScroller {
@@ -96,11 +108,40 @@ export struct UserPage {
       profilePortrait(this.routeParams?.portrait ?? ''), this.routeParams?.tab ?? 0);
   }
   private name(): string { return displayName(this.vm.profile, this.routeParams?.name || '贴吧用户'); }
+
   /**
-   * 头像来源。
+   * 名字下面一行元信息：性别、贴吧 ID、吧龄、IP 归属地。
    *
-   * 本人主页用**当前共享资料**里的服务端头像（不用打开本页时的路由 portrait，
-   * 也不用编辑页的本机候选预览）；他人主页仍用本页 VM 自己读到的资料与展示版本。
+   * 「贴吧 ID」按官方 App 口径只认贴吧号（`tieba_uid`）；没设置时**不能**把协议用的 `uid` 顶上并继续叫
+   * 「贴吧 ID」——那是两套编号，混着显示就是"软件里的 ID 和官方对不上"。回退时如实标成 `uid`。
+   */
+  private metaText(): string {
+    if (!this.vm.profileLoaded) { return ''; }
+    const profile: UserProfileInfo = this.vm.profile;
+    const parts: string[] = [];
+    if (profile.sex === 1) { parts.push('男'); }
+    else if (profile.sex === 2) { parts.push('女'); }
+    if (profile.tiebaUid.length > 0) { parts.push(`贴吧 ID ${profile.tiebaUid}`); }
+    else if (profile.uid > 0) { parts.push(`uid ${profile.uid}`); }
+    if (profile.tbAge.length > 0) { parts.push(`吧龄 ${profile.tbAge}年`); }
+    if (profile.ipAddress.length > 0) { parts.push(profile.ipAddress); }
+    return parts.join(' · ');
+  }
+
+  /** 成长等级只认服务端明确给的正值：pb 里 0 与「没读到」不可区分，不编「Lv.0」。 */
+  private showLevel(): boolean {
+    return this.vm.profileLoaded && this.vm.profile.levelId > 0;
+  }
+
+  /** 本人主页不给「私信」入口：那会开一个自己跟自己的会话。 */
+  private isSelf(): boolean {
+    const uid: number = this.vm.profile.uid || this.routeParams?.uid || 0;
+    return authSession.isLoggedIn() && uid === authSession.snapshot.uid;
+  }
+
+  /**
+   * 头像来源：本人主页用当前共享资料里的服务端头像，不用路由 portrait、也不用编辑页的本机候选预览；
+   * 他人主页用本页 VM 自己读到的资料与展示版本。
    */
   private avatarUrl(): string {
     const uid: number = this.vm.profile.uid || this.routeParams?.uid || 0;
@@ -110,6 +151,12 @@ export struct UserPage {
       ? shared : (this.vm.profile.portrait || profilePortrait(this.routeParams?.portrait ?? ''));
     return portraitUrl(source, own ? authSession.avatarRevision : this.vm.avatarRevision);
   }
+  private avatarPreviewUrl(): string {
+    const _rev: number = this.imageLoad.revision;
+    if (_rev < 0) { return ''; }
+    return avatarSource(this.avatarUrl(), this.imageLoad.currentPolicy());
+  }
+
   /** 本人主页的图片加载/失败打点：只证明加载结果，不证明内容已更新。 */
   private ownAvatarTraceTag(): string {
     const uid: number = this.vm.profile.uid || this.routeParams?.uid || 0;
@@ -124,6 +171,24 @@ export struct UserPage {
   private openSocial(kind: 'fans' | 'following'): void {
     if (!this.vm.profileLoaded || this.vm.profile.uid <= 0) { return; }
     NavigationService.openDirectory({ kind, id: this.vm.profile.uid });
+  }
+
+  /** 个人主页发私信：已有会话直接进；没有就先开一个本地直聊会话（groupId 待首条回执补齐）。 */
+  private openChat(): void {
+    if (!authSession.isLoggedIn()) {
+      this.getUIContext().getPromptAction().showToast({ message: '登录后才能发私信' });
+      return;
+    }
+    const uid: number = this.vm.profile.uid || this.routeParams?.uid || 0;
+    if (!Number.isSafeInteger(uid) || uid <= 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '没有取得可用的用户身份' });
+      return;
+    }
+    NavigationService.openChat({
+      peerUidText: String(uid),
+      peerName: this.name(),
+      peerPortrait: this.vm.profile.portrait || this.routeParams?.portrait || ''
+    });
   }
   private openPost(item: UserPostItem): void {
     NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName,
@@ -205,7 +270,15 @@ export struct UserPage {
           this.pullRefreshDragging = state === RefreshStatus.Drag || state === RefreshStatus.OverDrag;
         }).layoutWeight(1).onRefreshing(async () => {
           // 用户明确下拉重试：允许强制换一次图片缓存键。
-          await this.vm.refresh(this.context(), true); this.refreshing = false;
+          try {
+            const tasks: Promise<void>[] = [this.vm.refresh(this.context(), true)];
+            if (this.isSelf()) {
+              tasks.push(authSession.refreshOwnAvatarOnEntry(this.context(), true));
+            }
+            await Promise.all(tasks);
+          } finally {
+            this.refreshing = false;
+          }
         })
       }.width('100%').height('100%').padding({ top: this.statusBarH }).backgroundColor(AppTheme.BG)
       // 只记"这一页真的出现在屏幕上"，用来区分状态已发布与用户已看到。
@@ -214,7 +287,8 @@ export struct UserPage {
       })
       if (this.viewerImages.length > 0) {
         ImageViewer({ imageUrl: this.viewerImages[this.viewerIndex], imageUrls: this.viewerImages,
-          initialIndex: this.viewerIndex, onClose: (): void => { this.viewerImages = []; } })
+          images: this.viewerItems, initialIndex: this.viewerIndex,
+          onClose: (): void => { this.viewerImages = []; this.viewerItems = []; } })
           .zIndex(100).transition(imageLayerRetentionTransition())
       }
       }.width('100%').height('100%')
@@ -236,36 +310,61 @@ export struct UserPage {
 
   @Builder
   ProfileCard() {
-    Column({ space: 18 }) {
-      Row({ space: 16 }) {
+    Column({ space: 16 }) {
+      // 上排只有头像与右侧按钮：右排按底对齐，按钮视觉底边与头像底边严格齐平。
+      Row() {
         Stack() {
           AvatarComponent({ url: this.avatarUrl(),
             avatarSize: 72, fallbackName: this.name(), traceTag: this.ownAvatarTraceTag() })
         }.width(72).height(72).borderRadius(36).clip(true)
-          .geometryTransition(this.avatarTransition.id(this.avatarUrl()), { follow: true })
+          .geometryTransition(this.avatarPreviewUrl().length > 0
+            ? this.avatarTransition.id(this.avatarPreviewUrl()) : '', { follow: true })
           .renderFit(RenderFit.RESIZE_FILL)
           .accessibilityText('查看头像')
           .onClick((): void => {
             const url: string = this.avatarUrl();
             if (url.length === 0) { return; }
-            this.avatarTransition.open(this.getUIContext(), url, url, (): void => {
+            const item: ViewerImage = new ViewerImage();
+            item.thumb = avatarVariantForQuality(url, ImageQuality.THUMB);
+            item.high = avatarVariantForQuality(url, ImageQuality.HIGH);
+            item.origin = avatarVariantForQuality(url, ImageQuality.ORIGINAL);
+            item.fallback = url;
+            const preview: string = this.avatarPreviewUrl();
+            this.avatarTransition.open(this.getUIContext(), preview, item.transitionKey(), (): void => {
               this.viewerIndex = 0;
-              this.viewerImages = [url];
-            });
+              this.viewerImages = [item.transitionKey()];
+              this.viewerItems = [item];
+            }, 0, preview.length > 0);
           })
-        Column({ space: 8 }) {
-          Text(this.name()).fontSize(23).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN)
-            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.vm.profileLoaded) {
-            Text(`贴吧 ID ${this.vm.profile.uid}${this.vm.profile.tbAge ? ` · 吧龄 ${this.vm.profile.tbAge}` : ''}`)
-              .fontSize(12).fontColor(AppTheme.TEXT_SUB)
-          }
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Blank()
         if (this.vm.profileLoaded || this.vm.profileError.length > 0) {
-          FollowButton({ kind: 'user', targetId: this.vm.profile.uid || this.routeParams?.uid || 0,
-            portrait: this.vm.profile.portrait || this.routeParams?.portrait || '', targetName: this.name() })
+          Row({ space: 8 }) {
+            if (!this.isSelf()) {
+              ForumActionButton({ label: '私信', actionSymbol: $r('sys.symbol.message'),
+                minTouchHeight: PROFILE_ACTION_LAYOUT_H,
+                accessibilityLabel: `给 ${this.name()} 发私信`,
+                onTap: (): void => { this.openChat(); } })
+            }
+            FollowButton({ kind: 'user', targetId: this.vm.profile.uid || this.routeParams?.uid || 0,
+              portrait: this.vm.profile.portrait || this.routeParams?.portrait || '', targetName: this.name(),
+              minTouchHeight: PROFILE_ACTION_LAYOUT_H })
+          }.flexShrink(0)
         }
-      }.width('100%')
+      }.width('100%').alignItems(VerticalAlign.Bottom)
+
+      Column({ space: 6 }) {
+        Row({ space: 6 }) {
+          Text(this.name()).fontSize(23).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
+          if (this.showLevel()) { UserGrowthBadge({ level: this.vm.profile.levelId }) }
+        }.width('100%').alignItems(VerticalAlign.Center)
+
+        if (this.metaText().length > 0) {
+          Text(this.metaText()).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+      }.width('100%').alignItems(HorizontalAlign.Start)
+
       if (this.vm.profile.intro.length > 0) {
         Text(this.vm.profile.intro).fontSize(14).fontColor(AppTheme.TEXT_SUB).lineHeight(22)
       }
@@ -304,6 +403,7 @@ export struct UserPage {
       onOpenImage: (index: number): void => {
         this.viewerIndex = Math.max(0, Math.min(index, item.originImages.length - 1));
         this.viewerImages = item.originImages;
+        this.viewerItems = viewerImagesForFeed(item.images, item.originImages);
       },
       canOpenForum: item.forumName.length > 0,
       onOpenForum: (): void => { NavigationService.openForum({ forumName: item.forumName }); },

@@ -4,7 +4,7 @@ import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpi
 import { common } from '@kit.AbilityKit';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { PageHeader } from '../components/PageHeader';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
 import { VideoFeedItem } from '../model/VideoFeed';
 import { NavigationService } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
@@ -35,8 +35,8 @@ export struct VideoFeedPage {
   Card(item: VideoFeedItem) {
     Column({ space: 10 }) {
       if (item.clip.cover.length > 0) {
-        if (lowFlowStore.enabled) {
-          Text('低流量模式').width('100%').height(190).textAlign(TextAlign.Center)
+        if (imageLoadStore.isAutoLoadOff()) {
+          Text('未自动加载封面').width('100%').height(190).textAlign(TextAlign.Center)
             .fontSize(12).fontColor(AppTheme.TEXT_SUB).backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(12)
         } else {
           Image(item.clip.cover).width('100%').height(190).objectFit(ImageFit.Cover).borderRadius(12)

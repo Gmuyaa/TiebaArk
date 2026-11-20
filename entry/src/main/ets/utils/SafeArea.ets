@@ -4,10 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 
 /**
- * 状态栏高度兜底值（vp）。
- *
- * 39vp 是 Mate 70 Pro 真机与 1316×2832 模拟器上的**实测值**（137px ÷ 3.5）。
- * 只在首次有效测量前使用；隐藏系统栏期间沿用最近一次有效测量。
+ * 状态栏高度兜底值（vp）：只在首次有效测量前使用，隐藏系统栏期间沿用最近一次有效测量。
  */
 export const STATUS_BAR_FALLBACK_VP: number = 39;
 /** 隐藏状态栏时系统避让区会暂时报 0；保留最后一次可见时测得的高度。 */
@@ -28,5 +25,19 @@ export function readStatusBarVp(context: common.UIAbilityContext): Promise<numbe
       lastVisibleStatusBarVp = height;
     }
     return lastVisibleStatusBarVp;
+  });
+}
+
+/**
+ * 读取底部手势条/导航条高度（vp）。
+ *
+ * 全屏页（没有底部 TabBar 的页面）要自己让开这块：贴底的输入栏、
+ * 悬浮按钮如果铺到屏幕最底，会被手势条压住一截。
+ * 读不到时返回 0，调用方按"不额外留白"处理。
+ */
+export function readBottomInsetVp(context: common.UIAbilityContext): Promise<number> {
+  return window.getLastWindow(context).then((win: window.Window) => {
+    const area: window.AvoidArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+    return px2vp(area.bottomRect.height);
   });
 }

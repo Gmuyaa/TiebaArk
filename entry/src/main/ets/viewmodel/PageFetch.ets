@@ -1,10 +1,7 @@
 /**
- * 页面级请求收口。
- *
- * 首页吧头像与热榜卡原先各自在组件/页面里 `new TiebaApi()`，并在闭包里拼设备身份、
- * 会话与账号比对——「怎么发」被写进了「画什么」的层。这里收成两个函数：UI 只表达
- * 「我要这张图 / 这张卡」。并发、冷却、去重仍由调用方决定（`model/ForumAvatarQueue`
- * 的限额队列、`HotTopicCardsVM` 的两槽补取），本模块不持有任何请求状态。
+ * 页面级请求收口：UI 只表达「我要这张图 / 这张卡」，设备身份、会话与账号比对都在这里取。
+ * 并发、冷却、去重由调用方决定（`model/ForumAvatarQueue` 的限额队列、`HotTopicCardsVM` 的两槽
+ * 补取），本模块不持有任何请求状态。
  */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';

@@ -15,20 +15,15 @@ function displayStr(value: string | number | undefined): string {
 }
 
 
-/** 一条吧搜索结果 */
 export class ForumSearchItem {
   forumId: number = 0;
   /** 吧名（kw，进吧用这个） */
   forumName: string = '';
-  /** 展示名 */
   forumNameShow: string = '';
-  /** 吧头像 URL */
   avatar: string = '';
   /** 关注数展示串（服务端格式化，如 "2W"） */
   concernNum: string = '';
-  /** 帖子数展示串（如 "31W"） */
   postNum: string = '';
-  /** 吧简介（模糊匹配结果可能为空） */
   slogan: string = '';
   isOfficial: boolean = false;
 
@@ -42,7 +37,6 @@ export class ForumSearchItem {
   }
 }
 
-/** 一页吧搜索结果 + 分页游标 */
 export class ForumSearchPage {
   items: ForumSearchItem[] = [];
   /** 本结果的页码（请求时的 pn） */
@@ -107,7 +101,7 @@ export class ForumSearchPage {
     item.avatar = wireString(raw.avatar);
     item.concernNum = displayStr(raw.concern_num);
     item.postNum = displayStr(raw.post_num);
-    // slogan 缺省时退 intro（两个字段语义相同，实测精确匹配有 slogan、部分模糊结果只有 intro）
+    // slogan 缺省时退 intro（语义相同；精确匹配有 slogan，部分模糊结果只有 intro）
     item.slogan = wireString(raw.slogan).length > 0 ? wireString(raw.slogan) : wireString(raw.intro);
     item.isOfficial = raw.is_official_forum === 1;
     return item;

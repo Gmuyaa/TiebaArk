@@ -1,15 +1,11 @@
 /**
- * 吧头像补图的统一编排：**内存表 → 落盘 TTL → 有界并发反查 → 回写**。
+ * 吧头像补图的统一编排：内存表 → 落盘 TTL → 有界并发反查 → 回写。
  *
- * 三个列表入口（我的收藏/浏览历史、个人主页「关注吧」、个人主页「帖子栏」）原本各写一遍
- * 同样的流程，且各自决定并发与上限。2026-11-13 已经踩过一次坑：
- * 把落盘 URL 读出来再写回会刷新写入时刻，TTL 就永远不过期。这里把它固化成两条规则：
+ * 曾踩过坑：把落盘 URL 读出来再写回会刷新写入时刻，TTL 就永远不过期。因此固化为两条规则：
+ * 1. 落盘命中只上屏，不写回（写回会续命）；
+ * 2. 网络确认才走 `recordFetchedForumAvatar`。
  *
- * 1. **落盘命中只上屏，不写回**（写回会续命）；
- * 2. **网络确认才走 `recordFetchedForumAvatar`**（刷新写入时刻）。
- *
- * 各入口只需要提供「怎么取」（`fetch`）与「取到之后给谁用」（`apply`）；
- * 并发上限全站统一 4（持有者 2026-11-14 定），单次条数上限由调用方给。
+ * 各入口只需提供「怎么取」（`fetch`）与「取到之后给谁用」（`apply`）；并发上限全站统一 4。
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { FORUM_AVATAR_URL_TTL_MS } from '../model/CachePolicy';
@@ -17,7 +13,6 @@ import {
   getCachedForumAvatarUrl, getForumAvatar, recordFetchedForumAvatar
 } from '../model/ForumAvatarStore';
 
-/** 一个待补的吧 */
 export class ForumAvatarNeed {
   readonly name: string;
   readonly forumId: number;

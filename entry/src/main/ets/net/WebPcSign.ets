@@ -1,19 +1,15 @@
-/** 网页搜索签名参考 lumina37/aiotieba search_global/_api.py（Unlicense）。排除 sign、sig，按 key 升序拼接 key=value，追加协议签名常量后取 UTF-8 MD5。 */
+/** PC 网页端的搜索签名，与 app 侧的 SignSalt 通道无关；算法参考 lumina37/aiotieba 的 search_global/_api.py（Unlicense）。 */
 
 import { CryptoUtil, SignParam } from '../utils/CryptoUtil';
 
 /** PC 网页端专属签名密钥（逆向 PC 网页端 js 所得，非 app 签名密钥） */
 const PC_SIGN_SECRET: string = '36770b1f34c9bbf2e7d1a99d2b82fa9e';
 
-/** 搜吧/搜帖 web 端点要求的 Referer（实测缺失时可能触发风控） */
+/** 搜吧/搜帖 web 端点要求的 Referer（缺失时可能触发风控） */
 export const PC_SEARCH_REFERER: string = 'https://tieba.baidu.com/f/search/res';
 
 export class WebPcSign {
-  /**
-   * 对参数组计算 PC 网页签名。
-   * 入参复用 `SignParam`（只是 key/value 对，与 app 签名无关）；
-   * sign 项不该出现在入参里，出现也会被排除。
-   */
+  /** sign 项不该出现在入参里（出现也会被排除）；`SignParam` 只是 key/value 对，与 app 签名无关。 */
   static async sign(params: SignParam[]): Promise<string> {
     const sorted: SignParam[] = params
       .filter((p: SignParam): boolean => p.key !== 'sign' && p.key !== 'sig')

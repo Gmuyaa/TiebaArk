@@ -3,10 +3,8 @@ import { ThreadBrief } from './ThreadList';
 /**
  * 首页卡片流的数据源（`LazyForEach` 用）。
  *
- * **为什么不用 `Repeat`**：2026-11-13 真机 A/B 实测 —— `Repeat`（含去掉 `virtualScroll`
- * 的写法）在数据**整批替换**（下拉刷新）后不会重建已实例化的 `ListItem`：VM 与
- * `FeedList` 的构建都拿到新数组，item builder 却一次都不执行，屏上停在旧的一批
- * （刷新前后内容区像素 diff = 0，见 `docs/开发记录/2026-11-13-首页刷新不更新.md`）。
+ * **不能用 `Repeat`**：数据整批替换（下拉刷新）后它不重建已实例化的 `ListItem`，
+ * 屏上停在旧的一批（原因见 `docs/开发记录/2026-11-13-首页刷新不更新.md`）。
  * `ForEach` 与 `LazyForEach` 两条路径都正常；这里选 `LazyForEach` 保留虚拟化。
  *
  * 两条更新路径分开，与楼层列表（`FloorDataSource`）同一套做法：

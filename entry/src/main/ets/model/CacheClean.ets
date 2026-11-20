@@ -13,13 +13,10 @@ export interface CacheItemSpec {
   kind: CacheKind;
   /** 设置行的 `key` 与 `action` */
   key: string;
-  /** 主标题 */
   title: string;
-  /** 副标题（说明清的是什么、有没有风险） */
   subtitle: string;
   /** 是否是"用户数据"：true = 二次确认要提示"清理后不可恢复"（当前没有这类项） */
   userData: boolean;
-  /** 展示顺序（小的在前） */
   order: number;
 }
 
@@ -91,9 +88,7 @@ export class CacheMeasure {
   ok: boolean = false;
   /** 目录不存在（= 确实为空，不是失败） */
   missing: boolean = false;
-  /** 统计到的字节数 */
   bytes: number = 0;
-  /** 统计到的文件数 */
   entries: number = 0;
   /** 因 `stat` 失败被跳过的文件数（>0 = 部分统计失败） */
   skipped: number = 0;
@@ -103,11 +98,8 @@ export class CacheMeasure {
 export enum CachePhase {
   /** 首次统计中：**不显示确定占用、不提供清理** */
   STATTING = 0,
-  /** 有可清理内容 */
   OK = 1,
-  /** 统计成功且确实为空 */
   EMPTY = 2,
-  /** 本机读取失败：不提供清理，可重试 */
   READ_FAIL = 3,
   /** 部分文件统计失败：如实写"已统计多少、多少无法读取" */
   PARTIAL = 4,

@@ -28,7 +28,7 @@ export class SmartReachStore {
   @Trace imageXRatio: number = -1;
   @Trace imageYRatio: number = -1;
   @Trace forumTabsEnabled: boolean = true;
-  /** 分类栏样式（2026-11-12 三种：常规吸顶 / 胶囊 / 悬浮），默认悬浮与旧行为一致。 */
+  /** 分类栏样式：常规吸顶 / 胶囊 / 悬浮，默认悬浮与旧行为一致。 */
   @Trace forumTabsStyle: ForumTabsStyle = ForumTabsStyle.FLOATING;
   /** 兼容旧调用点：是否悬浮样式（三选一之后 forumTabsFloating 变成派生值）。 */
   get forumTabsFloating(): boolean {
@@ -91,7 +91,7 @@ export class SmartReachStore {
   async setHomeComposeEnabled(value: boolean, context: common.UIAbilityContext): Promise<void> {
     this.homeComposeEnabled = value; await this.save(context);
   }
-  /** 只控制首页发帖按钮是否渲染；与握姿总开关、跟随握姿开关互相独立。 */
+  /** 与握姿总开关、跟随握姿开关互相独立。 */
   async setHomeComposeVisible(value: boolean, context: common.UIAbilityContext): Promise<void> {
     this.homeComposeVisible = value; await this.save(context);
   }

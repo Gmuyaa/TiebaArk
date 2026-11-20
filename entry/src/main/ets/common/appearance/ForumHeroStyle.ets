@@ -14,28 +14,24 @@ export const FORUM_HERO_PATTERN_COLOR_FILTER: number[] = [
 ];
 
 /**
- * **真实吧头图**（pb 通道 `forum_headline_img_info.img_url`）层上的暗化 scrim。
- *
- * 头图与底纹不同：它是照片/插画，直接铺满时白字、统计数字与玻璃返回键的对比
- * 完全取决于图片内容本身 —— 不可控。官方 App 的做法就是在图上叠一层
- * 自下而上的暗渐变，这里取底部 0.55 的黑色 scrim（Hero 下半部是统计数字区，
- * 上半部状态栏区域由 0.15 的顶部 scrim 兜住浅色图片）。
+ * 真实吧头图（pb 通道 `forum_headline_img_info.img_url`）上的暗化 scrim：头图是照片/插画，
+ * 白字与玻璃返回键的对比完全取决于图片内容，只能自下而上叠暗渐变。底部 0.55 压统计数字区，
+ * 上半部由 0.15 的顶部 scrim 兜住浅色图片。
  *
  * 头图层不叠主题色蒙层 —— 那会把照片染色；scrim 只负责可读性。
  */
 export const FORUM_HERO_HEADLINE_SCRIM_TOP: number = 0.15;
 export const FORUM_HERO_HEADLINE_SCRIM_BOTTOM: number = 0.55;
 
-/** 浅色主题色需要压暗的亮度阈值：超过它白字压不住（实测贴吧蓝 3484D3 亮度 ≈ 0.46） */
+/** 主题色亮度阈值：超过它白字压不住，需先压暗 */
 const LIGHT_COLOR_LUMINANCE: number = 0.45;
-/** 过亮主题色的压暗系数 */
 const LIGHT_COLOR_DIM: number = 0.52;
 /** 底部比顶部再暗一档，形成原有渐变方向感 */
 const BOTTOM_DIM: number = 0.7;
 
 const HEX_DIGITS: string = '0123456789abcdef';
 
-/** 吧页 Hero 用到的全部色值。`hasThemeColor=false` 时就是迁移前的兜底渐变 */
+/** 吧页 Hero 的全部色值；`hasThemeColor=false` 时用兜底深蓝渐变 */
 export class ForumHeroPalette {
   topColor: string = FORUM_HERO_FALLBACK_TOP;
   bottomColor: string = FORUM_HERO_FALLBACK_BOTTOM;
@@ -61,9 +57,8 @@ function byteToHex(value: number): string {
 }
 
 /**
- * 规范化协议色值：服务端给的是**6 位十六进制但不带 `#`**（实测 `"3F2F0F"`），
- * 界面要 `#RRGGBB` 才能用。长度不符或含非十六进制字符一律返回空串 ——
- * 让调用方回退默认配色，绝不猜、也绝不抛异常。
+ * 规范化协议色值：服务端给 6 位十六进制且不带 `#`，界面要 `#RRGGBB`。
+ * 长度不符或含非十六进制字符一律返回空串，由调用方回退默认配色 —— 不猜、不抛异常。
  */
 export function normalizeForumColor(raw: string): string {
   if (raw.length !== 6 || hexToInt(raw) < 0) {
@@ -97,14 +92,9 @@ export function colorLuminance(color: string): number {
 }
 
 /**
- * 由协议的吧主题色派生出 Hero 的底色渐变。
- *
- * @param rawCommonColor `forum.theme_color.day.common_color`，如 `"3F2F0F"`（**不带 `#`**）
- *
- * 行为：
- * - 取不到/非法 → `hasThemeColor=false`，界面用兜底深蓝渐变（逐像素保持迁移前观感）；
- * - 拿到 → 过亮的主色先压暗（否则白字压不住），再给出顶部/底部两档实色，
- *   底纹图（`pattern_image`）以 `FORUM_HERO_PATTERN_OPACITY` 叠在它之上。
+ * 由协议的吧主题色派生 Hero 底色渐变（`forum.theme_color.day.common_color`，不带 `#`）。
+ * 取不到/非法 → `hasThemeColor=false`，界面用兜底深蓝渐变；拿到则过亮主色先压暗，
+ * 再给顶部/底部两档；底纹图（`pattern_image`）以 `FORUM_HERO_PATTERN_OPACITY` 叠在其上。
  */
 export function forumHeroPalette(rawCommonColor: string): ForumHeroPalette {
   const palette: ForumHeroPalette = new ForumHeroPalette();

@@ -1,8 +1,12 @@
+/**
+ * 帖子里的视频播放：内联与全屏各一套 `XComponent`，播放器状态在 `VideoPlaybackVM`；
+ * 本组件负责窗口策略、进度条、拖拽与全屏切换，离开页面即停止本实例的播放。
+ */
 import { VideoClip } from '../model/VideoClip';
 import { VideoPlaybackVM, videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { AppTheme } from '../theme/Theme';
 import { sliderMaterial, motionContentCover } from '../common/appearance/MotionPolicy';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
 import { common } from '@kit.AbilityKit';
 import { VideoWindowPolicy } from '../utils/VideoWindowPolicy';
 
@@ -132,7 +136,7 @@ export struct VideoPlayer {
         .width('100%').height('100%').onLoad(() => {
           if (this.mounted && this.fullscreen) { this.vm.setSurface(this.fullController.getXComponentSurfaceId()); }
         })
-      if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !lowFlowStore.enabled) {
+      if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !imageLoadStore.isAutoLoadOff()) {
         Image(this.video.cover).width('100%').height('100%').objectFit(ImageFit.Contain).hitTestBehavior(HitTestMode.None)
       }
       this.Controls(true)
@@ -145,7 +149,7 @@ export struct VideoPlayer {
         .width(this.stageSurfaceWidth()).height(this.stageSurfaceHeight()).align(Alignment.Center)
         .onLoad(() => { this.surfaceReady(); })
         .onClick(() => { this.useInline(); void this.vm.toggle(this.video); })
-      if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !lowFlowStore.enabled) {
+      if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !imageLoadStore.isAutoLoadOff()) {
         Image(this.video.cover).width('100%').height('100%').objectFit(ImageFit.Contain).hitTestBehavior(HitTestMode.None)
       }
       if (!this.active() || this.vm.state === 'paused' || this.vm.state === 'completed' || this.vm.state === 'error') {
@@ -182,7 +186,7 @@ export struct VideoPlayer {
       Stack() {
         XComponent({ id: 'tieba-video-inline', type: XComponentType.SURFACE, controller: this.inlineController })
           .width('100%').height(this.inlineHeight()).onLoad(() => { if (!this.fullscreen) { this.useInline(); } })
-        if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !lowFlowStore.enabled) {
+        if ((!this.active() || !this.vm.firstFrame) && this.video.cover.length > 0 && !imageLoadStore.isAutoLoadOff()) {
           Image(this.video.cover).width('100%').height(this.inlineHeight()).objectFit(ImageFit.Contain).hitTestBehavior(HitTestMode.None)
         }
       }.width('100%').height(this.inlineHeight()).backgroundColor(Color.Black)

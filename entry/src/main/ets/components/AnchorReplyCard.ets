@@ -1,11 +1,7 @@
 /**
- * 回复详情面板顶部的**锚点回复卡**：完整展示被展开的那条一级回复。
- *
- * 它的作用不是"缩略预览"，而是给下面那串回复提供上下文——
- * 所以正文用与主列表同一套富文本渲染（由页面以 `bodyBuilder` 传入），
- * 图片、长正文都完整展示，不截断、不折叠。
- *
- * 组件自身不碰网络：点赞与回复都只把点击意图抛给页面。
+ * 回复详情面板顶部的锚点回复卡：完整展示被展开的那条一级回复，给下面那串回复提供上下文。
+ * 正文用与主列表同一套富文本渲染（由页面以 `bodyBuilder` 传入），图片与长正文都完整展示、不截断；
+ * 组件自身不碰网络，点赞与回复都只把点击意图抛给页面。
  */
 
 import { PostItem } from '../model/ThreadDetail';
@@ -30,15 +26,11 @@ export struct AnchorReplyCard {
   @Event onDelete: () => void = (): void => {};
   @Event onOpenAuthor: () => void = (): void => {};
   @Require @Param item: PostItem;
-  /** 作者是否是楼主 */
   @Param isThreadAuthor: boolean = false;
 
   @Require @Param agreeState: AgreeState;
-  /** 一级回复正文（富文本），由页面提供 */
   @BuilderParam bodyBuilder: () => void = this.emptyBody;
-  /** 点赞点击 */
   @Event onToggleLike: () => void = (): void => {};
-  /** 回复点击：调用方打开本层的回复框 */
   @Event onReply: () => void = (): void => {};
 
   @Builder

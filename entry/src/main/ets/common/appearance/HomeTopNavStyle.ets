@@ -2,14 +2,10 @@ import { searchFieldHeight, homeChannelHeight } from './UiLayout';
 
 /** 首页只开放官方沉浸与一体玻璃；历史编号保留用于读取旧偏好。 */
 export enum HomeTopNavStyle {
-  /** 已退役，加载时迁移到官方沉浸。 */
   UNDERLINE = 0,
-  /** 已退役，加载时迁移到官方沉浸。 */
   BG_HIGHLIGHT = 1,
-  /** 已退役，加载时迁移到官方沉浸。 */
   FLOATING_ISLANDS = 2,
   UNIFIED_GLASS = 3,
-  /** 已退役，加载时迁移到官方沉浸。 */
   LIGHT_LABELS = 4,
   /** 双排内容由 HomeDualRowTopBar 的官方悬浮面承载，ArkUI 优先、HDS 回退。 */
   OFFICIAL_DUAL_ROW = 5

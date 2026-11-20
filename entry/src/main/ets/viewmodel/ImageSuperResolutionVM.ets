@@ -1,4 +1,7 @@
-/** 查看器会话状态按图片 URL 关联。一次仅允许一个底层任务；切图使结果失效但不取消底层任务，迟到结果只释放。缓存按实际解码字节计量，当前图不淘汰。 */
+/**
+ * 查看器会话状态，按图片 URL 关联。一次仅允许一个底层任务；切图使结果失效但不取消底层任务，
+ * 迟到结果只释放。缓存按实际解码字节计量，当前图不淘汰。
+ */
 
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -30,25 +33,21 @@ const TAG: string = 'ImageSuperResolutionVM';
 const RELEASE_DELAY_MS: number = 200;
 
 /**
- * 一张图的超分状态。**`@Observed`**：页组件以 `@ObjectLink` 接住它，
- * 于是本类（而不是页组件自己）也能把状态推到界面上。
- *
- * `hasResult` 与 `status` **分开记**：前者是"结果还在缓存里"，后者是"当前正在显示增强图"。
- * 关掉开关只改 `status`，`hasResult` 保持 —— 再打开不需要重算。
+ * 一张图的超分状态。**`@Observed`**：页组件以 `@ObjectLink` 接住它，于是本类也能把状态推到界面上。
+ * `hasResult` 与 `status` 分开记：前者是“结果还在缓存里”，后者是“当前正在显示增强图”；
+ * 关掉开关只改 `status`，`hasResult` 保持——再打开不需要重算。
  */
 @Observed
 export class PageSuperResolutionState {
   /** 图片身份（URL），不随页码变 */
   key: string = '';
-  /** `SrStatus` */
   status: number = SrStatus.OFF;
   /** 不可用 / 失败的原话 */
   reason: string = '';
-  /** 增强图是否还在缓存里 */
   hasResult: boolean = false;
   resultWidth: number = 0;
   resultHeight: number = 0;
-  /** 增强图的实测字节数（`getPixelBytesNumber()`），缓存预算按它算 */
+  /** 增强图的字节数（`getPixelBytesNumber()`），缓存预算按它算。 */
   resultBytes: number = 0;
   /** 原图是否带透明通道（决定导出编码） */
   resultHasAlpha: boolean = false;
@@ -82,7 +81,7 @@ function srSleep(ms: number): Promise<void> {
   });
 }
 
-/** 实测字节数；读不到就退回预测值（预算宁可估大不估小） */
+/** 字节数；读不到就退回预测值（预算宁可估大不估小）。 */
 function pixelBytesOf(pixelMap: image.PixelMap, fallback: number): number {
   try {
     return pixelMap.getPixelBytesNumber();
@@ -135,8 +134,8 @@ export class ImageSuperResolutionSession {
   }
 
   /**
-   * 导出开始/结束时钉住某张图：编码是异步的，中途若正好有别的结果落地触发淘汰，
-   * 被钉住的那张不许释放（否则会编出坏文件）。传空串即解除。
+   * 导出开始/结束时钉住某张图：编码是异步的，中途若有别的结果落地触发淘汰，被钉住的那张不许释放
+   * （否则会编出坏文件）。传空串即解除。
    */
   setExportPin(key: string): void {
     this.exportPinnedKey = key;
@@ -164,10 +163,8 @@ export class ImageSuperResolutionSession {
   }
 
   /**
-   * 页面报告"这张图解码出来的真实尺寸"（`Image.onComplete`）。
-   *
-   * 只用来做**尺寸/内存**层面的提前灰显：尺寸不合规的图在点击前就说明原因。
-   * 不假设帧数（只有真去读文件才知道），因此不会在这里判"动图"。
+   * 页面报告“这张图解码出来的真实尺寸”（`Image.onComplete`）。只用来做**尺寸/内存**层面的提前
+   * 灰显：尺寸不合规的图在点击前就说明原因。不假设帧数，因此不会在这里判“动图”。
    */
   noteDecodedSize(key: string, width: number, height: number): void {
     if (this.closed || !this.deviceSupported) {
@@ -208,9 +205,8 @@ export class ImageSuperResolutionSession {
   }
 
   /**
-   * 点一次超分按钮。返回"要不要提示、提示什么"，由界面原话展示。
-   *
-   * 分支顺序按用户体验排：先挡重复提交（处理中），再判开关状态，再看缓存，最后才起任务。
+   * 点一次超分按钮，返回“要不要提示、提示什么”，由界面原话展示。分支顺序按用户体验排：先挡重复
+   * 提交（处理中），再判开关状态，再看缓存，最后才起任务。
    */
   async toggle(key: string): Promise<SrToggleResult> {
     const result: SrToggleResult = new SrToggleResult();
@@ -375,7 +371,6 @@ export class ImageSuperResolutionSession {
     state.reason = srFailureText(SrFailure.UNKNOWN, message);
   }
 
-  /** 把某个 key 挪到使用顺序末尾（最近使用） */
   private touch(key: string): void {
     const index: number = this.order.indexOf(key);
     if (index >= 0) {
@@ -384,7 +379,6 @@ export class ImageSuperResolutionSession {
     this.order.push(key);
   }
 
-  /** 丢掉某张图的结果（释放 PixelMap），状态回到关闭 */
   private dropResult(key: string): void {
     const state: PageSuperResolutionState | undefined = this.states.get(key);
     if (state === undefined) {
@@ -428,11 +422,9 @@ export class ImageSuperResolutionSession {
   }
 
   /**
-   * 退出查看器：使在飞任务失效、清空缓存、在安全时机释放分析器。
-   *
-   * 增强图**延迟 `RELEASE_DELAY_MS` 释放**：本函数在 `aboutToDisappear` 里调用，
-   * 此刻 ArkUI 可能还在用这张 PixelMap 收尾当前帧；立即释放会出现"渲染已释放对象"。
-   * 引用先摘掉（本会话不再持有），真正的释放推后，且不影响下一次会话。
+   * 退出查看器：使在飞任务失效、清空缓存、在安全时机释放分析器。增强图**延迟 `RELEASE_DELAY_MS`
+   * 释放**：本函数在 `aboutToDisappear` 里调用，此刻 ArkUI 可能还在用这张 PixelMap 收尾当前帧，
+   * 立即释放会出现“渲染已释放对象”。引用先摘掉，真正的释放推后。
    */
   close(): void {
     if (this.closed) {

@@ -217,7 +217,6 @@ export class ThreadBlockStore {
     return false;
   }
 
-  /** 隐藏一条帖子（本机） */
   async hide(context: common.UIAbilityContext, item: HiddenThread): Promise<void> {
     if (item.tid <= 0) { return; }
     await this.change(context, KEY_HIDDEN, async (current: string, session: string): Promise<boolean> => {
@@ -228,7 +227,6 @@ export class ThreadBlockStore {
     });
   }
 
-  /** 恢复（取消隐藏）一条帖子 */
   async unhide(context: common.UIAbilityContext, tid: number): Promise<void> {
     await this.change(context, KEY_HIDDEN, async (current: string, session: string): Promise<boolean> => {
       const next: HiddenThread[] = removeHiddenThread(this.hidden, tid);
@@ -238,7 +236,6 @@ export class ThreadBlockStore {
     });
   }
 
-  /** 服务端屏蔽成功后记一笔，用于即时过滤（不改变服务端状态） */
   async rememberBlockedForum(context: common.UIAbilityContext, forumName: string): Promise<void> {
     const name: string = normalizeForumName(forumName);
     if (name.length === 0) { return; }
@@ -248,7 +245,6 @@ export class ThreadBlockStore {
     });
   }
 
-  /** 服务端解除屏蔽后从本机镜像里删掉 */
   async forgetBlockedForum(context: common.UIAbilityContext, forumName: string): Promise<void> {
     await this.forgetBlockedForums(context, [forumName]);
   }
@@ -262,7 +258,6 @@ export class ThreadBlockStore {
     });
   }
 
-  /** 服务端拉黑成功后记一笔（uid + 昵称，供设置页展示），用于即时过滤 */
   async rememberBlockedUser(context: common.UIAbilityContext, uid: number, name: string): Promise<void> {
     if (!Number.isSafeInteger(uid) || uid <= 0) { return; }
     const user: BlockedUser = new BlockedUser();
@@ -275,7 +270,6 @@ export class ThreadBlockStore {
     });
   }
 
-  /** 解除拉黑后从本机名单里删掉 */
   async forgetBlockedUser(context: common.UIAbilityContext, uid: number): Promise<void> {
     await this.change(context, KEY_USERS, async (current: string, _session: string): Promise<boolean> => {
       this.blockedUsers = removeBlockedUser(this.blockedUsers, uid);

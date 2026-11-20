@@ -9,7 +9,6 @@ export class ForumMemberItem {
   nameShow: string = '';
   /** 头像标识（列表接口给的是 portrait 路径，与 `DirectoryUser` 同一口径） */
   portrait: string = '';
-  /** 可直接给 `Image` 的头像地址 */
   avatar: string = '';
   userLevel: number = 0;
   levelName: string = '';
@@ -17,7 +16,6 @@ export class ForumMemberItem {
   /** 该成员在本组里的角色名（如"吧主""小吧"），服务端可能给空串 */
   roleName: string = '';
 
-  /** 展示名：优先 `name_show`（改过昵称的展示名），再退用户名，最后兜底文案 */
   displayName(): string {
     if (this.nameShow.length > 0) { return this.nameShow; }
     if (this.userName.length > 0) { return this.userName; }
@@ -70,9 +68,9 @@ export function previewNote(total: number, shown: number): string {
 }
 
 /**
- * 角色文案：服务端在 `role_name` 里给的是**协议原值**（实测 `manager`／`assist`），
+ * 角色文案：服务端在 `role_name` 里给的是**协议原值**（`manager`／`assist`），
  * 直接画出来就是"界面出现实现术语"。映射规则与 `pages/DirectoryPage.ets` 里那份私有实现一致
- * （那边是 `role_label` 的 JSON 口径，这边是 pb 口径；统一到一处等下次碰 DirectoryPage 时再做）。
+ * （那边是 `role_label` 的 JSON 口径，这边是 pb 口径）。
  *
  * 认不出来的值：纯 ASCII 的按"吧务成员"兜底（那多半是另一个协议标识），
  * 含中文的原样展示（服务端已经给了可读角色名）。
@@ -88,11 +86,9 @@ export function roleLabel(role: string): string {
 
 // ── 吧务团队全量（`GetBawuInfo`，cmd 301007）────────────────────────────────
 //
-// 为什么需要它：`getMemberInfo` 的 `member_group_list` **只回预览**（实测 52 人的组只回 5 个，
-// 且 `DataReq` 里没有 pn/rn）。吧务的**全量**名单在另一个端点：反编译
-// `com/baidu/tieba/forumMember/bawu/BawuTeamRequestMessage.java` 得到 `super(1001705, 301007)`。
-// 真机实测：`total_num=52`，四个角色 吧主 1／小吧主 45／语音小编 5／吧主助手 1，合计与预览组的
-// `member_group_num` 一致 —— 也就是说这两个端点讲的是同一批人，只是一个给预览、一个给全量。
+// `getMemberInfo` 的 `member_group_list` 只回预览，且 `DataReq` 里没有 pn/rn；吧务的**全量**
+// 名单在另一个端点：反编译 `com/baidu/tieba/forumMember/bawu/BawuTeamRequestMessage.java`
+// 得到 `super(1001705, 301007)`。两个端点讲的是同一批人，一个给预览、一个给全量。
 
 /** `GetBawuInfo` 的结果：按角色分组，**每组都是全量** */
 export class BawuTeamResult {
@@ -189,7 +185,7 @@ function readBawuTeam(reader: ProtoReader, out: BawuTeamResult): void {
       group.total = group.members.length;
       /*
        * 行内角色文案统一用**组名**：`BawuRoleDes.role_name` 就是这一组人的角色
-       * （实测组名"语音小编"里的成员，自带 `role_name` 反而是认不出的 ASCII 码，
+       * （组名"语音小编"里的成员，自带 `role_name` 反而是认不出的 ASCII 码，
        *  `roleLabel()` 会兜底成"吧务成员"，画出来就是"组名说语音小编、行里说吧务成员"）。
        * 组名为空时不动成员自带的值。
        */

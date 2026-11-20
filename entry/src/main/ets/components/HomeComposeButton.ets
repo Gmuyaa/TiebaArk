@@ -3,11 +3,8 @@ import { FloatingButtonKind } from '../model/SmartReach';
 import { AppTheme } from '../theme/Theme';
 
 /**
- * 首页发帖按钮。
- *
- * 2026-11-10 重构：握姿订阅、防抖、绕屏换边、拖拽吸附、边缘入场、触控区、按压缩放
- * 全部收进 `FloatingCircleButton`，本组件只声明"首页发帖"这一种用法和它自己的差异
- * （加号图标、底栏以上 68vp 的默认落点、独立的位置记忆字段）。
+ * 首页发帖按钮。握姿订阅、防抖、绕屏换边、拖拽吸附、边缘入场、触控区与按压缩放全部收在 `FloatingCircleButton`，
+ * 本组件只声明"首页发帖"这一种用法和它的差异（加号图标、底栏以上 68vp 默认落点、独立的位置记忆字段）。
  */
 @ComponentV2
 export struct HomeComposeButton {

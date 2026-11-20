@@ -4,7 +4,11 @@ import {
   FeedImageBox, FeedImageInfo, feedImageBox, feedImageInfo, feedPreviewInfo, previewRowHeight,
   rememberMeasuredImage, PREVIEW_GAP, PREVIEW_RADIUS
 } from '../model/HomeFeedPresentation';
-import { LowFlowStore, lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
+import {
+  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, feedPreviewSource
+} from '../model/ImageLoadPolicy';
+import { ContentImage } from '../model/ThreadDetail';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
 import { ImageTransitionCrop, imageTransitionCrop } from '../model/ImageTransitionCrop';
 import { ImageLayoutMode } from '../model/ImageLayout';
@@ -40,7 +44,8 @@ struct ThreadPreviewImage {
   @Event onOpen: () => void = (): void => {};
 
   @Event onBoxHeight: (index: number, height: number) => void = (_index: number, _height: number): void => {};
-  @Local flow: LowFlowStore = lowFlowStore;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
+  @Local private policy: ImageLoadPolicy = imageLoadStore.currentPolicy();
   @Local loaded: boolean = false;
   @Local failed: boolean = false;
   /** 本次加载确认到的实际源尺寸；空 = 还没加载出来，用缓存/占位框 */
@@ -52,9 +57,14 @@ struct ThreadPreviewImage {
 
   aboutToAppear(): void {
     this.alive = true;
+    this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.registerReturnSource();
   }
+
+  private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private resolvedSource(): string { return feedPreviewSource(feedImageInfo(this.url), this.url, this.policy); }
 
   private invalidateRequest(): void {
     ++this.requestEpoch;
@@ -74,10 +84,10 @@ struct ThreadPreviewImage {
     const index: number = this.index;
     this.unregisterReturn = this.transitionGallery.register(index, origin,
       (): ImageTransitionTarget | undefined => {
-        if (!this.alive || !this.visible || this.flow.enabled || !this.loaded ||
+        if (!this.alive || !this.visible || this.isOff() || !this.loaded ||
           url !== this.url || origin !== this.originUrl() || index !== this.index ||
           !this.imageTransition.canOpenShared()) { return undefined; }
-        return new ImageTransitionTarget(this.imageTransition, url, origin, 0);
+        return new ImageTransitionTarget(this.imageTransition, this.resolvedSource(), origin, 0);
       });
   }
 
@@ -87,15 +97,25 @@ struct ThreadPreviewImage {
     this.registerReturnSource();
   }
 
-  @Monitor('flow.enabled')
-  onLowFlowChanged(): void { this.invalidateRequest(); }
+  @Monitor('imageLoad.revision')
+  onPolicyChanged(): void {
+    const prevOff: boolean = this.isOff();
+    const prevSource: string = this.resolvedSource();
+    this.policy = this.imageLoad.currentPolicy();
+    const nextOff: boolean = this.isOff();
+    const nextSource: string = this.resolvedSource();
+    if (prevOff !== nextOff || prevSource !== nextSource) {
+      this.invalidateRequest();
+      this.registerReturnSource();
+    }
+  }
 
   /**
-   * URL 变了（列表项复用）＝ 换成另一张图：成功态、失败态与实测尺寸一律作废，
-   * 否则上一张图的尺寸会串到新图片上。
+   * URL 变了（列表项复用）＝ 换成另一张图：成功态、失败态与实测尺寸一律作废，否则上一张图的尺寸会串到新图上。
    */
   @Monitor('url')
   onUrlChanged(): void {
+    this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.actual = new FeedImageInfo();
     this.registerReturnSource();
@@ -120,8 +140,7 @@ struct ThreadPreviewImage {
   }
 
   /**
-   * 绘制方式：容器比例与**本次实际绘制的资源**比例不一致时 `Cover` 裁切填满，
-   * 一致时沿用 `Contain`（此时两者等价，不会裁掉内容）。长图沿用既有 `Cover`。
+   * 容器比例与本次实际绘制的资源比例不一致时 `Cover` 裁切填满，一致时沿用 `Contain`（此时等价，不会裁掉内容）。
    */
   private imageFit(frame: FeedImageBox): ImageFit {
     if (frame.long) { return ImageFit.Cover; }
@@ -150,13 +169,13 @@ struct ThreadPreviewImage {
   }
 
   /**
-   * 绑定这次加载的回调：只有**发起加载时的那条 URL 仍是当前 URL** 时才生效 ——
-   * 列表项复用后旧图的迟到回调不能把尺寸/成功态写到新图上。
+   * 绑定这次加载的回调：只有发起加载时那条 URL 仍是当前 URL 时才生效 —— 列表项复用后旧图的迟到回调不能写到新图上。
    */
   private completeHandler(url: string): (event?: PreviewImageComplete) => void {
     const request: number = this.requestEpoch;
     return (event?: PreviewImageComplete): void => {
-      if (!this.alive || this.flow.enabled || request !== this.requestEpoch || url !== this.url) { return; }
+      if (!this.alive || (this.policy !== undefined && this.policy.quality === ImageQuality.OFF) ||
+        request !== this.requestEpoch || url !== this.url) { return; }
       this.applyLoaded(event);
       this.registerReturnSource();
     };
@@ -165,7 +184,8 @@ struct ThreadPreviewImage {
   private errorHandler(url: string): () => void {
     const request: number = this.requestEpoch;
     return (): void => {
-      if (!this.alive || this.flow.enabled || request !== this.requestEpoch || url !== this.url) { return; }
+      if (!this.alive || (this.policy !== undefined && this.policy.quality === ImageQuality.OFF) ||
+        request !== this.requestEpoch || url !== this.url) { return; }
       this.imageTransition.invalidate();
       this.failed = true;
       this.loaded = false;
@@ -175,12 +195,8 @@ struct ThreadPreviewImage {
   build() {
     Column() {
       Stack({ alignContent: Alignment.TopStart }) {
-        /*
-         * 低流量模式（A-08）：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
-         * 占位仍可点（外层 onClick 不变），点开查看器照常加载原图。
-         */
-        if (this.flow.enabled) {
-          Text('低流量模式 · 点按查看')
+        if (this.isOff()) {
+          Text('点按查看图片')
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
             .width('100%').height('100%').textAlign(TextAlign.Center)
         } else {
@@ -189,15 +205,19 @@ struct ThreadPreviewImage {
               .fontSize(12).fontColor(AppTheme.TEXT_SUB)
               .width('100%').height('100%').textAlign(TextAlign.Center)
           }
-          Image(this.url)
-            // 共享转场临时改变外框尺寸时，内容必须跟随外框；固定vp会留下向左上角漂移的小图。
-            .width('100%')
-            .height('100%')
-            .objectFit(this.imageFit(this.frame()))
-            .objectRepeat(ImageRepeat.NoRepeat)
-            .opacity(this.loaded ? 1 : 0)
-            .onComplete(this.completeHandler(this.url))
-            .onError(this.errorHandler(this.url))
+          if (this.resolvedSource().length > 0) {
+            ForEach([this.resolvedSource()], (src: string) => {
+              Image(src)
+                // 共享转场临时改变外框尺寸时，内容必须跟随外框；固定vp会留下向左上角漂移的小图。
+                .width('100%')
+                .height('100%')
+                .objectFit(this.imageFit(this.frame()))
+                .objectRepeat(ImageRepeat.NoRepeat)
+                .opacity(this.loaded ? 1 : 0)
+                .onComplete(this.completeHandler(this.url))
+                .onError(this.errorHandler(this.url))
+            }, (src: string) => src)
+          }
         }
         if (this.frame().long) {
           Text('长图').fontSize(11).fontColor(Color.White)
@@ -209,12 +229,13 @@ struct ThreadPreviewImage {
       .height(this.frame().height)
       .backgroundColor(this.loaded ? Color.Transparent : AppTheme.SURFACE_MUTED)
       .borderRadius(PREVIEW_RADIUS).clip(true)
-      .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(this.url) : '', { follow: true })
+      .geometryTransition(this.sharedBindingEnabled && this.resolvedSource().length > 0
+        ? this.imageTransition.id(this.resolvedSource()) : '', { follow: true })
       .renderFit(RenderFit.RESIZE_FILL)
       .onClick(() => {
-        this.imageTransition.open(this.getUIContext(), this.url,
+        this.imageTransition.open(this.getUIContext(), this.resolvedSource(),
           this.originUrl(), (): void => { this.onOpen(); }, 0,
-          !this.flow.enabled && this.loaded, undefined, undefined, undefined,
+          !this.isOff() && this.loaded, undefined, undefined, undefined,
           this.transitionGallery, this.index);
       })
     }.width(this.frame().width).height(this.frame().height)
@@ -227,7 +248,6 @@ struct ThreadPreviewImage {
   }
 }
 
-/** 仅新版使用独立渲染器，旧版尺寸、横向滚动与回调保持原样。 */
 /** 首页方阵瓦片：等大方格 + 共享转场；评论多图也复用这套，见 ThreadDetail。 */
 @ComponentV2
 export struct ModernThreadPreviewImage {
@@ -237,6 +257,8 @@ export struct ModernThreadPreviewImage {
   });
   @Require @Param url: string;
   @Param origin: string = '';
+  /** 正文/评论多图方阵传入完整图片源，使多档位与动图策略同样生效。 */
+  @Param bodyImage: ContentImage | undefined = undefined;
   @Param index: number = 0;
   @Param transitionGallery: ImageTransitionGallery | undefined = undefined;
   @Param total: number = 1;
@@ -247,7 +269,8 @@ export struct ModernThreadPreviewImage {
   /** 全部图片已经铺开时不必再用「共 N 张」收口（正文方格全量模式） */
   @Param showTotalLabel: boolean = true;
   @Event onOpen: () => void = (): void => {};
-  @Local flow: LowFlowStore = lowFlowStore;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
+  @Local private policy: ImageLoadPolicy = imageLoadStore.currentPolicy();
   @Local loaded: boolean = false;
   @Local failed: boolean = false;
   @Local actual: FeedImageInfo = new FeedImageInfo();
@@ -261,8 +284,18 @@ export struct ModernThreadPreviewImage {
 
   aboutToAppear(): void {
     this.alive = true;
+    this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.registerReturnSource();
+  }
+
+  private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private resolvedSource(): string {
+    if (this.bodyImage !== undefined) {
+      return bodyImageSource(this.bodyImage, false, this.policy);
+    }
+    return feedPreviewSource(feedImageInfo(this.url), this.url, this.policy);
   }
 
   aboutToDisappear(): void {
@@ -281,8 +314,9 @@ export struct ModernThreadPreviewImage {
     this.failed = false;
   }
 
-  @Monitor('url')
+  @Monitor('url', 'bodyImage')
   onUrlChanged(): void {
+    this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.actual = new FeedImageInfo();
     this.registerReturnSource();
@@ -300,7 +334,10 @@ export struct ModernThreadPreviewImage {
     this.registerReturnSource();
   }
 
-  private originUrl(): string { return this.origin || feedImageInfo(this.url).origin || this.url; }
+  private originUrl(): string {
+    return this.origin || (this.bodyImage !== undefined ? bodyTransitionKey(this.bodyImage) : '') ||
+      feedImageInfo(this.url).origin || this.url;
+  }
 
   private registerReturnSource(): void {
     this.unregisterReturn();
@@ -314,7 +351,7 @@ export struct ModernThreadPreviewImage {
   }
 
   private prepareReturnTarget(url: string, origin: string, index: number): ImageTransitionTarget | undefined {
-    if (!this.alive || !this.visible || this.flow.enabled || !this.loaded || url !== this.url ||
+    if (!this.alive || !this.visible || this.isOff() || !this.loaded || url !== this.url ||
       origin !== this.originUrl() || index !== this.index || !this.imageTransition.canOpenShared()) { return undefined; }
     const crop: ImageTransitionCrop | undefined = this.usesCropTransition()
       ? imageTransitionCrop(this.drawing()) : undefined;
@@ -324,7 +361,7 @@ export struct ModernThreadPreviewImage {
     const token: number = ++this.transitionEpoch;
     this.sharedExpanded = false;
     this.sharedCrop = crop;
-    return new ImageTransitionTarget(this.imageTransition, url, origin, index, crop,
+    return new ImageTransitionTarget(this.imageTransition, this.resolvedSource(), origin, index, crop,
       (expanded: boolean): void => {
         if (token !== this.transitionEpoch || index !== this.index || !this.acceptsRequest(url, request)) { return; }
         this.sharedExpanded = expanded;
@@ -335,14 +372,21 @@ export struct ModernThreadPreviewImage {
       });
   }
 
-  @Monitor('flow.enabled')
-  onLowFlowChanged(): void {
-    // 移除/重建 Image 都使旧请求失效；保留已知尺寸，不保留旧请求的成功或失败态。
-    this.invalidateRequest();
+  @Monitor('imageLoad.revision')
+  onPolicyChanged(): void {
+    const prevOff: boolean = this.isOff();
+    const prevSource: string = this.resolvedSource();
+    this.policy = this.imageLoad.currentPolicy();
+    const nextOff: boolean = this.isOff();
+    const nextSource: string = this.resolvedSource();
+    if (prevOff !== nextOff || prevSource !== nextSource) {
+      this.invalidateRequest();
+      this.registerReturnSource();
+    }
   }
 
   private acceptsRequest(url: string, epoch: number): boolean {
-    return this.alive && !this.flow.enabled && url.length > 0 && url === this.url && epoch === this.requestEpoch;
+    return this.alive && !this.isOff() && url.length > 0 && url === this.url && epoch === this.requestEpoch;
   }
 
   private afterRender(url: string, epoch: number, apply: () => void): void {
@@ -408,16 +452,17 @@ export struct ModernThreadPreviewImage {
   }
 
   private openImage(): void {
-    const ready: boolean = !this.flow.enabled && this.loaded;
+    const ready: boolean = !this.isOff() && this.loaded;
     const crop: ImageTransitionCrop | undefined = ready && this.usesCropTransition()
       ? imageTransitionCrop(this.drawing()) : undefined;
     const url: string = this.url;
+    const preview: string = this.resolvedSource();
     const index: number = this.index;
     const request: number = this.requestEpoch;
     const token: number = ++this.transitionEpoch;
     this.sharedExpanded = false;
     this.sharedCrop = crop !== undefined && crop.usable ? crop : undefined;
-    this.imageTransition.open(this.getUIContext(), url,
+    this.imageTransition.open(this.getUIContext(), preview,
       this.originUrl(), (): void => { this.onOpen(); }, index, ready, crop,
       (expanded: boolean): void => {
         if (token !== this.transitionEpoch || index !== this.index || !this.acceptsRequest(url, request)) { return; }
@@ -436,9 +481,13 @@ export struct ModernThreadPreviewImage {
   private decodeSize(): ImageSourceSize | undefined {
     const pixels: ReadingDecodeSize | undefined = modernFeedDecodeSize(this.info(), this.frame(), this.density);
     if (pixels === undefined) { return undefined; }
+    const scale: number = this.policy.quality === ImageQuality.THUMB ? 0.5 : 1;
     const ui: UIContext = this.getUIContext();
     // ImageSourceSize 的数值单位为 vp；模型的源尺寸和解码预算统一使用 px。
-    return { width: ui.px2vp(pixels.width), height: ui.px2vp(pixels.height) };
+    return {
+      width: ui.px2vp(Math.max(1, Math.round(pixels.width * scale))),
+      height: ui.px2vp(Math.max(1, Math.round(pixels.height * scale)))
+    };
   }
 
   private completeHandler(url: string, epoch: number): (event?: PreviewImageComplete) => void {
@@ -484,8 +533,8 @@ export struct ModernThreadPreviewImage {
   build() {
     Column() {
       Stack({ alignContent: Alignment.TopStart }) {
-        if (this.flow.enabled) {
-          Text('低流量模式 · 点按查看')
+        if (this.isOff()) {
+          Text('点按查看图片')
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
             .width('100%').height('100%').textAlign(TextAlign.Center)
         } else {
@@ -494,17 +543,21 @@ export struct ModernThreadPreviewImage {
               .fontSize(12).fontColor(AppTheme.TEXT_SUB)
               .width('100%').height('100%').textAlign(TextAlign.Center)
           }
-          Image(this.url)
-            .width('100%').height('100%')
-            .objectFit(ImageFit.Contain).objectRepeat(ImageRepeat.NoRepeat)
-            .autoResize(true)
-            .sourceSize(this.decodeSize())
-            .scale(this.imageScale())
-            .translate(this.imageTranslation())
-            .hitTestBehavior(HitTestMode.None)
-            .opacity(this.loaded ? 1 : 0)
-            .onComplete(this.completeHandler(this.url, this.requestEpoch))
-            .onError(this.errorHandler(this.url, this.requestEpoch))
+          if (this.resolvedSource().length > 0) {
+            ForEach([this.resolvedSource()], (src: string) => {
+              Image(src)
+                .width('100%').height('100%')
+                .objectFit(ImageFit.Contain).objectRepeat(ImageRepeat.NoRepeat)
+                .autoResize(true)
+                .sourceSize(this.decodeSize())
+                .scale(this.imageScale())
+                .translate(this.imageTranslation())
+                .hitTestBehavior(HitTestMode.None)
+                .opacity(this.loaded ? 1 : 0)
+                .onComplete(this.completeHandler(this.url, this.requestEpoch))
+                .onError(this.errorHandler(this.url, this.requestEpoch))
+            }, (src: string) => src)
+          }
         }
         // 极长单图完整缩小后可能很窄，角标放不下时省略，避免被裁成半个字。
         if (this.frame().long && (this.total > 1 || this.frame().width >= 56)) {
@@ -523,7 +576,8 @@ export struct ModernThreadPreviewImage {
       // 已加载的共享节点保持透明，避免占位底随转场放大到查看器留白。
       .backgroundColor(this.loaded ? Color.Transparent : AppTheme.SURFACE_MUTED)
       .borderRadius(PREVIEW_RADIUS).clip(true)
-      .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(this.url, this.index) : '', { follow: true })
+      .geometryTransition(this.sharedBindingEnabled && this.resolvedSource().length > 0
+        ? this.imageTransition.id(this.resolvedSource(), this.index) : '', { follow: true })
       .renderFit(RenderFit.RESIZE_FILL)
       .accessibilityText(`${this.frame().long ? '长图，' : ''}第 ${this.index + 1} 张图片，共 ${this.total} 张`)
       .onClick(() => { this.openImage(); })
@@ -544,8 +598,7 @@ export struct ThreadPreviewImages {
   @Event onOpenImage: (index: number) => void = (_index: number): void => {};
   @Local contentWidth: number = 300;
   /**
-   * 每张图容器的**实测高度**（vp），由子组件回报 —— 多图整行高度取其中的最大值
-   * （`previewRowHeight`）。空数组 = 一张都还没量到，用占位行高。
+   * 每张图容器的实测高度（vp），由子组件回报 —— 多图整行高度取其中的最大值。空数组 = 一张都还没量到，用占位行高。
    */
   @Local boxHeights: number[] = [];
   private density: number = 1;
@@ -568,8 +621,7 @@ export struct ThreadPreviewImages {
   }
 
   /**
-   * 子组件回报容器高度。**只在真的变了才写状态**（半 vp 容差）——
-   * 否则每次布局都触发一轮父组件重绘。
+   * 子组件回报容器高度。只在真的变了才写状态（半 vp 容差），否则每次布局都触发一轮父组件重绘。
    */
   private reportBoxHeight(index: number, height: number): void {
     if (index < 0 || index >= this.images.length) { return; }

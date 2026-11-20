@@ -26,7 +26,7 @@ export class AvatarEditVM {
   @Trace received: boolean = false;
   /** 服务端明确成功（`code=0`）。与 `received`/`pendingReview` 分开，不互相代替。 */
   @Trace accepted: boolean = false;
-  /** 服务端"已上传、审核中"（实测 `error_code=300003`）。 */
+  /** 服务端“已上传、审核中”（`error_code=300003`）。 */
   @Trace pendingReview: boolean = false;
   /** 已读到本人资料（不代表头像记录一定变化）。 */
   @Trace profileRead: boolean = false;
@@ -60,10 +60,7 @@ export class AvatarEditVM {
   private handoffContext: common.UIAbilityContext | undefined = undefined;
   private handoffSession: TiebaSession | undefined = undefined;
   private handoffTraceId: number = 0;
-  /**
-   * 显式停止的代次。`confirmUpload` 记下进入时的值，
-   * 迟到响应只有在该值未变（期间没有用户显式停止）时才允许交接。
-   */
+  /** 显式停止的代次。`confirmUpload` 记下进入时的值；迟到响应只有在该值未变时才允许交接。 */
   private stopGeneration: number = 0;
   private sameAccount(): boolean {
     const live: TiebaSession = authSession.session();
@@ -74,9 +71,8 @@ export class AvatarEditVM {
   /** 本次调用仍然是"当前这一次操作"（epoch 与本地操作代次都未变）。 */
   private opCurrent(mine: number, op: number): boolean { return this.current(mine) && op === this.operation; }
   /**
-   * 回收阶段标志用：只看"还是不是本站当前这次操作"，**不看账号是否已变**。
-   * 换号会让 `opCurrent` 为假，但那时仍必须把 submitting/syncing/busy 收回，
-   * 否则界面会永远停在"正在提交"。
+   * 回收阶段标志用：只看“还是不是本站当前这次操作”，**不看账号是否已变**。换号会让 `opCurrent`
+   * 为假，但那时仍必须把 submitting/syncing/busy 收回，否则界面会永远停在“正在提交”。
    */
   private ownsCall(mine: number, op: number): boolean {
     return !this.disposed && mine === this.epoch && op === this.operation;
@@ -108,8 +104,8 @@ export class AvatarEditVM {
   sourceWidthPx(): number { return this.sourceWidth; }
   sourceHeightPx(): number { return this.sourceHeight; }
   /**
-   * 裁剪页点「完成」后用它换出最终 JPEG：入参是同一张原图与用户确认的裁剪区域。
-   * 取消选图（`ready` 仍为 false）不发任何请求；准备阶段的失败照常落进 `error`，由界面如实显示。
+   * 裁剪页点「完成」后用它换出最终 JPEG：入参是同一张原图与用户确认的裁剪区域。取消选图（`ready`
+   * 仍为 false）不发任何请求；准备阶段的失败照常落进 `error`，由界面如实显示。
    */
   async prepare(uri: string, crop: AvatarCrop): Promise<void> { await this.prepareSelection(uri, crop); }
   private async prepareSelection(uri?: string, crop?: AvatarCrop): Promise<void> {
@@ -139,9 +135,8 @@ export class AvatarEditVM {
   }
   /**
    * 仅显式确认后发送一次；传输开始便消耗准备内容，未知结果不可再次点击重发。
-   *
-   * 服务端**接收**（含审核中）后立即结束"提交中"，转为"正在同步资料"；
-   * 但接收不等于生效：候选图只留在编辑流程里，全局头像要等读回的服务端资料。
+   * 服务端**接收**（含审核中）后立即结束“提交中”，转为“正在同步资料”；但接收不等于生效：
+   * 候选图只留在编辑流程里，全局头像要等读回的服务端资料。
    */
   async confirmUpload(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.busy || this.preparing) { return; }
@@ -166,7 +161,7 @@ export class AvatarEditVM {
       avatarTracePhase('device-ready', traceId, startedMs, '');
       this.input = undefined; this.ready = false; this.uri = ""; this.sourceWidth = 0; this.sourceHeight = 0;
       const response = await this.api.uploadAvatar(device, session, input, traceId);
-      // 服务端"已接收"含审核中（实测 300003）；它只表示接收，不代表头像已生效。
+      // 服务端“已接收”含审核中（300003）；它只表示接收，不代表头像已生效。
       const receivedUpload: boolean = response.ok && response.data.received();
       if (!this.opCurrent(mine, op)) {
         // 页面已离开或本次操作被取代：已接收的上传仍要读回，交给共享刷新队列。
@@ -217,8 +212,8 @@ export class AvatarEditVM {
     finally { if (this.ownsCall(mine, op)) { this.setPhase(false, false); this.accountFailure(); } }
   }
   /**
-   * 读回**服务端**当前资料。发布它的是 `acceptAvatarProfile`（本机候选图不参与），
-   * 因此"我的"与本人主页显示的是服务端当前生效的头像。
+   * 读回**服务端**当前资料。发布它的是 `acceptAvatarProfile`（本机候选图不参与），因此“我的”
+   * 与本人主页显示的是服务端当前生效的头像。
    */
   private async readProfile(context: common.UIAbilityContext, session: TiebaSession, mine: number,
     op: number, syncOp: number, traceId: number): Promise<void> {
@@ -248,9 +243,7 @@ export class AvatarEditVM {
     avatarTracePhase('readback-done', traceId, baseStart,
       `changed=${this.portraitChanged} received=${this.received} pending=${this.pendingReview}`);
   }
-  /**
-   * 读回后的中性说明：不报失败、不假装成功、不推断审核结果、不把变化归给本次候选图。
-   */
+  /** 读回后的中性说明：不报失败、不假装成功、不推断审核结果、不把变化归给本次候选图。 */
   private readbackNote(): string {
     if (this.portraitChanged) {
       return '当前资料已显示头像记录变化（不区分是否本次所选图片）。';
@@ -263,12 +256,9 @@ export class AvatarEditVM {
       : '服务端已接收本次上传：当前资料尚未显示头像记录变化。';
   }
   /**
-   * 离开页面/被取代后仍需要同步时，把任务交给共享刷新队列。
-   *
-   * 入参是**发起调用时捕获的不可变快照**：不得使用新操作的 context / session / traceId。
-   * 归属与清理：任务由 `AuthSession.profileRefreshing` 持有，异常在队列内吞掉，
-   * 结果按 `profileVersion`/会话比对丢弃，换号、退出或新会话都会作废它。
-   * 用户显式停止过（stopGeneration 已变）时直接放弃，不启动任何请求。
+   * 离开页面/被取代后仍需要同步时，把任务交给共享刷新队列。入参是**发起调用时捕获的不可变快照**：
+   * 不得使用新操作的 context / session / traceId。任务由 `AuthSession.profileRefreshing` 持有，
+   * 异常在队列内吞掉，结果按 `profileVersion`/会话比对丢弃。用户显式停止过时直接放弃。
    */
   private handOffSync(context: common.UIAbilityContext, session: TiebaSession, traceId: number,
     stopGeneration: number, reason: string): void {

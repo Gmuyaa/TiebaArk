@@ -6,13 +6,13 @@ import { ContentImage, galleryAspectRatio } from '../model/ThreadDetail';
 import {
   BODY_RADIUS, FeedImageBox, FeedImageInfo, bodySingleImageBox, feedImageInfo, rememberMeasuredImage
 } from '../model/HomeFeedPresentation';
-import { LowFlowStore, lowFlowStore } from '../common/appearance/LowFlowStore';
+import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey } from '../model/ImageLoadPolicy';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
 
 /** 详情页内容区左右各留 16vp */
 const PAGE_SIDE_PADDING: number = 32;
 
-/** 图集内两张图之间的间距（vp） */
 const PAGE_GAP: number = 8;
 
 /** 单张图的加载态；0 也用于"这张图还没轮到加载" */
@@ -28,11 +28,8 @@ interface GalleryImageComplete {
 }
 
 /**
- * 首帧的图集宽度估计（vp）：屏宽 - 页面左右留白。
- *
- * 为什么需要它：`@Local boxWidth` 要靠 `onAreaChange` 才能拿到实测宽度，
- * 而 `List` 回收复用会让组件重建、宽度回到初始值——若初值是随便给的常数，
- * 每次滚过图集都要"先塌后撑"跳一下。用屏宽推算后首帧就落在正确值上。
+ * 首帧的图集宽度估计（vp）：屏宽 − 页面左右留白。`boxWidth` 要靠 `onAreaChange` 才拿到实测宽度，
+ * 而 `List` 回收复用会让组件重建、宽度回到初值 —— 初值给常数的话每次滚过图集都要"先塌后撑"跳一下。
  */
 function estimateGalleryWidth(): number {
   try {
@@ -57,7 +54,8 @@ export struct PostImageGallery {
   private visiblePages: Set<number> = new Set<number>();
   private unregisterReturns: (() => void)[] = [];
   private requestEpoch: number = 0;
-  @Local flow: LowFlowStore = lowFlowStore;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
+  @Local private policy: ImageLoadPolicy = imageLoadStore.currentPolicy();
   /** 本图集的图片，至少 1 张 */
   @Require @Param images: ContentImage[];
   /** 本图集第一张图在整篇内容图片序列里的下标，用来换算全屏查看器的初始页 */
@@ -67,9 +65,8 @@ export struct PostImageGallery {
   /** 懒加载组件重建时恢复的图集页码，仅初次布局使用。 */
   @Param initialPage: number = 0;
   /**
-   * 调用方已知的可用宽度（vp）。>0 时用它作为首帧宽度，不再按屏宽估算——
-   * 评论正文左侧有头像列，按屏宽算会宽出 48vp，首帧撑高、`onAreaChange`
-   * 修正后塌回去，列表就"跳一下"。0 = 调用方不知道，沿用估算。
+   * 调用方已知的可用宽度（vp）。>0 时用它作首帧宽度：评论正文左侧有头像列，按屏宽算会宽出 48vp，
+   * 首帧撑高、`onAreaChange` 修正后塌回去，列表就"跳一下"。0 = 调用方不知道，沿用估算。
    */
   @Param widthHint: number = 0;
   @Event onPageChange: (page: number) => void = (): void => {};
@@ -79,16 +76,12 @@ export struct PostImageGallery {
   /** 当前显示页；父页面仅保存离屏重建所需的页码，不参与逐帧滚动。 */
   @Local page: number = 0;
   /**
-   * 本图集实测宽度（vp）。宽度来自 `onAreaChange`，用来把高度算成 `宽 ÷ 比例`。
-   *
-   * 不用 `.width('100%') + 平台自适应` 的原因：在这条容器链路（`List` item →
-   * `Column` → 图集）里，"父宽定子高"的推导不可靠，显式算出来才可控。
-   * 初值用屏宽推算，避免 `List` 回收复用重建时先塌后撑跳一下。
+   * 本图集实测宽度（vp），用来把高度算成 `宽 ÷ 比例`。不用 `.width('100%') + 平台自适应`：
+   * 在这条容器链路（`List` item → `Column` → 图集）里"父宽定子高"不可靠，显式算才可控。初值用屏宽推算。
    */
   @Local boxWidth: number = estimateGalleryWidth();
   /**
-   * 单图本次加载确认到的实际尺寸（px）。**只给单图用**，理由见文件头：
-   * 多图若把实测值并进组平均比例，翻页时高度会跟着变。
+   * 单图本次加载确认到的实际尺寸（px）。只给单图用：多图若把实测值并进组平均比例，翻页时高度会跟着变。
    */
   @Local actual: FeedImageInfo = new FeedImageInfo();
   /** 与 `actual` 配对的 URL；对不上说明这张图已经换了，尺寸作废（列表项复用防护） */
@@ -103,6 +96,7 @@ export struct PostImageGallery {
 
   aboutToAppear(): void {
     this.alive = true;
+    this.policy = this.imageLoad.currentPolicy();
     // 调用方给的宽度比按屏宽估算更准，先落位，避免首帧"先撑高再塌回"
     if (this.widthHint > 0) { this.boxWidth = this.widthHint; }
     this.invalidateRequest();
@@ -115,6 +109,8 @@ export struct PostImageGallery {
     }
     this.registerReturnSources();
   }
+
+  private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
 
   aboutToDisappear(): void {
     this.clearReturnSources();
@@ -131,8 +127,28 @@ export struct PostImageGallery {
     this.imageTransition.invalidate();
   }
 
-  @Monitor('flow.enabled')
-  onLowFlowChanged(): void { this.invalidateRequest(); }
+  @Monitor('imageLoad.revision')
+  onPolicyChanged(): void {
+    const prevOff: boolean = this.isOff();
+    const prevUrls: string[] = [];
+    for (let i: number = 0; i < this.images.length; i++) {
+      prevUrls.push(this.urlOf(i));
+    }
+    this.policy = this.imageLoad.currentPolicy();
+    let changed: boolean = prevOff !== this.isOff();
+    if (!changed) {
+      for (let i: number = 0; i < this.images.length; i++) {
+        if (prevUrls[i] !== this.urlOf(i)) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) {
+      this.invalidateRequest();
+      this.registerReturnSources();
+    }
+  }
 
   private currentTransitionIdentity(): string {
     const urls: string[] = [];
@@ -167,11 +183,11 @@ export struct PostImageGallery {
     for (let index: number = 0; index < this.images.length; index++) {
       const viewerIndex: number = this.viewerIndices[index] ?? -1;
       if (viewerIndex < 0) { continue; }
-      const preview: string = this.images[index].imageUrl;
-      const origin: string = this.images[index].originImageUrl || preview;
+      const preview: string = this.urlOf(index);
+      const origin: string = bodyTransitionKey(this.images[index]);
       this.unregisterReturns.push(this.transitionGallery.register(viewerIndex, origin,
         (): ImageTransitionTarget | undefined => {
-          if (!this.alive || !this.visible || this.flow.enabled ||
+          if (!this.alive || !this.visible || this.isOff() ||
             identity !== this.currentTransitionIdentity() || this.stateOf(index) !== IMAGE_LOADED ||
             (this.images.length > 1 && !this.visiblePages.has(index)) || !this.imageTransition.canOpenShared()) {
             return undefined;
@@ -191,7 +207,7 @@ export struct PostImageGallery {
   }
 
   private urlOf(index: number): string {
-    return index >= 0 && index < this.images.length ? this.images[index].imageUrl : '';
+    return index >= 0 && index < this.images.length ? bodyImageSource(this.images[index], false, this.policy) : '';
   }
 
   private stateOf(index: number): number {
@@ -216,10 +232,8 @@ export struct PostImageGallery {
   }
 
   /**
-   * 单图的尺寸真值：已确认的实际尺寸 > 服务端声明尺寸 > 空。
-   *
-   * 实际尺寸优先是刻意的：**屏幕上画的就是实际加载到的那份资源**，服务端声明
-   * （`ContentImage.width/height`）描述的是原图，两者比例不一致时按声明值排版会留白。
+   * 单图的尺寸真值：已确认的实际尺寸 > 服务端声明尺寸 > 空。实际尺寸优先是刻意的 ——
+   * 屏幕上画的就是实际加载到的那份资源，服务端 `ContentImage.width/height` 描述的是原图，比例不一致时按声明排版会留白。
    */
   private sourceInfo(): FeedImageInfo {
     if (this.images.length === 0) { return new FeedImageInfo(); }
@@ -242,12 +256,9 @@ export struct PostImageGallery {
   }
 
   /**
-   * 容器高度（vp）。单图 = 贴合图片的容器高度；多图 = 实测宽 ÷ 组内平均比例。
-   *
-   * 多图直接用即可，**不需要任何"上方内容高度"补偿**：早先那套补偿是 `Swiper` 时代的
-   * 误判（当时确实量到"下发 379vp 只剩 140vp"），换成横向 `List` 后实测
-   * 下发给 `.height()` 多少就渲染多少（下发 379vp → 像素实测 1327px = 379.1vp），
-   * 补偿量一旦加上反而把图集撑高、把内容顶到屏幕外。
+   * 容器高度（vp）：单图 = 贴合图片的容器高度，多图 = 实测宽 ÷ 组内平均比例。
+   * 多图不需要任何"上方内容高度"补偿 —— 那套补偿是 `Swiper` 时代的误判，换成横向 `List` 后下发多少就渲染多少，
+   * 加上反而把图集撑高、把内容顶到屏幕外。
    */
   private issuedHeight(): number {
     if (this.images.length === 1) { return this.frame().height; }
@@ -255,13 +266,12 @@ export struct PostImageGallery {
   }
 
   /**
-   * 绑定这次加载的回调：只有**发起加载时的那条 URL 仍是那张图**时才生效 ——
-   * 列表项复用后旧图的迟到回调不能把尺寸/成功态写到新图上。
+   * 绑定这次加载的回调：只有发起加载时那条 URL 仍是那张图时才生效 —— 列表项复用后旧图的迟到回调不能写到新图上。
    */
   private completeHandler(index: number, url: string): (event?: GalleryImageComplete) => void {
     const request: number = this.requestEpoch;
     return (event?: GalleryImageComplete): void => {
-      if (!this.alive || this.flow.enabled || request !== this.requestEpoch ||
+      if (!this.alive || this.isOff() || request !== this.requestEpoch ||
         url.length === 0 || url !== this.urlOf(index)) { return; }
       if (event === undefined || event.loadingStatus !== 1) { return; }
       if (!(event.width > 0) || !(event.height > 0)) { return; }
@@ -284,7 +294,7 @@ export struct PostImageGallery {
   private errorHandler(index: number, url: string): () => void {
     const request: number = this.requestEpoch;
     return (): void => {
-      if (!this.alive || this.flow.enabled || request !== this.requestEpoch || url !== this.urlOf(index)) { return; }
+      if (!this.alive || this.isOff() || request !== this.requestEpoch || url !== this.urlOf(index)) { return; }
       this.markState(index, IMAGE_FAILED);
     };
   }
@@ -296,10 +306,8 @@ export struct PostImageGallery {
   @Builder
   SingleImage(img: ContentImage) {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.flow.enabled) {
-        // 低流量模式：**不渲染 `Image`** —— 不发起任何图片请求，只占位。
-        // 占位仍可点，点开查看器照常加载原图。
-        Text('低流量模式 · 点按查看')
+      if (this.isOff()) {
+        Text('点按查看图片')
           .fontSize(12).fontColor(AppTheme.TEXT_SUB)
           .width('100%').height('100%').textAlign(TextAlign.Center)
       } else {
@@ -308,14 +316,18 @@ export struct PostImageGallery {
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
             .width('100%').height('100%').textAlign(TextAlign.Center)
         }
-        Image(img.imageUrl)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
-          .objectRepeat(ImageRepeat.NoRepeat)
-          .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
-          .onComplete(this.completeHandler(0, img.imageUrl))
-          .onError(this.errorHandler(0, img.imageUrl))
+        if (this.urlOf(0).length > 0) {
+          ForEach([this.urlOf(0)], (src: string) => {
+            Image(src)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Contain)
+              .objectRepeat(ImageRepeat.NoRepeat)
+              .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
+              .onComplete(this.completeHandler(0, src))
+              .onError(this.errorHandler(0, src))
+          }, (src: string) => src)
+        }
       }
     }
     // 外框与内部图片取同一份布局结果：图片多高，容器就多高，不留失效的占位高度
@@ -324,46 +336,50 @@ export struct PostImageGallery {
     .backgroundColor(this.stateOf(0) === IMAGE_LOADED ? Color.Transparent : AppTheme.SURFACE_MUTED)
     .borderRadius(BODY_RADIUS)
     .clip(true)
-    .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(img.imageUrl) : '', { follow: true })
+    .geometryTransition(this.sharedBindingEnabled && this.urlOf(0).length > 0
+      ? this.imageTransition.id(this.urlOf(0)) : '', { follow: true })
     .renderFit(RenderFit.RESIZE_FILL)
     .onClick(() => {
-      this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
+      this.imageTransition.open(this.getUIContext(), this.urlOf(0), bodyTransitionKey(img),
         (): void => { this.onOpenImage(this.startIndex); }, 0,
-        !this.flow.enabled && this.stateOf(0) === IMAGE_LOADED, undefined, undefined, undefined,
+        !this.isOff() && this.stateOf(0) === IMAGE_LOADED, undefined, undefined, undefined,
         this.transitionGallery, this.viewerIndices[0] ?? -1);
     })
   }
 
   /**
-   * 图集里的一页：一屏一张，宽度取实测内容宽，高度由 `aspectRatio(组比例)` 自己撑开。
-   * 图集高度为保证翻页稳定而按整组平均比例固定。单张比例不同时保持 `Contain`，
-   * 不能为填满容器裁掉正文图片；底层用同图 `Cover` + 模糊延展，视觉上没有黑/灰留边。
+   * 图集里的一页：一屏一张，宽度取实测内容宽，高度由 `aspectRatio(组比例)` 自己撑开；单张比例不同时保持 `Contain`，
+   * 不能为填满容器裁掉正文图片（底层用同图 `Cover` + 模糊延展补边）。
    *
-   * **必须 `flexShrink(0)`**：缩放祖先里有 `List`/`Row` 时子项会被压缩，
-   * 实测（`Scroll + Row` 版）每页被挤到 539 / 637px 且 `aspectRatio` 一起被破坏，
-   * 一屏并排露出两张图。加上它每页才稳定是 `344×379vp`。
+   * 必须 `flexShrink(0)`：缩放祖先里有 `List`/`Row` 时子项会被压缩，`aspectRatio` 一起失效、一屏露出两张图。
    */
   @Builder
   GalleryPage(img: ContentImage, index: number) {
     Stack() {
-      if (this.flow.enabled) {
-        Text('低流量模式 · 点按查看')
+      if (this.isOff()) {
+        Text('点按查看图片')
           .fontSize(12).fontColor(AppTheme.TEXT_SUB)
           .width('100%').height('100%').textAlign(TextAlign.Center)
       } else {
-        // 只是补满比例差的背景，不影响前景原图的完整展示。
-        Image(img.imageUrl)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-          .blur(24)
-          .opacity(0.72)
-        Image(img.imageUrl)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
-          .onComplete(this.completeHandler(index, img.imageUrl))
-          .onError(this.errorHandler(index, img.imageUrl))
+        if (this.urlOf(index).length > 0) {
+          ForEach([this.urlOf(index)], (src: string) => {
+            Stack() {
+              // 只是补满比例差的背景，不影响前景原图的完整展示。
+              Image(src)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+                .blur(24)
+                .opacity(0.72)
+              Image(src)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Contain)
+                .onComplete(this.completeHandler(index, src))
+                .onError(this.errorHandler(index, src))
+            }.width('100%').height('100%')
+          }, (src: string) => src)
+        }
         if (this.stateOf(index) === IMAGE_FAILED) {
           Text('图片加载失败')
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
@@ -373,17 +389,18 @@ export struct PostImageGallery {
     }
       .width(this.boxWidth)
       .aspectRatio(galleryAspectRatio(this.images))
-      // 加载完成前铺一层底色，免得图集位置是一块透明洞；加载后透明，观感与改动前一致
+      // 加载完成前铺一层底色，免得图集位置是透明洞；加载后转透明。
       .backgroundColor(this.stateOf(index) === IMAGE_LOADED ? Color.Transparent : AppTheme.SURFACE_MUTED)
       .borderRadius(BODY_RADIUS)
       .clip(true)
       .flexShrink(0)
-      .geometryTransition(this.sharedBindingEnabled ? this.imageTransition.id(img.imageUrl, index) : '', { follow: true })
+      .geometryTransition(this.sharedBindingEnabled && this.urlOf(index).length > 0
+        ? this.imageTransition.id(this.urlOf(index), index) : '', { follow: true })
       .renderFit(RenderFit.RESIZE_FILL)
       .onClick(() => {
-        this.imageTransition.open(this.getUIContext(), img.imageUrl, img.originImageUrl || img.imageUrl,
+        this.imageTransition.open(this.getUIContext(), this.urlOf(index), bodyTransitionKey(img),
           (): void => { this.onOpenImage(this.startIndex + index); }, index,
-          !this.flow.enabled && this.stateOf(index) === IMAGE_LOADED, undefined, undefined, undefined,
+          !this.isOff() && this.stateOf(index) === IMAGE_LOADED, undefined, undefined, undefined,
           this.transitionGallery, this.viewerIndices[index] ?? -1);
       })
   }
@@ -407,17 +424,10 @@ export struct PostImageGallery {
     Stack({ alignContent: this.images.length > 1 ? Alignment.BottomEnd : Alignment.TopStart }) {
       Column() {
         if (this.images.length > 1) {
-          // 横向 `List`（每页一个 `ListItem`），**不用 `Swiper`、也不用 `Scroll + Row`**。
-          //
-          // 为什么不用 `Swiper`：实测同一份内容放进 `Swiper` 后图集高度被压到 140vp
-          // （要求 379 / 600vp 都一样，两次都恰好少 239vp —— 同列上方文字的高度），
-          // 换成纯色块也照样被压，所以与图片无关，是 Swiper 那条测量链路的问题。
-          //
-          // 为什么不用 `Scroll + Row`：`Row` 会把超出容器的子项**压缩**——
-          // 实测每页被挤到 539 / 637px 且 `aspectRatio` 被破坏，一屏并排显示两张图。
-          // 加 `flexShrink(0)` 能修，但 `Scroll.onScroll(xOffset)` 在此结构下拿不到真实偏移
-          // （整段滑动过程中实测上限只有 2），页码无法同步。
-          // `List.onScrollIndex` 直接回传**首个可见项下标**，无单位换算、无歧义。
+          // 横向 `List`（每页一个 `ListItem`），不用 `Swiper` 也不用 `Scroll + Row`：
+          // Swiper 会把图集高度压掉一截且与图片内容无关；`Row` 会压缩超出容器的子项、破坏 `aspectRatio`，
+          // 加 `flexShrink(0)` 能修但 `Scroll.onScroll(xOffset)` 在该结构下拿不到真实偏移、页码无法同步。
+          // `List.onScrollIndex` 直接回传首个可见项下标，无单位换算、无歧义。
           List({ space: PAGE_GAP, initialIndex: this.boundedInitialPage() }) {
             ForEach(this.images, (img: ContentImage, index: number) => {
               ListItem() {

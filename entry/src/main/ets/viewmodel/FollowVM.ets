@@ -30,7 +30,6 @@ export class FollowVM {
   @Trace loading: boolean = false;
   /** 首次加载完成标记：true 之后切回关注频道不再显示整页加载态 */
   @Trace loadedOnce: boolean = false;
-  /** 首屏失败原因；为空串表示无错误 */
   @Trace errorText: string = '';
   /** 关注吧列表（isSigned 变化靠整体替换触发 @Trace） */
   @Trace forums: FollowForumItem[] = [];
@@ -119,9 +118,8 @@ export class FollowVM {
   }
 
   /**
-   * 加载关注吧列表。未登录直接跳过（界面走"去登录"分支）；
-   * 已登录但 tbs 缺失时先刷新一次 tbs（启动恢复路径可能没带 tbs）。
-   * context 由调用方（组件）传入——VM 不是组件，拿不到 UIContext。
+   * 加载关注吧列表。未登录直接跳过（界面走“去登录”分支）；已登录但 tbs 缺失时先刷新一次 tbs
+   * （启动恢复路径可能没带 tbs）。context 由调用方传入——VM 不是组件，拿不到 UIContext。
    */
   async load(context: common.UIAbilityContext, force: boolean = false): Promise<void> {
     if (this.disposed) { return; }
@@ -159,9 +157,8 @@ export class FollowVM {
   }
 
   /**
-   * 按身份状态校正列表里的签到标记（不发网络）。
-   * 用于吧页/吧资料签到成功后马上回到"进吧"列表看到一致结果；
-   * 只采纳今天的已知值，跨日旧值不沿用。
+   * 按身份状态校正列表里的签到标记（不发网络）。用于吧页/吧资料签到成功后马上回到“进吧”列表看到
+   * 一致结果；只采纳今天的已知值，跨日旧值不沿用。
    */
   syncFromStore(): void {
     if (this.disposed || this.readAccount !== signOwner()) { return; }
@@ -182,8 +179,8 @@ export class FollowVM {
   }
 
   /**
-   * 签到单个吧。**真实写操作**：成功后把该项标记为已签到（整体替换数组触发 @Trace），
-   * 并返回给界面的提示语（含奖励经验）。
+   * 签到单个吧。**真实写操作**：成功后把该项标记为已签到（整体替换数组触发 @Trace），并返回给
+   * 界面的提示语（含奖励经验）。
    */
   async signIn(context: common.UIAbilityContext, item: FollowForumItem): Promise<string> {
     if (this.disposed || this.signingAll) { return ''; }
@@ -210,7 +207,7 @@ export class FollowVM {
         return new SignAttempt(response.describeFailure());
       }
       // 成功（含"其实已签过"的 160002）：把该项标记为已签到——
-      // forumGuide 的 is_sign 实测可能是过期值，以签到端点的裁决为准
+      // forumGuide 的 is_sign 可能是过期值，以签到端点的裁决为准。
       confirmSign(item.fid, item.fname, response.stats);
       const updated: FollowForumItem[] = [];
       for (const f of this.forums) {
@@ -245,9 +242,8 @@ export class FollowVM {
   }
 
   /**
-   * 一键签到：顺序签掉所有未签的吧（**串行**发请求——写操作并发打服务端容易触发风控，
-   * 且每签一个就整体替换数组，界面逐个翻"已签到"，进度可见）。
-   * 返回汇总提示语给界面 toast。
+   * 一键签到：顺序签掉所有未签的吧（**串行**发请求——写操作并发容易触发风控，且每签一个就整体替换
+   * 数组，界面逐个翻“已签到”，进度可见）。返回汇总提示语给界面 toast。
    */
   async signInAll(context: common.UIAbilityContext): Promise<string> {
     if (this.disposed || this.signingAll || this.signingFname.length > 0) {

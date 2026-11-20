@@ -68,10 +68,9 @@ export class UserPageVM {
   }
 
   /**
-   * 首次取得身份沿用服务端地址；之后仅在身份变化或用户明确重试时推进展示版本。
-   *
-   * 普通刷新（进入/返回本页、切换页签、关注关系刷新）不再无条件改图片缓存键：
-   * 那会让每次进入个人主页都重新下载同一张头像。身份未识别时按"未知"处理，不推进。
+   * 首次取得身份沿用服务端地址；之后仅在身份变化或用户明确重试时推进展示版本。普通刷新（进入/返回
+   * 本页、切换页签、关注关系刷新）不再无条件改图片缓存键：那会让每次进入个人主页都重新下载同一张
+   * 头像。身份未识别时按“未知”处理，不推进。
    */
   private publishAvatarIdentity(portrait: string, force: boolean): void {
     const identity: string = avatarIdentity(portrait);
@@ -98,9 +97,9 @@ export class UserPageVM {
   }
 
   /**
-   * 「关注吧」头像补齐：缓存 / TTL / 并发 / 回写全部交给 `utils/ForumAvatarBackfill`，
-   * 这里只提供「按吧 ID 走目录接口取图」与「取到后替换行对象」。
-   * 失败保留文字回退、刷新可重试；换请求代次后不再上屏。
+   * 「关注吧」头像补齐：缓存 / TTL / 并发 / 回写全部交给 `utils/ForumAvatarBackfill`，这里只提供
+   * 「按吧 ID 走目录接口取图」与「取到后替换行对象」。失败保留文字回退、刷新可重试；换请求代次后
+   * 不再上屏。
    */
   private async loadForumAvatars(device: TiebaDevice, request: number): Promise<void> {
     const pending: ProfileForum[] = this.forums.filter((forum: ProfileForum): boolean =>
@@ -191,8 +190,7 @@ export class UserPageVM {
   }
 
   /**
-   * 「帖子栏」吧头像补齐：同一套共享编排；取到一张就发布一次
-   * （尾部慢请求不能拖住已经拿到的首屏头像）。
+   * 「帖子栏」吧头像补齐：同一套共享编排；取到一张就发布一次（尾部慢请求不能拖住已拿到的首屏头像）。
    */
   private async loadPostForumAvatars(device: TiebaDevice, request: number): Promise<void> {
     // 切回帖子栏时先展示当前 VM 已知的头像，不等其他吧的补图请求。

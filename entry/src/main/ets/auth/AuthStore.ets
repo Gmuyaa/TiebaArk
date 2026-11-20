@@ -1,17 +1,11 @@
 /**
- * 账号凭据的安全存储。
+ * 账号凭据的安全存储：保存凭据字节及已由服务端资料确认的稳定 UID（只用于定位账号快照）。
+ * 不认识贴吧协议，不做登录判断，也不持有登录态（那是 `AuthSession` 的事）。
  *
- * 保存凭据字节及已由服务端资料确认的稳定 UID；后者只用于定位账号快照。
- * 它不认识贴吧协议，不做登录判断，也不持有登录态（那是 `AuthSession` 的事）。
- *
- * 为什么用 Asset Store Kit（`@kit.AssetStoreKit`）而不是 `preferences`：
- * BDUSS 等价于账号密码，`DeviceIdentity` 用的 `preferences` 是明文，不适合放凭据。
- * asset 是系统级凭据存储，且**不需要额外声明权限**——
- * 只有 `Tag.IS_PERSISTENT`（要求 `ohos.permission.STORE_PERSISTENT_DATA`）才需要，
- * 本实现刻意不设它，因此 `module.json5` 保持只声明 INTERNET 不变。
- *
- * 错误处理沿用项目风格（见 `net/HttpClient.ets`）：**不抛异常**，失败返回结果对象。
- * 存储不可用不应让应用不可用——最坏情况是"本次运行有效，重启要重新登录"。
+ * 用 Asset Store Kit 而不是 `preferences`：BDUSS 等价于账号密码，`preferences` 是明文。asset 是
+ * 系统级凭据存储且**不需要额外声明权限**——只有 `Tag.IS_PERSISTENT` 要求 STORE_PERSISTENT_DATA，
+ * 本实现刻意不设它，`module.json5` 因此保持只声明 INTERNET。错误处理沿用 `net/HttpClient.ets`：
+ * **不抛异常**，失败返回结果对象，存储不可用不应让应用不可用。
  */
 
 import { asset } from '@kit.AssetStoreKit';
@@ -41,8 +35,7 @@ export class StoreResult {
 /** asset 的"不存在"错误码判据在 AuthModel（可被用例锁住） */
 
 /**
- * 从 catch 到的值里取业务错误码。
- * ArkTS 不允许随意断言联合类型，这里逐层判断后取值，取不到返回 0。
+ * 从 catch 到的值里取业务错误码。ArkTS 不允许随意断言联合类型，逐层判断后取值，取不到返回 0。
  */
 function errorCodeOf(err: Object): number {
   const maybe: BusinessError = err as BusinessError;
@@ -81,7 +74,6 @@ export class AuthStore {
     }
   }
 
-  /** 单条凭据的写入属性 */
   private static addMap(alias: string, secret: string): asset.AssetMap {
     const map: asset.AssetMap = new Map<asset.Tag, asset.Value>();
     map.set(asset.Tag.ALIAS, encodeUtf8(alias));
@@ -140,8 +132,7 @@ export class AuthStore {
   }
 
   /**
-   * 保存整份凭据。三个字段分别存：
-   * 空字段会被删除，因此"登录时没有 stoken"不会留下上一次的旧值。
+   * 保存整份凭据。三个字段分别存：空字段会被删除，因此“登录时没有 stoken”不会留下上一次的旧值。
    */
   static save(bundle: CredentialBundle, current: () => boolean = (): boolean => true): Promise<StoreResult> {
     const snapshot: CredentialBundle = new CredentialBundle();

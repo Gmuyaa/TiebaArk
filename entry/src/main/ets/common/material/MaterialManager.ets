@@ -24,7 +24,7 @@ type MaterialCache = Map<string, uiMaterial.ImmersiveMaterial>;
 
 @ObservedV2
 export class MaterialManager {
-  /** 用户偏好档位。默认 `SYSTEM`（需求：当前阶段先使用统一默认值） */
+  /** 用户偏好档位。默认 `SYSTEM`（当前阶段各用途统一用同一档） */
   @Trace mode: MaterialMode = DEFAULT_MODE;
   @Trace hdsLevel: HdsMaterialLevelPref = DEFAULT_HDS_LEVEL;
   @Trace saveError: string = '';
@@ -39,13 +39,9 @@ export class MaterialManager {
   private failedKeys: Set<string> = new Set<string>();
 
   /**
-   * 启动时读一次持久化偏好。
-   *
-   * 失败一律静默回落到 `SYSTEM`：材质偏好读不出来不该影响 App 启动
-   * （与 `SearchHistory` / `DeviceIdentity` 同一取舍）。
-   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛
-   * "context is invalid"，所以**调用方要传真实 UIAbilityContext**
-   * （`EntryAbility.onCreate` 的 `this.context`）。
+   * 启动时读一次持久化偏好。失败一律静默回落到 `SYSTEM`：材质偏好读不出来不该影响启动。
+   * ⚠️ ohosTest 进程里 `preferences.getPreferences(getAppContext())` 会抛 "context is invalid"，
+   * 调用方要传真实 UIAbilityContext（`EntryAbility.onCreate`）。
    */
   async load(context: common.UIAbilityContext): Promise<void> {
     if (this.loaded) {
@@ -87,9 +83,7 @@ export class MaterialManager {
   }
 
   /**
-   * 设置档位：改状态 → 清缓存 → 落盘。
-   *
-   * 先改状态再落盘：界面立刻响应，落盘失败也不回滚
+   * 设置档位：改状态 → 清缓存 → 落盘。先改状态再落盘：界面立刻响应，落盘失败不回滚
    * （本次会话内一致，下次启动可能回到旧值——与搜索历史的取舍一致）。
    */
   async setMode(mode: MaterialMode, context: common.UIAbilityContext): Promise<void> {
@@ -155,7 +149,7 @@ export class MaterialManager {
   /**
    * 官方材质按用途、厚度与阴影开关复用；不提供自绘模糊回退。
    * `forceStatic`：跳过全局动效开关、强制 `interactive:false` / `lightEffect:null` ——
-   * 用于贴顶分类胶囊这类"整排紧挨着的材质件"（2026-11-11 持有者定）：
+   * 用于贴顶分类胶囊这类"整排紧挨着的材质件"：
    * 任意一颗按压形变都会让 8vp 缝里的边缘层跟着动，整排观感发飘。
    */
   officialOf(slot: MaterialSlot, applyShadow: boolean = true, forceStatic: boolean = false): uiMaterial.ImmersiveMaterial | undefined {
@@ -195,11 +189,9 @@ export class MaterialManager {
     };
   }
 
-  /** 日志用的一行摘要 */
   describe(): string {
     return `backend=${this.useArkUI ? 'ArkUI' : 'HDS'},mode=${this.mode}(${modeLabel(this.mode)})`;
   }
 }
 
-/** 全局单例：App 内只有一个材质偏好 */
 export const materialManager: MaterialManager = new MaterialManager();

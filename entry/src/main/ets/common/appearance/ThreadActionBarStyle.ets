@@ -20,13 +20,11 @@ export const RETIRED_CLASSIC_GLASS: number = 0;
 /** 默认样式：分离式（左右双胶囊 + 官方系统材质） */
 export const DEFAULT_ACTION_BAR_STYLE: ThreadActionBarStyle = ThreadActionBarStyle.SPLIT_IMMERSIVE;
 
-/** 设置页展示顺序（默认项在最前） */
 export const ALL_ACTION_BAR_STYLES: ThreadActionBarStyle[] = [
   ThreadActionBarStyle.SPLIT_IMMERSIVE,
   ThreadActionBarStyle.POPUP
 ];
 
-/** 操作栏样式的展示名称。 */
 export function actionBarStyleLabel(style: ThreadActionBarStyle): string {
   switch (style) {
     case ThreadActionBarStyle.POPUP:

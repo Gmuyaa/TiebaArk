@@ -1,3 +1,7 @@
+/**
+ * 发帖页的选项面板：按 `kind` 切换「选择的吧」与「添加话题」等内容；吧列表与话题由
+ * `ComposeOptionsVM` 取数，本组件只做搜索框、列表与选中回填。
+ */
 import { common } from '@kit.AbilityKit';
 import { AppTheme } from '../theme/Theme';
 import { ComposeDraft } from '../viewmodel/ComposeVM';

@@ -12,7 +12,6 @@ import { NavigationService, SearchResultParams } from '../navigation/AppNavigati
 
 @ComponentV2
 export struct SearchPage {
-  /** 搜索框内容 */
   @Local input: string = '';
   /** 搜索历史，最近在前；进入页面与从结果页返回时都重新读一次 */
   @Local history: string[] = [];
@@ -44,8 +43,7 @@ export struct SearchPage {
   }
 
   /**
-   * 执行搜索：trim → 空词不动作 → 记历史 → 进结果页。
-   * 历史写入失败不阻断跳转（SearchHistory 内部已兜底）。
+   * 执行搜索：trim → 空词不动作 → 记历史 → 进结果页。历史写入失败不阻断跳转（SearchHistory 内部已兜底）。
    */
   private submit(rawWord: string): void {
     if (this.submitting) {
@@ -117,7 +115,6 @@ export struct SearchPage {
     })
   }
 
-  /** 顶部：返回按钮 + 与首页一致的圆角搜索框 */
   @Builder
   TopBar() {
     SearchPageHeader({ text: this.input, statusBarHeight: this.statusBarH,

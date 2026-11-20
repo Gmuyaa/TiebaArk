@@ -36,8 +36,7 @@ export async function loadSearchHistory(context: common.UIAbilityContext): Promi
 }
 
 /**
- * 记录一次搜索：去重置顶 + 上限淘汰，返回**更新后的完整历史**。
- * 界面拿返回值直接刷新，不用再 load 一次。
+ * 记录一次搜索：去重置顶 + 上限淘汰，返回更新后的完整历史，界面直接用来刷新。
  */
 export async function addSearchHistory(context: common.UIAbilityContext, word: string): Promise<string[]> {
   const clean: string = sanitize(word);
@@ -57,7 +56,6 @@ export async function addSearchHistory(context: common.UIAbilityContext, word: s
   return updated;
 }
 
-/** 清空全部历史 */
 export async function clearSearchHistory(context: common.UIAbilityContext): Promise<void> {
   try {
     const store: preferences.Preferences = await preferences.getPreferences(context, STORE_NAME);

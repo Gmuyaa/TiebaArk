@@ -2,7 +2,6 @@
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 import { portraitUrl } from './ThreadDetail';
 
-/** 通知列表的种类 */
 export type NotifyKind = 'reply' | 'agree' | 'at';
 
 /**
@@ -14,7 +13,6 @@ export class NotifyCursor {
   agreeId: number = 0;
 }
 
-/** 解析结果 */
 export class NotifyResult {
   /** JSON @我服务端返回的当前页；缺失为 0，不伪造。 */
   page: number = 0;
@@ -26,7 +24,6 @@ export class NotifyResult {
   hasMore: boolean = false;
   /** agree：游标（最后一条的 id；0 = 无） */
   nextAgreeId: number = 0;
-  /** agree：服务端是否声明还有更多 */
   agreeHasMore: boolean = false;
 }
 
@@ -55,18 +52,15 @@ export class NotifyItem {
   postIdText: string = '';
   userIdText: string = '';
   kind: NotifyKind = 'reply';
-  /** 谁做的动作 */
   userId: number = 0;
   userName: string = '';
   nameShow: string = '';
   portrait: string = '';
   avatar: string = '';
-  /** 被操作的帖子/楼层 */
   threadId: number = 0;
   postId: number = 0;
   /** 帖子标题（回复我=被回复的帖；赞我=被赞的帖/楼） */
   title: string = '';
-  /** 吧名 */
   forumName: string = '';
   /** 对方说的话：回复=回复内容；赞=被赞的正文片段（quote/content 里取） */
   excerpt: string = '';
@@ -82,7 +76,6 @@ export class NotifyItem {
     return `${this.kind}-${this.threadIdText || this.threadId}-${this.postIdText || this.postId}-${this.userIdText || this.userId}-${this.timeMs}`;
   }
 
-  /** 展示名：优先 name_show，退 name，最后兜底（与全站"贴吧用户"口径一致） */
   displayName(): string {
     if (this.nameShow.length > 0) { return this.nameShow; }
     if (this.userName.length > 0) { return this.userName; }

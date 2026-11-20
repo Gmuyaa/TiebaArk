@@ -1,3 +1,7 @@
+/**
+ * 收藏表情管理：网格、预览与删除，数据在 `SavedEmojiManagerVM`；本组件处理安全区、
+ * 表情预览与关闭回调。
+ */
 import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { AppTheme } from '../theme/Theme';

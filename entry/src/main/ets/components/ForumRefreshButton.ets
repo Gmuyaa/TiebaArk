@@ -2,11 +2,8 @@ import { FloatingCircleButton } from './FloatingCircleButton';
 import { FloatingButtonKind } from '../model/SmartReach';
 
 /**
- * 吧页刷新按钮。
- *
- * 2026-11-10 重构：与发帖按钮的共有能力全部下沉到 `FloatingCircleButton`，
- * 本组件只声明"吧页刷新"这一种用法和它自己的差异：刷新图标、busy 锁、
- * 避让悬浮分类胶囊、向吧页上报位置（胶囊据此让位）。
+ * 吧页刷新按钮。与发帖按钮的共有能力全部下沉到 `FloatingCircleButton`，本组件只声明"吧页刷新"这一种用法
+ * 与它的差异：刷新图标、busy 锁、避让悬浮分类胶囊、向吧页上报位置（胶囊据此让位）。
  */
 @ComponentV2
 export struct ForumRefreshButton {

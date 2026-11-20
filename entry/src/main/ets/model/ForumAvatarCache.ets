@@ -1,10 +1,9 @@
 /**
  * 吧头像落盘索引（纯逻辑）：吧名 → fid + 头像 URL + 写入时刻。
  *
- * 为什么值得落盘：
- * - **fid 永久稳定**且是公开标识，记住它之后反查就能走轻量端点 `getforumdetail`
- *   （真机 A/B：中位 364ms）而不是按吧名拉整页 `frs/page`（中位 1066ms）；
- *   收藏列表的 `store_thread[]` 里**没有** fid（2026-11-13 真机 dump 实证），
+ * 值得落盘的原因：
+ * - **fid 永久稳定**且是公开标识，记住它之后反查就能走轻量端点 `getforumdetail`，
+ *   而不是按吧名拉整页 `frs/page`；收藏列表的 `store_thread[]` 里**没有** fid，
  *   所以这张表是收藏页唯一能变快的手段。
  * - 头像 URL 带签名时效（`?tbpicau=<年-月-日-时>_<hex>`），不能无限复用；
  *   这里记下写入时刻，读取方按固定 TTL 判定"还能用"还是"该重新取一次"。
@@ -18,7 +17,6 @@ export const FORUM_AVATAR_CACHE_MAX: number = 512;
 /** 落盘快照版本：格式改动时递增，旧版本整体丢弃而不是硬解析 */
 export const FORUM_AVATAR_SNAPSHOT_VERSION: number = 1;
 
-/** 一条落盘记录 */
 export class ForumAvatarCacheEntry {
   name: string = '';
   fid: number = 0;
@@ -31,7 +29,6 @@ type ForumAvatarRow = Object[];
 
 export class ForumAvatarCache {
   private entries: Map<string, ForumAvatarCacheEntry> = new Map<string, ForumAvatarCacheEntry>();
-  /** 有改动但还没落盘 */
   private dirty: boolean = false;
 
   size(): number {
@@ -97,7 +94,7 @@ export class ForumAvatarCache {
     return true;
   }
 
-  /** 记住 fid（不动 URL / 时间戳时按调用方给的 nowMs 更新写入时刻） */
+  /** 按吧名取已知 fid；没记过返回 0 */
   fidOf(forumName: string): number {
     const name: string = forumName.trim();
     if (name.length === 0) {

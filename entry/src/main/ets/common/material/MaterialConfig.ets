@@ -107,7 +107,6 @@ export function hdsLevelOf(level: HdsMaterialLevelPref): hdsMaterial.MaterialLev
   return hdsStrengthLevel(level) as hdsMaterial.MaterialLevel;
 }
 
-/** 设置页要用的中文名 */
 export function modeLabel(mode: MaterialMode): string {
   switch (mode) {
     case MaterialMode.SYSTEM:
@@ -127,7 +126,6 @@ export function modeLabel(mode: MaterialMode): string {
   }
 }
 
-/** 设置页顺序（含 SYSTEM，共 6 项） */
 export const ALL_MODES: MaterialMode[] = [
   MaterialMode.SYSTEM,
   MaterialMode.ULTRA_THIN,

@@ -1,10 +1,8 @@
 /**
  * 圆面优先使用 ArkUI 官方材质，设备不支持时回退 HDS；图标和触控沿用原尺寸。
  *
- * 图标必须作为材质 Button 的**内容**，不能在 Stack 里另起一层盖上去：
- * 覆盖层会挡掉材质中心区域的触摸，表现为「只有圆面边缘那一圈能触发按压形变与光随指动，
- * 点图标处只有整体缩放」（2026-11-09 真机实测：中心变化像素 4118 → 搬进 Button 后 18264，
- * 与边缘的 18941 持平）。按压反馈全部交给官方材质，组件内不再自绘位移、缩放、旋转或淡化。
+ * 图标必须作为材质 Button 的内容，不能在 Stack 里另起一层盖上去：覆盖层会挡掉材质中心区域的触摸，
+ * 表现为「只有圆面边缘那一圈能触发按压形变与光随指动」。按压反馈全部交给官方材质，组件内不再自绘。
  */
 
 import { MaterialTabs } from './MaterialTabs';
@@ -14,20 +12,18 @@ import { AppTheme } from '../theme/Theme';
 import { hdsEffect } from '@kit.UIDesignKit';
 import { CloseIcon } from './CloseIcon';
 
-/** 圆直径默认值（vp）。全站统一 40，顶栏高度 52~60 都能容纳 */
+/** 圆直径默认值（vp）：顶栏高度 52~60 都能容纳 */
 const DIAMETER: number = 40;
-/** 图标字号默认值（vp）。参考图里图形相对圆偏大，24 比 20 更接近 */
+/** 图标字号默认值（vp） */
 const ICON_SIZE: number = 24;
 /**
- * 点光源高度（vp）。官方 API：光源越高，照射范围越大。
- * 取按钮直径的 3 倍（48 × 3 = 144），范围随按钮尺寸走。
+ * 点光源高度（vp）：越大照射范围越大；取按钮直径的 3 倍，范围随按钮尺寸走。
  */
 const LIGHT_HEIGHT: number = 144;
 
 /**
- * 必须是 **V2**（`@ComponentV2`）：`MaterialManager.mode` 是 `@Trace` 的，
- * 只有 V2 组件会订阅它 —— 在设置页把强度档位改掉，已经渲染出来的圆按钮要**立刻**跟着变
- * （V1 的 `@Component` 读 `@ObservedV2` 属性不会触发重绘，只能等页面重建）。
+ * 必须是 V2（`@ComponentV2`）：`MaterialManager.mode` 是 `@Trace` 的，只有 V2 组件会订阅它 ——
+ * 改强度档位时已渲染的圆按钮要立刻跟着变（V1 读 `@ObservedV2` 属性不会触发重绘，只能等页面重建）。
  */
 @ComponentV2
 export struct GlassCircleButton {
@@ -36,11 +32,8 @@ export struct GlassCircleButton {
   /** 非空时在同一沉浸光感圆面内显示文字。 */
   @Param label: string = '';
   @Param accessibilityLabel: string = '';
-  /** 点击行为，由调用方传入 */
   @Param onTap: () => void = (): void => {};
-  /** 圆直径（vp），默认 40 */
   @Param diameter: number = DIAMETER;
-  /** 图标字号（vp），默认 24 */
   @Param iconSize: number = ICON_SIZE;
   @Param iconWeight: FontWeight = FontWeight.Bold;
   /**
@@ -56,27 +49,23 @@ export struct GlassCircleButton {
   /**
    * 材质承载按钮自己的触控区直径（vp）。0 = 不单独收窄，保持整面。
    *
-   * 为什么需要：`interactive`（按压形变）和 `lightEffect`（光随指动）按 SDK 注释
-   * 「作用于设置材质的那个组件」——触摸必须真正打到这个 Button 上才有效。
-   * 悬浮按钮要把热区收到圆面中央时，不能靠宿主对整棵子树 BLOCK_DESCENDANTS，
+   * `interactive`（按压形变）和 `lightEffect`（光随指动）按 SDK 注释「作用于设置材质的那个组件」，
+   * 触摸必须真正打到这个 Button 上才有效。收窄热区不能靠宿主对整棵子树 BLOCK_DESCENDANTS，
    * 否则材质再也不会被按压；改成在这里收窄，材质仍收到自己的按下事件。
    */
   @Param hitRegion: number = 0;
   /**
    * 按压点光源强度（仅 COMPOSE_BUTTON 槽位使用），0 = 不发光。
    *
-   * 角色按官方 API 定义分家：这里挂的是**光源**（`options` = 组件自定义发光参数），
-   * 被照亮的是**另外标记了 `illuminatedType` 的周围组件**，不是自己。
-   * 因此本组件不再设 `illuminatedType`，也不再自照边缘。
-   * 其他调用方不传（默认 -1）完全不受影响。
+   * 角色按官方 API 分家：这里挂的是光源（`options` = 组件自定义发光参数），被照亮的是另外标记了
+   * `illuminatedType` 的周围组件，不是自己 —— 因此本组件不设 `illuminatedType`，也不自照边缘。
    */
   @Param composePressLight: number = -1;
   /**
-   * 按压点光源（2026-11-09 按官方 API 参考纠正）。
+   * 按压点光源。
    *
-   * - `options` 是「组件自定义发光参数」；`sourceType` 是预设发光档，优先级更高、同传会覆盖 options。
-   * - 强度为 0 即不发光；关闭态仍直接返回空 `buildEffect()`，彻底不注册光源，避免常亮残留。
-   * - 照射范围由 `height` 决定（越大越远），值见 `LIGHT_HEIGHT`。
+   * `options` 是「组件自定义发光参数」；`sourceType` 是预设发光档，优先级更高、同传会覆盖 options。
+   * 强度为 0 即不发光，关闭态直接返回空 `buildEffect()`、彻底不注册光源，避免常亮残留。
    */
   private composeGlow(): VisualEffect {
     if (this.composePressLight <= 0) {
@@ -88,16 +77,13 @@ export struct GlassCircleButton {
     }).buildEffect();
   }
   /**
-   * 是否改画调用方自绘的图标（`customIcon`），默认 false。
-   *
-   * 为什么要一个布尔开关：`@BuilderParam` 不能声明成可选，只能"给个空实现 + 布尔"
-   * （同 `CommentActionHost.content` 的既有做法）。系统 Symbol 里没有的图形
-   * （如「我的」页外观切换的三态图标）走这条路，此时 `symbol` 与 `label` 都被忽略。
+   * 是否改画调用方自绘的图标（`customIcon`）：`@BuilderParam` 不能声明成可选，只能"空实现 + 布尔"
+   * （同 `CommentActionHost.content`）。系统 Symbol 里没有的图形走这条路，此时 `symbol` 与 `label` 都被忽略。
    */
   @Param useCustomIcon: boolean = false;
   /**
-   * 自绘图标内容。调用侧一律用箭头包一层（`customIcon: (): void => { this.X() }`）——
-   * 直接传方法引用在本项目有过崩溃先例（见 `pages/ThreadDetail` 的同类注释）。
+   * 自绘图标内容。调用侧一律用箭头包一层（`customIcon: (): void => { this.X() }`），
+   * 直接传方法引用在本项目有过崩溃先例。
    */
   @Builder
   emptyIcon() {}

@@ -1,9 +1,9 @@
 /**
  * 会话内共享吧头像缓存，复用列表、详情和浏览历史中已经取得的头像 URL。
  *
- * 2026-11-13：除 URL 外再记一份「吧名 → fid」（同样只在内存）。反查吧头像时已知 fid
- * 就能走更轻的 `getforumdetail`（见 `api/TiebaApi.fetchForumAvatar`），不必按吧名拉整页
- * `frs/page`。fid 来自各响应本来就会带的 `forum.id`，不额外请求。
+ * 同时记一份「吧名 → fid」（只在内存）：反查吧头像时已知 fid 就能走更轻的 `getforumdetail`
+ * （见 `api/TiebaApi.fetchForumAvatar`），不必按吧名拉整页 `frs/page`。fid 来自各响应本来
+ * 就会带的 `forum.id`，不额外请求。
  */
 
 import { forumAvatarCache } from './ForumAvatarCache';
@@ -119,7 +119,6 @@ export function forgetCachedForumAvatar(forumName: string): void {
   forumAvatarCache.forget(forumName);
 }
 
-/** 当前缓存条数（诊断 / 测试用） */
 export function forumAvatarCount(): number {
   return avatars.size;
 }

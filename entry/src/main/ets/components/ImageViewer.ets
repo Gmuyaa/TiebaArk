@@ -25,6 +25,10 @@ import {
 } from '../utils/ImageExport';
 import { fetchImageBytes } from '../net/ImageDownload';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import {
+  ImageLoadPolicy, ViewerImage, formatOriginBytes, viewerCanLoadOrigin, viewerSource
+} from '../model/ImageLoadPolicy';
 import {
   SrStatus, SR_BUTTON_BASE, SR_BUTTON_ICON, SR_BUTTON_INSET, SR_BUTTON_MARGIN, SR_BUTTON_TOUCH,
   SrButtonBox, srButtonPosition
@@ -41,7 +45,7 @@ const DOUBLE_TAP_SCALE: number = 2;
 const ANIMATION_DURATION: number = 180;
 /** 解码尺寸可能有取整误差；明显不同的预览/原图比例不能错误共享返回。 */
 const SHARED_ASPECT_TOLERANCE: number = 0.01;
-/** 导出菜单日志（C-06／H-07 真机取证用；只记状态与地址前 60 字符，不含凭据） */
+/** 导出菜单日志域；只记状态与地址前 60 字符，不含凭据 */
 const EXPORT_DOMAIN: number = 0x0;
 const EXPORT_TAG: string = 'ImageViewerExport';
 
@@ -70,19 +74,14 @@ enum ImageLoadState {
 }
 
 /**
- * 每页的缩放 / 位移状态就放在页内（`@State`）。
- *
- * 曾经这里挂着一个 `@Observed class PageViewState` + 父组件持有数组 + `@ObjectLink`，
- * 目的是"翻页时不重建页面，同时把离开的那页缩放复位"。实测发现这条路**没有意义**：
- * 本页放大后 `PanGesture`（`InteractiveImage` 上那条，`distance: 5`）会独占横向手势，
- * `swipe` 与 `fling` 都推不动 `Swiper`（实测页码纹丝不动停在 `1 / 8`）——
- * 也就是说**放大状态下根本切不了页**，"翻页时复位别的页"永远不会发生。
- * 于是退回页内 `@State`：新页在 `aboutToAppear` 里自然回到 1x，够用且少一层状态。
+ * 每页的缩放 / 位移状态就放在页内（`@State`），不再由父组件持有 `@Observed` 数组 + `@ObjectLink`：
+ * 放大后 `PanGesture` 会独占横向手势，`swipe` 与 `fling` 都推不动 `Swiper`，即放大状态下根本切不了页，
+ * "翻页时复位别的页"永远不会发生。新页在 `aboutToAppear` 里自然回到 1x，够用且少一层状态。
  */
 
 @Component
 struct ZoomableImagePage {
-  imageUrl: string = '';
+  @Prop @Watch('onImageUrlChanged') imageUrl: string = '';
   @Prop transitionId: string = '';
   @Prop returnId: string = '';
   @Prop returnCropUsable: boolean = false;
@@ -111,8 +110,10 @@ struct ZoomableImagePage {
   @State private sourceHeight: number = 0;
   @State private loadState: ImageLoadState = ImageLoadState.LOADING;
   @State private retryCount: number = 0;
+  /** 切原图期间暂留已加载的大图，原图就绪后再切换，避免闪黑。 */
+  @State private upgradePreview: string = '';
+  private loadedImageUrl: string = '';
 
-  /** 本页在图片列表里的下标（回调时原样带回，不依赖 `currentIndex` 的时序） */
   @State private topSafeVp: number = 0;
   private srTouchActive: boolean = false;
   private srGuardUntil: number = 0;
@@ -121,9 +122,8 @@ struct ZoomableImagePage {
   /** 解码成功时把**真实像素尺寸**报给查看器：尺寸不合规的图在点击前就能灰显 */
   onImageDecoded: (index: number, width: number, height: number) => void = (): void => {};
   /**
-   * 这一页的超分状态。**`@ObjectLink`**：处理完成 / 被淘汰 / 失败这些变化由会话发起，
-   * 只有 `@ObjectLink` 能把它们推进到本页界面，而不必改 `ForEach` 的 key
-   * （改 key 会重建页面、`Image` 重新加载 —— 翻页闪一下、缩放复位的老路）。
+   * 这一页的超分状态。必须 `@ObjectLink`：处理完成 / 被淘汰 / 失败由会话发起，
+   * 只有它能推进到本页界面而不必改 `ForEach` 的 key（改 key 会重建页面、图片重新加载）。
    */
   @ObjectLink sr: PageSuperResolutionState;
 
@@ -171,6 +171,17 @@ struct ZoomableImagePage {
     return state;
   }
 
+  private onImageUrlChanged(): void {
+    if (!this.canUpdatePage()) { return; }
+    if (this.loadState === ImageLoadState.SUCCESS && this.loadedImageUrl.length > 0 &&
+      this.loadedImageUrl !== this.imageUrl) {
+      this.upgradePreview = this.loadedImageUrl;
+    }
+    ++this.imageLoadEpoch;
+    this.retryCount = 0;
+    this.loadState = ImageLoadState.LOADING;
+  }
+
   private resetImageState(): void {
     this.zoomScale = MIN_SCALE;
     this.panX = 0;
@@ -178,6 +189,8 @@ struct ZoomableImagePage {
     this.panTouched = false;
     this.loadState = ImageLoadState.LOADING;
     this.retryCount = 0;
+    this.upgradePreview = '';
+    this.loadedImageUrl = '';
     this.sourceWidth = 0;
     this.sourceHeight = 0;
   }
@@ -248,10 +261,15 @@ struct ZoomableImagePage {
     return this.sourceHeight;
   }
 
+  private previewBackdrop(): string {
+    return this.upgradePreview.length > 0 ? this.upgradePreview : this.transitionPreview;
+  }
+
   /** 同一 URI 只使用主 Image；异源预览节点保留到本页销毁，用透明度交接。 */
   private hasSeparateTransitionPreview(): boolean {
-    return this.transitionPreview.length > 0 &&
-      (this.transitionPreview !== this.sourceForLoad() || this.showingEnhanced());
+    const backdrop: string = this.previewBackdrop();
+    return backdrop.length > 0 &&
+      (backdrop !== this.sourceForLoad() || this.showingEnhanced());
   }
 
   private primaryImageVisible(): boolean {
@@ -298,9 +316,8 @@ struct ZoomableImagePage {
     result.height = height;
     const ratio: number = this.contentAspectRatio();
     if (ratio > 0) {
-      // 整张图缩进屏幕：长图打开时是全貌（上下留白），不是整宽铺开。
-      // 这样共享元素从正文的裁切窗口"收"成整图，方向和看图习惯一致；
-      // 要读文字再双击放大——放大后才有纵向拖动。
+      // 整张图缩进屏幕：长图打开时先给全貌（上下留白），共享元素从正文裁切窗口"收"成整图；
+      // 要读文字再双击放大，放大后才有纵向拖动。
       if (width / height > ratio) {
         result.width = height * ratio;
       } else {
@@ -387,9 +404,8 @@ struct ZoomableImagePage {
   }
 
   /**
-   * 按钮落点：以**图片实际显示区域的右上角**为锚、内缩 12vp，再夹进可操作区域。
-   * 几何全在纯逻辑 `srButtonPosition()` 里，边界（小图/长图/满屏/放大拖动出屏）
-   * 由 Node 侧用例钉住；这里只把当前页的实时数值喂进去。
+   * 按钮落点：以图片实际显示区域的右上角为锚、内缩 12vp，再夹进可操作区域。边界（小图/长图/满屏/放大拖动出屏）
+   * 由纯逻辑 `srButtonPosition()` 与 Node 侧用例钉住，这里只喂当前页的实时数值。
    */
   private srButtonBox(): SrButtonBox {
     const fit: ImageSize = this.sourceImageSize();
@@ -551,8 +567,7 @@ struct ZoomableImagePage {
   }
 
   /**
-   * 退出前先把长图拉回顶部：正文裁切态展示的是图片顶部，
-   * 若停在滚动中段直接反向转场，起点内容会和落点对不上、跳一下。
+   * 退出前先把长图拉回顶部：正文裁切态展示的是图片顶部，停在滚动中段直接反向转场会和落点对不上、跳一下。
    */
   private closeWithTopReset(): void {
     if (!this.canUpdatePage()) { return; }
@@ -615,6 +630,7 @@ struct ZoomableImagePage {
           if (typeof source === 'string') {
             this.sourceWidth = width;
             this.sourceHeight = height;
+            this.loadedImageUrl = source;
             this.onImageDecoded(this.index, width, height);
           }
           this.loadState = ImageLoadState.SUCCESS;
@@ -643,8 +659,8 @@ struct ZoomableImagePage {
   @Builder
   private PreviewImage() {
     if (this.contentAspectRatio() > 0) {
-      // 图片节点按原图比例排（宽度撑满、高度自己长）：转场中共享框的宽高是各自插值的，
-      // 若图片固定 100%×100% 再 Contain，就会在框变宽的那些帧里露出左右的空白/拉伸画面。
+      // 图片节点按原图比例排（宽度撑满、高度自己长）：转场中共享框宽高各自插值，若图片固定 100%×100% 再 Contain，
+      // 框变宽的那些帧会露出左右空白或拉伸画面。
       Image(this.displaySource())
         .objectFit(ImageFit.Contain)
         .interpolation(this.zoomScale > MIN_SCALE ? ImageInterpolation.High : ImageInterpolation.Medium)
@@ -698,7 +714,7 @@ struct ZoomableImagePage {
   @Builder
   private PictureContent() {
     if (this.hasSeparateTransitionPreview()) {
-      Image(this.transitionPreview).width('100%').height('100%').objectFit(ImageFit.Contain)
+      Image(this.previewBackdrop()).width('100%').height('100%').objectFit(ImageFit.Contain)
         .opacity(this.transitionPreviewVisible() ? 1 : 0)
     }
     this.InteractiveImage()
@@ -828,9 +844,13 @@ struct ZoomableImagePage {
 export struct ImageViewer {
   imageUrl: string = '';
   imageUrls: string[] = [];
+  /** 可选多档位图片序列；未传时退回 `imageUrls` / `imageUrl`。 */
+  images: ViewerImage[] = [];
   initialIndex: number = 0;
   onBeforeClose: () => void = (): void => {};
   onClose: () => void = (): void => {};
+  private viewerPolicy: ImageLoadPolicy = imageLoadStore.currentPolicy();
+  @State private originRequestedPages: number[] = [];
   private imageTransition: ImageTransitionSeed = new ImageTransitionSeed();
   @State private holdTransitionPreview: boolean = false;
   @State private cropReturnEligible: boolean = true;
@@ -860,7 +880,6 @@ export struct ImageViewer {
   @State private menuRevealed: boolean = false;
   @State private viewerWidth: number = 0;
   @State private viewerHeight: number = 0;
-  /** 导出是否已初始化 */
   @State private exportOpen: boolean = false;
   /** 导出准备状态：0 未开始｜1 下载中｜2 图片数据就绪｜3 失败 */
   @State private exportState: number = 0;
@@ -884,10 +903,12 @@ export struct ImageViewer {
   private srStates: PageSuperResolutionState[] = [];
 
   aboutToAppear(): void {
-    const urls: string[] = this.effectiveImageUrls();
-    this.currentIndex = this.clampedIndex(this.initialIndex, urls.length);
+    this.viewerPolicy = imageLoadStore.currentPolicy();
+    this.originRequestedPages = [];
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    this.currentIndex = this.clampedIndex(this.initialIndex, items.length);
     this.settledIndex = this.currentIndex;
-    this.imageTransition = takeImageTransition(urls[this.currentIndex] || '');
+    this.imageTransition = takeImageTransition(this.transitionKeyAt(this.currentIndex));
     this.transitionAlive = true;
     this.cropReturnEligible = true;
     this.transitionAvailable = this.imageTransition.id.length > 0 && !this.imageTransition.hasFinished();
@@ -911,7 +932,7 @@ export struct ImageViewer {
         }
       });
     });
-    this.buildSrStates(urls);
+    this.buildSrStates(this.effectiveImageUrls());
     this.readSafeArea();
     this.hideSystemStatusBar();
     smartReachStore.load(this.hostContext());
@@ -949,7 +970,7 @@ export struct ImageViewer {
         win.setSpecificSystemBarEnabled('status', false, true).then(() => {
           this.statusHiddenByViewer = true;
         }).catch(() => {
-          // 隐藏失败就照旧显示：看图不受影响，不弹错（用户一眼能看出状态栏还在）
+          // 隐藏失败就照旧显示：看图不受影响，不弹错（用户一眼能看出状态栏还在）。
         });
       }).catch(() => {
         // 拿不到窗口对象：保持原样
@@ -1048,7 +1069,8 @@ export struct ImageViewer {
           this.returnTargetId = '';
           if (this.swipeDragging || state === undefined || !state.atRest || !state.ready ||
             opening.gallery === undefined) { return; }
-          const target: ImageTransitionTarget | undefined = opening.gallery.prepare(this.currentIndex, this.currentUrl());
+          const target: ImageTransitionTarget | undefined = opening.gallery.prepare(
+            this.currentIndex, this.transitionKeyAt(this.currentIndex));
           if (target === undefined) { return; }
           const ratio: number = target.crop?.contentAspectRatio ?? 0;
           if (ratio > 0 && (state.aspectRatio <= 0 ||
@@ -1132,11 +1154,65 @@ export struct ImageViewer {
     }
   }
 
-  private effectiveImageUrls(): string[] {
-    if (this.imageUrls.length > 0) {
-      return this.imageUrls;
+  private effectiveViewerImages(): ViewerImage[] {
+    if (this.images.length > 0) {
+      return this.images;
     }
-    return this.imageUrl.length > 0 ? [this.imageUrl] : [];
+    const urls: string[] = this.imageUrls.length > 0 ? this.imageUrls : (this.imageUrl.length > 0 ? [this.imageUrl] : []);
+    const out: ViewerImage[] = [];
+    for (let i: number = 0; i < urls.length; i++) {
+      const img: ViewerImage = new ViewerImage();
+      img.origin = urls[i];
+      img.high = urls[i];
+      img.thumb = urls[i];
+      img.fallback = urls[i];
+      out.push(img);
+    }
+    return out;
+  }
+
+  private transitionKeyAt(index: number): string {
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    if (index < 0 || index >= items.length) { return ''; }
+    return items[index].transitionKey();
+  }
+
+  private displayUrlAt(index: number): string {
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    if (index < 0 || index >= items.length) { return ''; }
+    return viewerSource(items[index], this.viewerPolicy, this.originRequestedPages.includes(index));
+  }
+
+  private effectiveImageUrls(): string[] {
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    const out: string[] = [];
+    for (let i: number = 0; i < items.length; i++) {
+      out.push(this.displayUrlAt(i));
+    }
+    return out;
+  }
+
+  private requestOriginForCurrent(): void {
+    const idx: number = this.currentIndex;
+    if (this.originRequestedPages.includes(idx)) { return; }
+    this.suppressCloseUntil = Date.now() + 700;
+    this.originRequestedPages = this.originRequestedPages.concat([idx]);
+    const url: string = this.displayUrlAt(idx);
+    if (idx >= 0 && idx < this.srStates.length) {
+      this.srStates[idx] = this.srSession.stateFor(url);
+    }
+    this.syncSrCurrent(idx);
+    this.openExport();
+  }
+
+  private currentOriginButtonLabel(): string {
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    if (this.currentIndex < 0 || this.currentIndex >= items.length) { return ''; }
+    const item: ViewerImage = items[this.currentIndex];
+    if (!viewerCanLoadOrigin(item, this.viewerPolicy, this.originRequestedPages.includes(this.currentIndex))) {
+      return '';
+    }
+    return formatOriginBytes(item.originBytes);
   }
 
   private clampedIndex(index: number, count: number): number {
@@ -1150,8 +1226,10 @@ export struct ImageViewer {
     try {
       const context = this.getUIContext().getHostContext();
       window.getLastWindow(context).then((win: window.Window) => {
-        const area: window.AvoidArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-        this.bottomSafeVp = px2vp(area.bottomRect.height);
+        const systemBottom: number = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).bottomRect.height);
+        const navBottom: number = px2vp(
+          win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
+        this.bottomSafeVp = Math.max(systemBottom, navBottom);
       }).catch(() => {
         // 没有避让区信息时保持 0，页码仍有自身视觉间距。
       });
@@ -1161,32 +1239,57 @@ export struct ImageViewer {
   }
 
   /**
-   * 页码提示：贴在**底部居中**，只显示 `n / N`，**常显**。
-   *
-   * 单击画面的语义已从"切换这枚页码的显隐"改为"关闭查看器"（对齐常见看图 App 的手感），
-   * 于是不再有隐藏态：`count > 1` 时一直显示。单图（`count <= 1`）没有可翻的页，不显示。
-   *
-   * 给一层 `#66000000` 圆角药丸底：页码压在照片上，纯白字遇到浅色照片会看不见。
+   * 底部浮层：查看原图胶囊按钮与页码提示，抬高避开底部手势区；深灰半透明底配细描边，在纯黑留白与纯白图片上均可辨。
    */
   @Builder
   private PageBadge(count: number) {
-    if (count > 1) {
-      Row() {
-        Text(`${this.currentIndex + 1} / ${count}`)
-          .fontSize(14)
-          .fontColor(Color.White)
+    if (count > 1 || this.currentOriginButtonLabel().length > 0) {
+      Column({ space: 10 }) {
+        if (this.currentOriginButtonLabel().length > 0) {
+          Button({ type: ButtonType.Capsule, stateEffect: true }) {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.picture'))
+                .fontSize(15)
+                .fontColor([Color.White])
+              Text(this.currentOriginButtonLabel())
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Color.White)
+            }
+            .padding({ left: 16, right: 16 })
+          }
+          .height(36)
+          .backgroundColor('#CC26262A')
+          .border({ width: 0.8, color: '#59FFFFFF' })
+          .accessibilityText(this.currentOriginButtonLabel())
+          .onTouch((event: TouchEvent): void => {
+            event.stopPropagation();
+            this.suppressCloseUntil = Date.now() + 700;
+          })
+          .onClick((): void => {
+            this.requestOriginForCurrent();
+          })
+        }
+        if (count > 1) {
+          Row() {
+            Text(`${this.currentIndex + 1} / ${count}`)
+              .fontSize(13)
+              .fontColor(Color.White)
+          }
+          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .borderRadius(12)
+          .backgroundColor('#9926262A')
+          .border({ width: 0.6, color: '#33FFFFFF' })
+        }
       }
-      .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-      .borderRadius(12)
-      .backgroundColor('#66000000')
-      .margin({ bottom: this.bottomSafeVp + 12 })
+      .alignItems(HorizontalAlign.Center)
+      .margin({ bottom: Math.max(this.bottomSafeVp, 28) + 28 })
       .transition(imageFadeTransition())
     }
   }
 
   // ───────────────────────── 当前图片准备与导出 ─────────────────────────
 
-  /** 当前页地址 */
   private currentUrl(): string {
     const urls: string[] = this.effectiveImageUrls();
     if (urls.length === 0) {
@@ -1424,7 +1527,6 @@ export struct ImageViewer {
 
   // 当前图片的超分仅用于查看；保存、分享始终使用已下载原图。
 
-  /** 当前页的状态对象（页码越界返回 null） */
   private currentSrState(): PageSuperResolutionState | null {
     const index: number = this.srTick >= 0 ? this.currentIndex : -1;
     if (index < 0 || index >= this.srStates.length) {
@@ -1557,11 +1659,11 @@ export struct ImageViewer {
         .backgroundColor(Color.Black)
         .hitTestBehavior(HitTestMode.None)
         .transition(imageFadeTransition())
-      if (this.effectiveImageUrls().length > 0) {
+      if (this.effectiveViewerImages().length > 0) {
         Swiper(this.swiperController) {
-          ForEach(this.effectiveImageUrls(), (url: string, index: number) => {
+          ForEach(this.effectiveViewerImages(), (item: ViewerImage, index: number) => {
             ZoomableImagePage({
-              imageUrl: url,
+              imageUrl: this.displayUrlAt(index),
               transitionId: this.transitionAvailable && index === this.initialIndex &&
                 this.currentIndex === this.initialIndex && this.cropReturnEligible
                 ? this.imageTransition.id : '',
@@ -1583,7 +1685,7 @@ export struct ImageViewer {
                 this.imageTransition.setReturnEnabled(eligible && this.currentIndex === this.initialIndex);
               },
               index: index,
-              sr: this.srStateAt(index, url),
+              sr: this.srStateAt(index, this.displayUrlAt(index)),
               onSuperResolutionToggle: (index: number): void => {
                 if (this.canUpdateViewer() && this.exportBusy.length === 0) { this.toggleSuperResolution(index); }
               },
@@ -1608,11 +1710,8 @@ export struct ImageViewer {
               }
             })
           },
-          // key **不能带 `this.currentIndex`**：带上的话每翻一页所有 key 都变，
-          // `Swiper` 会把整批页面销毁重建、`Image` 重新加载 —— 视觉上就是翻页"闪一下"。
-          // 实测：key 含 currentIndex 时打开查看器 mount 3 次、翻一页 mount 8 次；
-          // 去掉后翻页只 mount 1 次，且那次是预建屏幕外的下一页。
-          (url: string, index: number) => `${index}:${url}`)
+          // key **不能带 `this.currentIndex` 或切换原图后的显示地址**：否则翻页或切原图会重建页面。
+          (item: ViewerImage, index: number) => `${index}:${item.transitionKey()}`)
         }
         .index(this.settledIndex)
         .indicator(false)
@@ -1666,8 +1765,7 @@ export struct ImageViewer {
     .transition(imageLayerRetentionTransition())
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onKeyEvent((event: KeyEvent): boolean => {
-      // 保留但**不生效**：这个 `Stack` 不持有焦点，收不到按键。真正拦返回键的是
-      // 宿主 Index / ThreadDetailPage 的 onBackPress（查看器是页面上的浮层）。
+      // 保留但不生效：这个 `Stack` 不持有焦点、收不到按键；真正拦返回键的是宿主（查看器是页面上的浮层）。
       if (event.keyCode === KeyCode.KEYCODE_BACK) {
         closeImageTransition(this.getUIContext(), (): void => { this.onClose(); },
           (): void => { this.onBeforeClose(); });

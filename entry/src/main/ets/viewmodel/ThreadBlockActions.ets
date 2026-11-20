@@ -39,8 +39,8 @@ export class ThreadBlockActions {
         return threadBlockStore.forumsSaveError.length > 0 ? `贴吧账号已屏蔽该吧；${threadBlockStore.forumsSaveError}` : '';
       }
       /*
-       * 服务端没有确认（或请求就失败了）：仍然按用户的意思在本机屏蔽，
-       * 但**必须说清哪一半生效了** —— 不能把"本机屏蔽"说成"服务端已屏蔽"。
+       * 服务端没有确认（或请求就失败了）：仍按用户的意思在本机屏蔽，但**必须说清哪一半生效了**
+       * —— 不能把“本机屏蔽”说成“服务端已屏蔽”。
        */
       hilog.info(0x0, 'ThreadBlock', 'forum block unconfirmed: %{public}s',
         response.describeFailure());
@@ -64,7 +64,6 @@ export class ThreadBlockActions {
     }
   }
 
-  /** 屏蔽这个帖子的作者（服务端拉黑） */
   async blockAuthor(context: common.UIAbilityContext, thread: ThreadBrief): Promise<string> {
     if (this.busy) { return '上一个操作还没结束，请稍候'; }
     if (thread.authorId <= 0) { return '未取得作者身份，无法屏蔽'; }
@@ -109,10 +108,8 @@ export class ThreadBlockActions {
   }
 
   /**
-   * 解除拉黑（设置页用）。服务端写成功后**才**从本机名单里删掉。
-   *
-   * 为什么要能解除：设置页那份名单是本机记录（服务端没有全量列表可读），
-   * 如果这里不能解除，误拉黑就只能在官方客户端里救了。
+   * 解除拉黑（设置页用）。服务端写成功后**才**从本机名单里删掉。设置页那份名单是本机记录（服务端
+   * 没有全量列表可读），这里不能解除的话，误拉黑就只能在官方客户端里救了。
    */
   async unblockAuthor(context: common.UIAbilityContext, uid: number): Promise<string> {
     if (!Number.isSafeInteger(uid) || uid <= 0) { return '用户身份无效'; }

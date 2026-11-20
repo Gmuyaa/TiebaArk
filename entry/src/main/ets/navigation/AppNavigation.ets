@@ -17,11 +17,12 @@ export class AppRoute {
   static readonly DIRECTORY_PAGE: string = 'DirectoryPage';
   static readonly FORUM_MEMBER_PAGE: string = 'ForumMemberPage';
   static readonly NOTIFY_LIST_PAGE: string = 'NotifyListPage';
+  static readonly CHAT_PAGE: string = 'ChatPage';
   static readonly SCAN_PAGE: string = 'ScanPage';
   static readonly VIDEO_FEED_PAGE: string = 'VideoFeedPage';
 }
 
-/** 详情页路由参数。页面参数由 Index.PageMap 注入，不再从 router 读取。 */
+/** 详情页路由参数，由 Index.PageMap 注入。 */
 export interface ThreadDetailParams {
   tid: number;
   /** 卡片评论入口：加载完成并布局后定位回复区。 */
@@ -30,9 +31,9 @@ export interface ThreadDetailParams {
   videoMode?: boolean;
   /** 我的回复入口携带真实回复 id；缺省仍按普通首页加载。 */
   targetPid?: number;
-  /** 列表页已归一化的回复数；详情页拿它先显示，加载完成后以详情响应为准。没有就缺省 */
+  /** 列表页已归一化的回复数，先显示；加载完成后以详情响应为准。没有就缺省 */
   replyCount?: number;
-  /** 来源吧名兜底（见上方说明）。不知道就别传，空串等同缺省 */
+  /** 来源吧名兜底；不知道就别传，空串等同缺省 */
   forumName?: string;
 }
 
@@ -42,7 +43,7 @@ export interface ForumPageParams {
 }
 
 export interface SearchResultParams {
-  /** 搜索关键词。缺省/空串时页面走空关键词状态，不发起请求（原 router 行为一致） */
+  /** 搜索关键词。缺省/空串时页面走空关键词状态，不发起请求 */
   word?: string;
   /** 吧内搜索的范围（吧名）。缺省/空串 = 全站搜索；只影响请求的 `kw` 与文案，不影响结果解析 */
   forumName?: string;
@@ -76,6 +77,20 @@ export interface NotifyListParams {
   kind?: string;
 }
 
+/**
+ * 私信会话页参数。
+ *
+ * `groupIdText` 是 **IM 分组 id 的字符串形式**（64 位，不能用 number 承载）；
+ * 其余字段只用于标题与头像的即时占位，进入页面后以握手/同步结果为准。
+ */
+export interface ChatPageParams {
+  /** 已有会话的 IM 分组 id；从个人主页直接开聊时可缺省。 */
+  groupIdText?: string;
+  peerUidText?: string;
+  peerName?: string;
+  peerPortrait?: string;
+}
+
 export interface DirectoryPageParams {
   kind: DirectoryKind;
   id: number;
@@ -96,7 +111,6 @@ export interface ForumMemberPageParams {
   title?: string;
 }
 
-/** 共享导航错误日志标签 */
 const TAG: string = 'NavigationService';
 
 export class NavigationService {
@@ -210,8 +224,8 @@ export class NavigationService {
   }
 
   /**
-   * 打开吧成员页（A-01）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
-   * 日志只带 fid 与吧名（都不是凭据），便于复核"入口有没有把 fid 正确带进来"。
+   * 失败语义与其它 open* 一致：栈未注入时记错误日志、不跳转。
+   * 日志只带 fid 与吧名（都不是凭据），便于复核入口有没有把 fid 带进来。
    */
   static openForumMember(params: ForumMemberPageParams): void {
     const stack: NavPathStack | null = NavigationService.stack;
@@ -222,9 +236,6 @@ export class NavigationService {
     stack.pushPathByName(AppRoute.FORUM_MEMBER_PAGE, params);
   }
 
-  /**
-   * 打开通知列表页（F-01）。失败语义与其它 open* 一致：栈未注入时错误日志 + 不跳转。
-   */
   static openNotifyList(params: NotifyListParams): void {
     const stack: NavPathStack | null = NavigationService.stack;
     if (stack === null) {
@@ -232,6 +243,12 @@ export class NavigationService {
       return;
     }
     stack.pushPathByName(AppRoute.NOTIFY_LIST_PAGE, params);
+  }
+
+  static openChat(params: ChatPageParams): void {
+    const stack: NavPathStack | null = NavigationService.stack;
+    if (stack === null) { hilog.error(0x0, TAG, 'openChat failed: stack not set'); return; }
+    stack.pushPathByName(AppRoute.CHAT_PAGE, params);
   }
 
   static back(): void {

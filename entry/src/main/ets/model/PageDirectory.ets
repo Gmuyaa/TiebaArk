@@ -1,4 +1,4 @@
-/** 官方安卓版 22.11.1.0 的吧资料、吧规、吧务与社交列表；字段经只读接口核对。 */
+/** 当前官方安卓版的吧资料、吧规、吧务与社交列表；字段经只读接口核对。 */
 import { RawContentItem } from './RawThreadPage';
 import { ContentPiece, portraitUrl } from './ThreadDetail';
 

@@ -1,3 +1,7 @@
+/**
+ * 小尾巴列表 VM：读取、启用/停用与删除，写成功后重读；换号清空，只有同账号刷新才保留旧内容。
+ * 会话凭据只在内存里比较，不落盘。
+ */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';

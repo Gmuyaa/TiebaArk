@@ -23,7 +23,6 @@ import { SettingsLayout } from '../common/appearance/SettingsLayout';
 const HEADER_BUTTON: number = 44;
 const HEADER_ICON: number = 22;
 /** 两颗按钮之间、以及按钮与标题之间的最小间距（Blank 撑开剩余空间） */
-
 const STAT_MIN_HEIGHT: number = 48;
 
 /** 内容入口描述。`kind` 保持原路由参数，不随展示文案变化。 */
@@ -76,19 +75,22 @@ export struct ProfileView {
   }
 
   /**
-   * "我的"页头像**只来自服务端资料**。
-   *
-   * 编辑页的本机候选预览不经过这里：待审核/传播延迟期间，本页继续显示服务端当前生效的头像，
-   * 不用本地候选图冒充已生效（见 KNOWN_ISSUES #18 的语义修正）。
+   * "我的"页头像只来自服务端资料：编辑页的本机候选预览不经过这里 —— 待审核/传播延迟期间继续显示服务端
+   * 当前生效的头像，不用本地候选图冒充已生效（见 KNOWN_ISSUES #18）。
    */
   private avatarUrl(): string {
     return portraitUrl(authSession.snapshot.portrait, authSession.avatarRevision);
   }
 
-  /** 账号标识行显示用户 ID 与吧龄；缺失字段不拼接占位信息。 */
+  /**
+   * 账号标识行：按官方 App 口径显示「贴吧 ID」（tieba_uid），没设置时退回 uid。两者是两套编号，
+   * 官方「我的」页显示的是贴吧号，优先它才不会"我的 uid 和官方对不上"。
+   */
   private accountIdLine(snapshot: AuthSnapshot): string {
     const parts: string[] = [];
-    if (snapshot.uid > 0) {
+    if (snapshot.tiebaUid.length > 0) {
+      parts.push(`贴吧 ID ${snapshot.tiebaUid}`);
+    } else if (snapshot.uid > 0) {
       parts.push(`uid ${snapshot.uid}`);
     }
     if (snapshot.tbAge.length > 0) {
@@ -130,10 +132,8 @@ export struct ProfileView {
   }
 
   /**
-   * 外观切换按钮的图标：当前档位对应的原生图标（太阳 / 月亮 / 左右半实心圆）。
-   *
-   * 直接读 `themeModeStore.pref` 与 `isDark`（`@Trace`）：档位或系统深浅一变，会重跑这段
-   * Builder，图标自动换成新档位那一态 —— 与 `GlassCircleButton` 订阅材质档位同一机制。
+   * 外观切换按钮的图标：当前档位对应的原生图标（太阳 / 月亮 / 左右半实心圆）。直接读 `themeModeStore.pref`
+   * 与 `isDark`（`@Trace`），档位或系统深浅一变就重跑 Builder，图标自动换到新档位那一态。
    */
   @Builder
   appearanceIcon() {

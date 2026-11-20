@@ -11,16 +11,13 @@ import { PreferenceGate } from './PreferenceGate';
 const DOMAIN: number = 0x0000;
 const TAG: string = 'TiebaActionBar';
 
-/** 正式存储 */
 const STORE: string = 'tieba_actionbar_prefs';
 
 const LEGACY_STORE: string = 'tieba_exp_actionbar';
 const KEY_STYLE: string = 'style';
 
 /**
- * 全局单例：App 内只有一个"详情页操作栏样式"偏好。
- *
- * 读取与落盘共用 `PreferenceGate` 的同一条队列：读盘不会与写入交错，且只读一次。
+ * 全局单例。读取与落盘共用 `PreferenceGate` 的同一条队列：读盘不与写入交错，且只读一次。
  */
 @ObservedV2
 export class ThreadActionBarStore {
@@ -32,10 +29,9 @@ export class ThreadActionBarStore {
 
   /**
    * 启动时读一次持久化偏好（正式存储 → 缺失则尝试从实验存储迁移）。
-   *
    * ⚠️ 与 `MaterialManager.load` 同一个坑：ohosTest 进程里
    * `preferences.getPreferences(getAppContext())` 会抛 "context is invalid"，
-   * 所以**调用方要传真实 UIAbilityContext**（`EntryAbility.onCreate` 的 `this.context`）。
+   * 调用方要传真实 UIAbilityContext（`EntryAbility.onCreate`）。
    */
   async load(context: common.UIAbilityContext): Promise<void> {
     await this.gate.loadOnce(async (revision: number): Promise<void> => {
@@ -61,17 +57,14 @@ export class ThreadActionBarStore {
       } catch (e) {
         hilog.warn(DOMAIN, TAG, 'action bar style load failed, keep default: %{public}s', String(e));
       } finally {
-        // 读失败也不重试：与原实现一致。
+        // 读失败也不重试：直接标记已加载，避免反复读盘。
         this.gate.markLoaded();
       }
     });
   }
 
   /**
-   * 旧实验存储 → 正式存储的一次性迁移。
-   *
-   * 读不到（从未装过带实验入口的版本）就用默认值；读到任何值都过一遍
-   * `normalizeActionBarStyle`，由它负责"已淘汰的悬浮 Dock → 分离式"与其他脏值回落。
+   * 旧实验存储 → 正式存储的一次性迁移。读不到就用默认值；读到任何值都过 `normalizeActionBarStyle`。
    * 迁移结果当场落盘，所以只会执行一次。
    */
   private async migrateFromLegacy(context: common.UIAbilityContext,
@@ -95,9 +88,7 @@ export class ThreadActionBarStore {
   }
 
   /**
-   * 设置样式：改状态 → 落盘。
-   *
-   * 先改状态再落盘（同 `MaterialManager.setMode`）：界面立刻响应，落盘失败也不回滚。
+   * 先改状态再落盘（同 `MaterialManager.setMode`）：界面立刻响应，落盘失败不回滚。
    */
   async setStyle(style: ThreadActionBarStyle, context: common.UIAbilityContext): Promise<void> {
     const next: ThreadActionBarStyle = normalizeActionBarStyle(style as number);
@@ -128,11 +119,9 @@ export class ThreadActionBarStore {
     }
   }
 
-  /** 日志用的一行摘要 */
   describe(): string {
     return `${this.style}(${actionBarStyleLabel(this.style)})`;
   }
 }
 
-/** 全局单例 */
 export const threadActionBarStore: ThreadActionBarStore = new ThreadActionBarStore();

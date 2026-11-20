@@ -19,22 +19,21 @@ export struct GlassPillButton {
   /** 官方材质的投影；不需要在深色/玻璃背景上再压一层浅影时传 false（分类胶囊贴住工具栏时用）。 */
   @Param applyShadow: boolean = true;
   @Param slot: MaterialSlot = MaterialSlot.BACK_BUTTON;
-  /** 文字色与字重：吧页分类行贴顶后，选中项用强调色 + Medium（2026-11-11 持有者定），默认沿用主文字色/Regular。 */
+  /** 文字色与字重：吧页分类行贴顶后，选中项用强调色 + Medium，默认沿用主文字色/Regular。 */
   @Param textColor: ResourceColor = AppTheme.TEXT_MAIN;
   @Param textWeight: FontWeight = FontWeight.Regular;
   /**
-   * 把材质裁到胶囊轮廓内（默认不裁，保留官方材质的边缘效果越界）。
-   * 吧页分类行一排胶囊只隔 8vp，材质自带的边缘层会溢进缝里、几颗胶囊连成一条浅灰带
-   * （2026-11-11 实测：不裁时缝里恒定 220、面板色 233、胶囊内 237，且与 `applyShadow` 无关）。
+   * 把材质裁到胶囊轮廓内（默认不裁，保留官方材质边缘效果越界）。吧页分类行一排胶囊只隔 8vp，
+   * 不裁时材质自带的边缘层会溢进缝里、几颗胶囊连成一条浅灰带（与 `applyShadow` 无关）。
    */
   @Param clipToPill: boolean = false;
   /**
    * 裁边外扩量（vp，默认 0 = 正好裁在胶囊轮廓上）。设成 4 时裁切区比胶囊各方向大 4vp，
-   * 材质自带的边缘层能在轮廓外保留 4vp 再被切掉（2026-11-11 持有者定，缝里 220 → 244~249）。
+   * 材质自带的边缘层能在轮廓外保留 4vp 再被切掉。
    */
   @Param clipOutset: number = 0;
   /**
-   * 强制材质静态（`interactive:false`、`lightEffect:null`，2026-11-11 持有者定）：
+   * 强制材质静态（`interactive:false`、`lightEffect:null`）：
    * 分类行整排紧挨着的胶囊不参与按压形变与光随指动——任意一颗形变都会让 8vp 缝里的
    * 边缘层跟着动，整排观感发飘。默认 false，其它调用方仍跟随全局动效开关。
    */

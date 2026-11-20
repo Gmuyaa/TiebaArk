@@ -1,3 +1,7 @@
+/**
+ * 应用入口：创建时装载外观/材质/字号等设置、初始化吧头像索引、注入屏蔽名单的账号作用域，
+ * 并异步恢复登录态（不 await，避免启动被存储 IO 拖住）；窗口与前后台生命周期在下方转发。
+ */
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { applyNativeTheme } from '../theme/NativeTheme';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
@@ -13,7 +17,8 @@ import { homeTopNavStore } from '../common/appearance/HomeTopNavStore';
 import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHideStore';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { networkKindWatch } from '../utils/NetworkKindWatch';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
@@ -39,17 +44,11 @@ export default class EntryAbility extends UIAbility {
     catch (_) { hilog.warn(DOMAIN, 'CachePolicy', 'export cache maintenance failed'); }
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onCreate');
 
-    /*
-     * 吧头像落盘索引（吧名→fid/URL）：启动读一次、后台时落盘。
-     * 放在 Ability 层而不是页面里——它服务首页/收藏/搜帖三处，不该由某个组件持有生命周期。
-     */
+    // 吧头像落盘索引服务首页/收藏/搜帖三处，放在 Ability 层而不住在某个页面里。
     void initForumAvatarCache(this.context);
 
-    /*
-     * 屏蔽名单按账号分键，但落盘层（utils/ThreadBlockStore）不该 import 认证层：
-     * 账号作用域在这里注入一次，口径在 viewmodel/SessionOwner（登录取 uid、未登录 anonymous）。
-     * 惰性求值，注入时机只需早于第一个读取它的页面。
-     */
+    // 屏蔽名单按账号分键，但落盘层（utils/ThreadBlockStore）不该 import 认证层：
+    // 账号作用域在这里注入一次，口径在 viewmodel/SessionOwner；惰性求值，只需早于第一个读取它的页面。
     setThreadBlockScopeProvider(threadBlockScope);
 
     visualThemeStore.load(this.context);
@@ -60,14 +59,14 @@ export default class EntryAbility extends UIAbility {
 
     fontScaleStore.load(this.context);
 
-    lowFlowStore.load(this.context).catch(() => {});
+    networkKindWatch.start();
+    imageLoadStore.load(this.context).catch(() => {});
     imageLayoutStore.load(this.context).catch(() => {});
     forumDefaultTabStore.load(this.context).catch(() => {});
 
     superResolutionStore.load(this.context).catch(() => {});
 
-    // 恢复登录态：异步且不 await——启动流程不被存储 IO 拖住，
-    // 读不到就当未登录（只读浏览照旧可用）。
+    // 恢复登录态：异步且不 await——启动流程不被存储 IO 拖住，读不到就当未登录。
     authSession.restore(this.context).then(() => {
       restoreForumCache(this.context);
       hilog.info(DOMAIN, 'TiebaArk', 'auth restore done: %{public}s', authSession.describe());
@@ -75,19 +74,14 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, 'TiebaArk', '%{public}s', 'auth restore failed, fallback to logged-out');
     });
     /*
-     * 沉浸光感偏好（用户选的强度档位）：同样异步、不 await ——
-     * `MaterialManager.load` 内部已把异常吞掉并回落 `SYSTEM`，读不出来不影响启动。
-     * 必须在首帧前发起：页面 `aboutToAppear` 里读到的可能是默认值，
-     * 但 `mode` 是 `@Trace` 的，读到偏好后会自己刷新一次。
+     * 沉浸光感偏好：异步、不 await——`MaterialManager.load` 内部已吞异常并回落 `SYSTEM`。
+     * 必须在首帧前发起：`mode` 是 `@Trace` 的，读到偏好后会自己刷新一次。
      */
     materialManager.load(this.context).catch(() => {});
 
     threadActionBarStore.load(this.context).catch(() => {});
 
-    /*
-     * 首页顶部频道页签样式偏好：与操作栏样式同一套取舍（异步、不 await、异常已吞）。
-     * `style` 是 `@Trace` 的，读到偏好后 ForumListView 自己会刷新一次。
-     */
+    // 首页顶部频道页签样式偏好：同上（异步、不 await、异常已吞）；`style` 是 `@Trace` 的。
     forumLevelStore.load(this.context).catch(() => {});
     signStrategyStore.load(this.context).catch(() => {});
     homeTopNavStore.load(this.context).catch(() => {});
@@ -104,6 +98,7 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     motionStore.stopSystemTracking();
+    networkKindWatch.stop();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onDestroy');
   }
 

@@ -11,11 +11,8 @@ function ownerKey(): string {
 }
 
 /**
- * 吧头：简介与公开计数属于本页，关注关系/今日签到/等级经验只读 `ForumStateStore`。
- *
- * 2026-11-13（1.0.268）：不再自己维护"已关注的关注态"和"今天的签到态"，也不再单独发
- * rn=1 的首页请求——那些状态由吧页首包与关注吧列表回填到身份实例上，本 VM 只做转发与
- * 按钮文案。页面实例重建（返回再进）不会再触发重复读取。
+ * 吧头：简介与公开计数属于本页，关注关系/今日签到/等级经验只读 `ForumStateStore`。本 VM 只做转发
+ * 与按钮文案——状态由吧页首包与关注吧列表回填到身份实例上，页面实例重建不会触发重复读取。
  */
 @ObservedV2
 export class ForumHeaderVM {
@@ -121,7 +118,7 @@ export class ForumHeaderVM {
     return this.identity.completed(forumSignDay());
   }
 
-  /** 进行中只由按钮内的转圈表示，文案保持状态本身（2026-11-13 持有者要求去掉「…中…」字样）。 */
+  /** 进行中只由按钮内的转圈表示，文案保持状态本身，不加「…中…」字样。 */
   buttonLabel(): string {
     const value: ForumIdentity = this.identity;
     if (!value.known()) { return '重试'; }

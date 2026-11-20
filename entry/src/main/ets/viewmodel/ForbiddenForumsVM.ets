@@ -61,9 +61,8 @@ export class ForbiddenForumsVM {
       this.items = []; this.loaded = false; this.hasMore = false; this.page = 0; this.stalled = false; this.pagingError = '';
     }
     /*
-     * ⚠️ 刷新分支**不动** `items`/`page`/`hasMore`：
-     * 失败时要把已有内容原样留在屏幕上，并保住游标（重试仍请求同一页）。
-     * 成功后再整体替换（下面的 `mergeForbiddenForums([], …)`）。
+     * ⚠️ 刷新分支**不动** `items`/`page`/`hasMore`：失败时要把已有内容原样留在屏幕上，并保住游标
+     * （重试仍请求同一页）。成功后再整体替换（下面的 `mergeForbiddenForums([], …)`）。
      */
     const requested: number = more ? this.page + 1 : 1;
     this.loading = !more; this.loadingMore = more;
@@ -272,10 +271,9 @@ export class ForbiddenForumsVM {
   }
 
   /**
-   * 手动重试分页：清掉 `pagingError` 后请求**失败的那一页**（页码未推进）。
-   *
-   * 与自动续页分道的原因：失败后再次触底不该静默重发（可能连环打失败接口），
-   * 只有用户点了「加载失败，点击重试」才允许再请求。没有待重试的错误时是空操作。
+   * 手动重试分页：清掉 `pagingError` 后请求**失败的那一页**（页码未推进）。与自动续页分道的原因：
+   * 失败后再次触底不该静默重发（可能连环打失败接口），只有用户点了「加载失败，点击重试」才允许
+   * 再请求。没有待重试的错误时是空操作。
    */
   async retryPaging(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.pagingError.length === 0) { return; }

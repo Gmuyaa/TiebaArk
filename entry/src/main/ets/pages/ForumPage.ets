@@ -1,6 +1,6 @@
 import { motionStore } from '../common/appearance/MotionStore';
 import { MotionEffect } from '../common/appearance/MotionConfig';
-import { motionDuration, motionSpringCurve } from '../common/appearance/MotionPolicy';
+import { motionDuration, motionSpringCurve, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageState, ListFooter } from '../components/PageState';
@@ -10,21 +10,16 @@ import { ForumRefreshButton } from '../components/ForumRefreshButton';
 import { FloatingForumTabs } from '../components/FloatingForumTabs';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 /**
- * 吧页面：某个吧的帖子列表。
- *
- * 入口是帖子详情页顶部的"吧头像 + 吧名"，首页信息流里的吧标签也能进。
- * 数据仍走已验证的 `/c/f/frs/page` 链路（`TiebaApi.fetchThreadList`），
- * 列表状态复用 `ThreadListVM`；吧头关注/签到由 `ForumIdentity` 与 `ForumHeaderVM` 承接。
- *
- * 配色沿用首页信息流（`AppTheme` + 标准帖子卡片），它是"帖子卡片流"，
- * 与论坛列表同一种形态；详情页那套 `DetailTheme` 留给详情页自己。
+ * 吧页面：某个吧的帖子列表。数据走 `/c/f/frs/page`（`TiebaApi.fetchThreadList`），列表状态复用 `ThreadListVM`，
+ * 吧头关注/签到由 `ForumIdentity` 与 `ForumHeaderVM` 承接；配色沿用首页信息流那套 `AppTheme`，
+ * 详情页的 `DetailTheme` 不在这里用。
  */
 
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { common } from '@kit.AbilityKit';
 import { DirectoryKind } from '../model/PageDirectory';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction, AnimatorResult } from '@kit.ArkUI';
+import { promptAction, AnimatorResult, FrameCallback, curves } from '@kit.ArkUI';
 import { HdsNavDestination, hdsEffect } from '@kit.UIDesignKit';
 import { ForumTab, ThreadBrief, threadBriefIdentity } from '../model/ThreadList';
 import { ThreadBriefDataSource } from '../model/ThreadBriefDataSource';
@@ -42,7 +37,8 @@ import { TaggedThreadText } from '../components/TaggedThreadText';
 import { HelpThreadCard } from '../components/HelpThreadCard';
 import { ThreadCardActionState, ThreadCardActionsVM } from '../viewmodel/ThreadCardActionsVM';
 import { AvatarComponent } from '../components/AvatarComponent';
-import { lowFlowStore } from '../common/appearance/LowFlowStore';
+import { imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
 import { buildThreadCardMenu } from '../components/ThreadCardMenu';
 import { visibleThreads } from '../model/ThreadBlock';
 import { threadBlockStore, ThreadBlockStore } from '../utils/ThreadBlockStore';
@@ -59,6 +55,12 @@ import { smartReachStore, SmartReachStore, ForumTabsStyle } from '../common/appe
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { ForumDefaultTab } from '../model/ForumDefaultTab';
 
+class ForumTabFrameCallback extends FrameCallback {
+  private ready: () => void;
+  constructor(ready: () => void) { super(); this.ready = ready; }
+  onIdle(_timeLeft: number): void { this.ready(); }
+}
+
 /** 仅缓存吧页返回所需的 VM 与滚动偏移，不引入全局状态框架。 */
 class ForumPageState {
   vm: ThreadListVM = new ThreadListVM();
@@ -72,14 +74,10 @@ const FORUM_IDENTITY_MIN_HEIGHT: number = 116;
 const FORUM_TOOLBAR_BUTTON_SIZE: number = 40;
 const FORUM_IDENTITY_BOTTOM_GAP: number = 12;
 const FORUM_IDENTITY_CARD_GAP: number = 0;
-/** 封面始终维持原尺寸；只有纯色/平滑背景将身份和帖子前移。 */
-// 吧度（vp头图高）。2026-11-10 持有者定：整体放大 10%（184 → 202）。
+/** 吧页头图高（vp）；只有纯色/平滑背景会把身份与帖子前移 */
 const FORUM_COVER_FULL_HEIGHT: number = 202;
 
-// 图与内容的重叠量（vp）：内容面板上移压进图片的高度（2026-11-11 持有者定）。
-// 取 20 = 内容区顶部圆角半径，使圆角弧线的侧边切点正好落在图片底边上，
-// 角内露出的是图片自己的底角而不是页底楔形。面板画在图上方，故图中段底边被盖住。
-// （2026-11-10 曾归零：那时内容从图下边缘开始排、不再压图。）
+// 图与内容的重叠量（vp）：取 20 = 内容区顶部圆角半径，使圆角切点正好落在图片底边上，角内露的是图片底角而非页底楔形。
 const FORUM_COVER_OVERLAP: number = 20;
 const FORUM_IDENTITY_PANEL_RADIUS: number = 16;
 /** 顶部工具栏内容行高；内容列表视口从其下沿开始。 */
@@ -91,13 +89,15 @@ const FORUM_TAB_PILL_HEIGHT: number = 36;
 const FORUM_TAB_PILL_PADDING: number = 16;
 const FORUM_TAB_PILL_GAP: number = 8;
 const FORUM_TAB_PILL_INSET: number = 16;
-// 胶囊到面板顶边的距离 = 3/4 个圆角半径（2026-11-11 持有者定）：面板顶角 20vp 圆角，取 15。
-// 底部留白沿用原来的 5vp（原 46 行高居中时的上下各 5），故整行高 = 36 + 15 + 5。
+// 胶囊到面板顶边的距离 = 3/4 个圆角半径（面板顶角 20vp）；底部留白 5vp，整行高 = 36 + 15 + 5。
 const FORUM_TAB_PILL_TOP_GAP: number = 15;
 const FORUM_TAB_PILL_BOTTOM_GAP: number = 5;
 const FORUM_TAB_ROW_HEIGHT: number = FORUM_TAB_PILL_HEIGHT + FORUM_TAB_PILL_TOP_GAP + FORUM_TAB_PILL_BOTTOM_GAP;
-/** 常规吸顶那一行的行高：文字行本身 + 上下留白各取胶囊行的一半（2026-11-12 持有者定）。 */
+/** 常规吸顶那一行的行高：文字行本身 + 上下留白各取胶囊行的一半。 */
 const FORUM_TAB_STICKY_ROW_HEIGHT: number = 41;
+const FORUM_TAB_STICKY_GAP: number = 24;
+const FORUM_TAB_STICKY_INDICATOR_WIDTH: number = 18;
+const FORUM_TAB_SILK_CURVE: ICurve = curves.cubicBezierCurve(0.2, 0, 0, 1);
 
 @ComponentV2
 export struct ForumPage {
@@ -122,9 +122,8 @@ export struct ForumPage {
   @Local restorePending: boolean = false;
   @Local pinnedExpanded: boolean = false;
   /**
-   * 状态栏高度（vp）。窗口全屏布局下页面从 y=0 起排，**Hero 的内容要自己让出这一段**，
-   * 否则返回键会压在状态栏上（既重叠又点不到，状态栏会吃掉那一片触摸）。
-   * 封面仍从 y=0 铺起，工具栏内容整体下移。
+   * 状态栏高度（vp）。窗口全屏布局下页面从 y=0 起排，Hero 的内容要自己让出这一段，否则返回键压在状态栏上
+   * （既重叠又点不到，状态栏会吃掉那片触摸）。封面仍从 y=0 铺起，工具栏内容整体下移。
    */
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   /** 吧信息滚出视口的进度 0~1，驱动顶部分类提示条和圆角收拢。 */
@@ -132,9 +131,8 @@ export struct ForumPage {
   @Local categoryScrollRevision: number = 0;
   @Local categoriesAtTop: boolean = true;
   /**
-   * 分类行是否已经贴到工具栏下沿（吸顶生效）。
-   * 参考「我的华为」社区页：胶囊随内容上滑、贴住工具栏那一刻**瞬间**换成官方沉浸材质底带，
-   * 此前保持透明（胶囊直接浮在内容上）。
+   * 分类行是否已贴到工具栏下沿（吸顶生效）。参考「我的华为」社区页：胶囊随内容上滑、贴住工具栏那一刻
+   * 瞬间换成官方沉浸材质底带，此前保持透明。
    */
   @Local tabsDocked: boolean = false;
   /** 顶栏背板完全盖住吧头像后为 true：英雄区头像退出、顶栏头像进场（共享元素转场）。 */
@@ -142,6 +140,7 @@ export struct ForumPage {
   @Local categoryPrefs: SmartReachStore = smartReachStore;
   private topTabsScroller: Scroller = new Scroller();
   private topTabWidths: Map<number, number> = new Map<number, number>();
+  @Local topTabWidthRevision: number = 0;
   @Local refreshOwnsCollision: boolean = false;
   @Local refreshButtonX: number = -1;
   @Local refreshButtonY: number = -1;
@@ -155,10 +154,14 @@ export struct ForumPage {
   @Local pageVisible: boolean = true;
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
-  @Local contentShift: number = 0;
-  @Local contentOpacity: number = 1;
+  @Local previewTabId: number = 0;
   private active: boolean = true;
-  private tabAnimation: number = 0;
+  private tabSwitchRevision: number = 0;
+  private swiperReady: boolean = false;
+  private lastSyncedHeaderOffset: number = -1;
+  private tabSwiper: SwiperController = new SwiperController();
+  private tabScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
+  private tabSources: Map<number, ThreadBriefDataSource> = new Map<number, ThreadBriefDataSource>();
 
   aboutToDisappear(): void {
     this.active = false;
@@ -166,12 +169,51 @@ export struct ForumPage {
   }
 
   private resetTabTransition(): void {
-    ++this.tabAnimation;
-    this.contentShift = 0;
-    this.contentOpacity = 1;
+    ++this.tabSwitchRevision;
+    this.previewTabId = 0;
   }
 
-  private scroller: ListScroller = new ListScroller();
+  private activeTabId(): number {
+    return this.vm.selectedTabId > 0 ? this.vm.selectedTabId : 0;
+  }
+
+  private displaySelectedTabId(): number {
+    return this.previewTabId > 0 ? this.previewTabId : this.vm.targetTabId();
+  }
+
+  private displayTabs(): ForumTab[] {
+    if (this.vm.tabs.length > 0) { return this.vm.tabs; }
+    return [new ForumTab()];
+  }
+
+  private selectedTabIndex(): number {
+    const targetId: number = this.displaySelectedTabId();
+    const index: number = this.vm.tabs.findIndex((tab: ForumTab): boolean => tab.id === targetId);
+    return index >= 0 ? index : 0;
+  }
+
+  private scrollerForTab(tabId: number): ListScroller {
+    let scroller: ListScroller | undefined = this.tabScrollers.get(tabId);
+    if (scroller === undefined) {
+      scroller = new ListScroller();
+      this.tabScrollers.set(tabId, scroller);
+    }
+    return scroller;
+  }
+
+  private activeScroller(): ListScroller {
+    return this.scrollerForTab(this.activeTabId());
+  }
+
+  private sourceForTab(tabId: number): ThreadBriefDataSource {
+    let source: ThreadBriefDataSource | undefined = this.tabSources.get(tabId);
+    if (source === undefined) {
+      source = new ThreadBriefDataSource();
+      source.sync(this.regularThreadsForTab(tabId));
+      this.tabSources.set(tabId, source);
+    }
+    return source;
+  }
   /**
    * 每条帖子一个横向图片列表控制器（与首页 ForumListView 同一模式）：
    * 各帖各自维护图集滚动位置，互不串位。
@@ -179,6 +221,7 @@ export struct ForumPage {
   private imageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
   /** 全屏看图（与本页帖子导航分离，点图片只开查看器、不进帖） */
   @Local viewerUrls: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
 
   private pageState: ForumPageState | undefined = undefined;
@@ -198,8 +241,7 @@ export struct ForumPage {
     }).catch(() => {
       // 拿不到就保持兜底值，Hero 只偏差几像素
     });
-    // 吧名为空就不发请求：空论坛名在服务端只会换来一次 110001，
-    // 界面直接走"没拿到吧名"的空态更诚实
+    // 吧名为空就不发请求：空论坛名在服务端只会换来一次 110001，走"没拿到吧名"的空态更诚实
     if (name.length === 0) {
       return;
     }
@@ -218,8 +260,7 @@ export struct ForumPage {
     this.restorePending = pageState.scrollOffset > 0;
     // 返回本页复用缓存；偏好变更后再次进入同一吧时重新按新默认分区加载。
     const context: common.UIAbilityContext = this.hostContext();
-    // 首包马上要拉：先登记，吧头状态直接等这份回包（FRS 首页同时带关注与签到段），
-    // 不再另发一次 rn=1 的请求；刷新结束由 ThreadListVM 清除登记。
+    // 首包马上要拉：先登记，吧头状态直接等这份回包（FRS 首页同时带关注与签到段），不再另发 rn=1 请求。
     if (!this.vm.loadedOnce) { markFirstPageRead(name); }
     void forumDefaultTabStore.load(context).then(() => {
       if (!this.active || this.pageState !== pageState) { return; }
@@ -253,8 +294,8 @@ export struct ForumPage {
   }
 
   /**
-   * 打开吧成员页（A-01）。与 `openForumDirectory` 同一前置：`getMemberInfo` 只认 `forum_id`，
-   * 拿不到 fid 就如实提示，不发必然失败的请求；顺手保存滚动位置。
+   * 打开吧成员页。与 `openForumDirectory` 同一前置：`getMemberInfo` 只认 `forum_id`，拿不到 fid 就如实提示，
+   * 不发必然失败的请求。
    */
   private openForumMember(): void {
     if (this.vm.forum.id <= 0) {
@@ -314,8 +355,7 @@ export struct ForumPage {
     }
     this.refreshing = true;
     this.settlePullDistance(FORUM_REFRESH_OFFSET);
-    // 悬浮刷新按钮：先回顶再刷新。回顶是点击后的即时反馈，不必等网络回来——
-    // 等完再滚会让"点了没反应"和"出来先蹦一下"两件事同时发生。
+    // 悬浮刷新按钮：先回顶再刷新。回顶是点击后的即时反馈，等网络回来再滚会让"点了没反应"和"出来先蹦一下"同时发生。
     if (scrollToContentTop) { this.scrollToThreadsTop(); }
     try {
       await this.vm.refresh(this.hostContext(), this.forumName, this.vm.loadedOnce);
@@ -331,12 +371,8 @@ export struct ForumPage {
 
   /**
    * 帖子区顶部在 List 内的偏移 = 第一项「图下露出段」的高度（`coverSpacerHeight`）。
-   *
-   * 不能用 `heroHeight() - FORUM_TOOLBAR_HEIGHT`：`heroHeight()` 含吧信息本体高与两处间距，
-   * 而吧信息本体画在 hero 浮层里、不占列表高度，于是回顶会多滚
-   * `forumIdentityHeight + FORUM_IDENTITY_BOTTOM_GAP + FORUM_IDENTITY_CARD_GAP`
-   * （孙笑川吧/核战避难所吧实测 128vp）。多滚的那一段会被吸顶分类栏盖住，
-   * 表现为「点悬浮刷新按钮回顶后，最顶上那张卡的头像行看不见」。
+   * 不能用 `heroHeight() - FORUM_TOOLBAR_HEIGHT`：heroHeight() 含吧信息本体高与两处间距，而本体画在 hero 浮层里、
+   * 不占列表高度，回顶会多滚一段并被吸顶分类栏盖住（表现为「回顶后最顶上那张卡的头像行看不见」）。
    */
   private contentTopOffset(): number {
     return this.coverSpacerHeight();
@@ -346,7 +382,7 @@ export struct ForumPage {
   private scrollToThreadsTop(): void {
     if (!this.active) { return; }
     const top: number = this.contentTopOffset();
-    this.scroller.scrollTo({ xOffset: 0, yOffset: top, animation: motionStore.isOn(MotionEffect.MOVE) });
+    this.activeScroller().scrollTo({ xOffset: 0, yOffset: top, animation: motionStore.isOn(MotionEffect.MOVE) });
     if (this.pageState !== undefined) { this.pageState.scrollOffset = top; }
   }
 
@@ -369,7 +405,7 @@ export struct ForumPage {
       return;
     }
     try {
-      this.pageState.scrollOffset = this.scroller.currentOffset().yOffset;
+      this.pageState.scrollOffset = this.activeScroller().currentOffset().yOffset;
     } catch (err) {
       // List 尚未绑定时保持已有位置，不影响跳转。
     }
@@ -381,7 +417,7 @@ export struct ForumPage {
     }
     this.restorePending = false;
     if (this.pageState.scrollOffset > 0) {
-      this.scroller.scrollTo({
+      this.activeScroller().scrollTo({
         xOffset: 0,
         yOffset: this.pageState.scrollOffset,
         animation: false
@@ -389,15 +425,54 @@ export struct ForumPage {
     }
   }
 
+  /** 同步非当前分类的折叠头滚动位置，保证 Swiper 横滑时头图与吸顶栏纹丝不动。 */
+  private syncInactiveTabHeaders(activeId: number, headerOffset: number): void {
+    const dock: number = this.coverSpacerHeight();
+    const clamped: number = Math.max(0, Math.min(headerOffset, dock));
+    this.tabScrollers.forEach((scroller: ListScroller, id: number): void => {
+      if (id === activeId) { return; }
+      try {
+        const current: number = scroller.currentOffset().yOffset;
+        if (clamped < dock - 0.5) {
+          if (Math.abs(current - clamped) > 0.5) {
+            scroller.scrollTo({ xOffset: 0, yOffset: clamped, animation: false });
+          }
+        } else if (current < dock - 0.5) {
+          scroller.scrollTo({ xOffset: 0, yOffset: dock, animation: false });
+        }
+      } catch (_err) {
+        // 邻页 List 尚未挂载时忽略，挂载时由 alignTabScrollerOnAppear 对齐。
+      }
+    });
+  }
+
+  private alignTabScrollerOnAppear(tabId: number): void {
+    const headerOffset: number = Math.min(this.contentScrollOffset, this.coverSpacerHeight());
+    if (headerOffset <= 0.5) { return; }
+    try {
+      const scroller: ListScroller = this.scrollerForTab(tabId);
+      const current: number = scroller.currentOffset().yOffset;
+      if (current < headerOffset - 0.5) {
+        scroller.scrollTo({ xOffset: 0, yOffset: headerOffset, animation: false });
+      }
+    } catch (_err) {}
+  }
+
   /** 吧信息与帖子同列表滚动；分类吸顶位置是工具栏下沿。 */
-  private syncTabsSticky(): void {
+  private syncTabsSticky(tabId: number = this.activeTabId()): void {
+    if (tabId !== this.activeTabId()) { return; }
+    let offset: number = 0;
+    try {
+      offset = this.scrollerForTab(tabId).currentOffset().yOffset;
+    } catch (_err) {
+      return;
+    }
     const distance: number = this.heroHeight() - FORUM_TOOLBAR_HEIGHT;
-    const offset: number = this.scroller.currentOffset().yOffset;
     this.contentScrollOffset = Math.max(0, offset);
     this.categoriesAtTop = offset <= 2;
     // 贴住工具栏下沿即切换材质底带；用内容顶部偏移做判据，不引动画（瞬间切换）。
     const docked: boolean = offset >= this.contentTopOffset() - 0.5;
-    // 顶栏完全盖住吧头像这一刻：头像+吧名用共享元素转场进顶栏（2026-11-12 持有者定）。
+    // 顶栏完全盖住吧头像这一刻：头像+吧名用共享元素转场进顶栏。
     const covered: boolean = offset >= this.avatarCoverOffset();
     if (covered !== this.identityCovered) {
       this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, (): void => {
@@ -407,13 +482,16 @@ export struct ForumPage {
     if (docked !== this.tabsDocked) { this.tabsDocked = docked; }
     const progress: number = Math.max(0, Math.min(1, offset / distance));
     if (Math.abs(progress - this.tabsNavProgress) > 0.001) { this.tabsNavProgress = progress; }
+    const headerOffset: number = Math.min(this.contentScrollOffset, this.coverSpacerHeight());
+    if (Math.abs(headerOffset - this.lastSyncedHeaderOffset) > 0.5) {
+      this.lastSyncedHeaderOffset = headerOffset;
+      this.syncInactiveTabHeaders(tabId, headerOffset);
+    }
   }
 
   /**
-   * 「顶栏完全盖住吧头像」对应的滚动量（2026-11-12 重写）。
-   * hero 整体被 translate(-offset)，所以头像底边的屏幕 y = 布局 y - offset；
-   * 头像底边压到顶栏下沿（statusBarH + 工具栏高）那一点就是交接点。
-   * 全部用现有几何常量直接算，不再依赖运行时测量，字号/简介变化由 identityGap() 自带。
+   * 「顶栏完全盖住吧头像」对应的滚动量。hero 整体被 translate(-offset)，头像底边的屏幕 y = 布局 y - offset，
+   * 压到顶栏下沿（statusBarH + 工具栏高）即交接点。全部用现有几何常量直接算，不依赖运行时测量。
    */
   private avatarCoverOffset(): number {
     const avatarBottom: number = this.coverHeight() - FORUM_COVER_OVERLAP - this.identityGap();
@@ -446,39 +524,42 @@ export struct ForumPage {
    */
   private openImages(images: string[], index: number): void {
     this.viewerUrls = images.map((url: string): string => feedImageInfo(url).origin || url);
+    this.viewerItems = viewerImagesForFeed(images);
     this.viewerIndex = index;
   }
 
-  private pinnedThreads(): ThreadBrief[] {
-    return visibleThreads(this.vm.threads, threadBlockStore.rules(), false)
+  private pinnedThreadsForTab(tabId: number): ThreadBrief[] {
+    void this.vm.tabSnapshotRevision;
+    return visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false)
       .filter((item: ThreadBrief) => item.isTop && !item.isVideo);
   }
 
-  /**
-   * 普通帖数据源。必须是 `@Computed`：`Repeat` 以数组身份做差量，若每次 build 都新建数组，
-   * 滚动期间的任何状态变化都会让它把整表当成"新数据"重新算一遍键值。
-   * 与首页 `ForumListView.visibleRecommendThreads` 同一口径。
-   */
-  @Computed
-  get regularThreads(): ThreadBrief[] {
-    return visibleThreads(this.vm.threads, threadBlockStore.rules(), false)
+  private regularThreadsForTab(tabId: number): ThreadBrief[] {
+    void this.vm.tabSnapshotRevision;
+    return visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false)
       .filter((item: ThreadBrief) => !item.isTop && !item.isVideo);
   }
 
-  /**
-   * 普通帖数据源：`LazyForEach` 只认它。
-   *
-   * 2026-11-13 真机实测：`Repeat`（含去掉 `virtualScroll` 的写法）在**整批替换**数据后
-   * 不会重建已实例化的 `ListItem` —— 下拉刷新/悬浮按钮刷新回源成功（批次指纹变了），
-   * 屏上卡片却不动（与首页同一个病，见 `docs/开发记录/2026-11-13-首页刷新不更新.md`）。
-   * 数据源把"整批替换"（`onDataReloaded`）与"尾部追加"（`onDataAdd`）分开通知。
-   */
-  private threadSource: ThreadBriefDataSource = new ThreadBriefDataSource();
   @Local blocks: ThreadBlockStore = threadBlockStore;
 
-  @Monitor('vm.threads', 'blocks.hidden', 'blocks.blockedForums', 'blocks.blockedUsers')
+  @Monitor('vm.threads', 'vm.tabSnapshotRevision', 'blocks.hidden', 'blocks.blockedForums', 'blocks.blockedUsers')
   syncThreadSource(): void {
-    this.threadSource.sync(this.regularThreads);
+    const activeId: number = this.activeTabId();
+    this.sourceForTab(activeId).sync(this.regularThreadsForTab(activeId));
+    this.tabSources.forEach((source: ThreadBriefDataSource, tabId: number): void => {
+      if (tabId !== activeId) {
+        source.sync(this.regularThreadsForTab(tabId));
+      }
+    });
+  }
+
+  @Monitor('vm.tabs', 'vm.selectedTabId')
+  syncSwiperSelection(): void {
+    if (!this.swiperReady || this.previewTabId > 0) { return; }
+    const index: number = this.vm.tabs.findIndex((tab: ForumTab): boolean => tab.id === this.vm.selectedTabId);
+    if (index >= 0) {
+      this.tabSwiper.changeIndex(index, false);
+    }
   }
 
   /**
@@ -538,7 +619,7 @@ export struct ForumPage {
         // Viewer 覆盖已有控件，避免关图重建材质与重播刷新按钮入场动画。
         if (this.forumName.length > 0 && this.vm.loadedOnce) {
           if (this.categoryPrefs.forumTabsFloating) {
-          FloatingForumTabs({ tabs: this.vm.tabs, selectedId: this.vm.targetTabId(),
+          FloatingForumTabs({ tabs: this.vm.tabs, selectedId: this.displaySelectedTabId(),
             viewportWidth: this.viewportWidth, viewportHeight: this.viewportHeight,
             sideInset: visualThemeStore.isPaper ? 0 : 8,
             topInset: this.statusBarH + FORUM_TOOLBAR_HEIGHT,
@@ -572,8 +653,8 @@ export struct ForumPage {
         }
 
         if (this.viewerUrls.length > 0) {
-          ImageViewer({ imageUrls: this.viewerUrls, initialIndex: this.viewerIndex,
-            onClose: (): void => { this.viewerUrls = []; this.viewerIndex = 0; } })
+          ImageViewer({ imageUrls: this.viewerUrls, images: this.viewerItems, initialIndex: this.viewerIndex,
+            onClose: (): void => { this.viewerUrls = []; this.viewerItems = []; this.viewerIndex = 0; } })
             .zIndex(100)
             .transition(imageLayerRetentionTransition())
         }
@@ -657,11 +738,11 @@ export struct ForumPage {
           .opacity(FORUM_HERO_PATTERN_OPACITY)
       }
 
-      // 吧信息直接落在图上（2026-11-10 持有者定）：白字，头像白描边、不跨界。
+      // 吧信息直接落在图上：白字，头像白描边、不跨界。
       // 图保持原样式（184 高 + 24 重叠）。用 bottom 定位让浮层底边贴住图的下沿，
       // 内容向上生长——无论排多高都不会越过图边被裁（顶部方向曾被裁，见 lay_k 实测）。
       Column() {
-        // 身份块整块吸收点击（2026-11-13 持有者要求：关掉吧页签到按钮的点击穿透）。
+        // 身份块整块吸收点击，关掉签到/关注按钮的点击穿透。
         // hero 层是 HitTestMode.None，身份块空白处的点击会继续落到列表里的「查看完整封面」行，
         // 于是点签到/关注按钮的边角会连带把封面大图打开。这里用一个空点击把身份块范围内的
         // 触摸留在本层：只吸收点击，不拦拖动，列表仍可从身份块上起手滚动。
@@ -791,7 +872,7 @@ export struct ForumPage {
    * 此 Builder 只保留图下露出段的占位；吧信息不再计入列表高度，
    * tabs 紧跟图底，中间不再出现整段空白。
    *
-   * 2026-11-13（持有者要求关掉点击穿透）：占位行在 z 序上盖住 hero 身份块，
+   * 点击穿透：占位行在 z 序上盖住 hero 身份块，
    * 若整条占位行都可点，吧名与关注/签到按钮会**整块**被它吞掉（真机命中日志只看到
    * `forum-cover-open` 接受点击）。所以只把身份块上方那条带做成可点，
    * 身份块所在高度留一条不可点的占位行，让点击落到 hero 层的身份块上。
@@ -803,7 +884,11 @@ export struct ForumPage {
         .id('forum-cover-open').accessibilityText('查看完整封面')
         .hitTestBehavior(this.vm.heroHeadline.length > 0 ? HitTestMode.Default : HitTestMode.None)
         .onClick(() => {
-          if (this.vm.heroHeadline.length > 0) { this.viewerUrls = [this.vm.heroHeadline]; this.viewerIndex = 0; }
+          if (this.vm.heroHeadline.length > 0) {
+            this.viewerUrls = [this.vm.heroHeadline];
+            this.viewerItems = [];
+            this.viewerIndex = 0;
+          }
         })
       Row().width('100%').height(Math.max(0, this.coverSpacerHeight() - this.coverClickHeight()))
     }
@@ -864,8 +949,53 @@ export struct ForumPage {
 
   /** 贴住工具栏后官方材质胶囊的宽度：沿用常规胶囊实测宽度，未测到前按字数估算。 */
   private tabPillWidth(tab: ForumTab): number {
+    void this.topTabWidthRevision;
     const measured: number | undefined = this.topTabWidths.get(tab.id);
     return measured ?? (tab.name.length * 15 + FORUM_TAB_PILL_PADDING * 2);
+  }
+
+  private topTabGap(): number {
+    return this.stickyTabs() ? FORUM_TAB_STICKY_GAP : FORUM_TAB_PILL_GAP;
+  }
+
+  private hasValidSelectedTopTab(): boolean {
+    const targetId: number = this.displaySelectedTabId();
+    return this.vm.tabs.some((tab: ForumTab): boolean => tab.id === targetId);
+  }
+
+  private stickyIndicatorX(): number {
+    void this.topTabWidthRevision;
+    const targetId: number = this.displaySelectedTabId();
+    let start: number = FORUM_TAB_PILL_INSET;
+    for (const tab of this.vm.tabs) {
+      const width: number = this.topTabWidths.get(tab.id) ?? tab.name.length * 15;
+      if (tab.id === targetId) {
+        return start + (width - FORUM_TAB_STICKY_INDICATOR_WIDTH) / 2;
+      }
+      start += width + FORUM_TAB_STICKY_GAP;
+    }
+    return FORUM_TAB_PILL_INSET;
+  }
+
+  private capsuleIndicatorX(): number {
+    void this.topTabWidthRevision;
+    const targetId: number = this.displaySelectedTabId();
+    let start: number = 0;
+    for (const tab of this.vm.tabs) {
+      const width: number = this.tabPillWidth(tab);
+      if (tab.id === targetId) {
+        return start;
+      }
+      start += width + FORUM_TAB_PILL_GAP;
+    }
+    return 0;
+  }
+
+  private capsuleIndicatorWidth(): number {
+    void this.topTabWidthRevision;
+    const targetId: number = this.displaySelectedTabId();
+    const tab: ForumTab | undefined = this.vm.tabs.find((item: ForumTab): boolean => item.id === targetId);
+    return tab !== undefined ? this.tabPillWidth(tab) : 0;
   }
 
   /**
@@ -883,40 +1013,53 @@ export struct ForumPage {
   }
 
   /**
-   * 常规吸顶分类行：纯文字 + 选中下划线，无胶囊、无材质（2026-11-12 持有者定）。
+   * 常规吸顶分类行：纯文字 + 选中下划线，无胶囊、无材质。
    * 这一行由外层悬浮层固定在工具栏下沿，所以背板必须铺面板色，否则内容会从字缝里穿过。
    */
   @Builder
   StickyTabsRow() {
     Scroll(this.topTabsScroller) {
-      Row({ space: 24 }) {
-        ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
-          Column({ space: 2 }) {
-            Text(tab.name).fontSize(15).maxFontScale(1.25)
-              .fontWeight(tab.id === this.vm.targetTabId() ? FontWeight.Bold : FontWeight.Normal)
-              .fontColor(tab.id === this.vm.targetTabId() ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
-              .maxLines(1)
-            Row().width(16).height(3).borderRadius(1.5)
-              .backgroundColor(tab.id === this.vm.targetTabId() ? AppTheme.ACCENT : Color.Transparent)
-          }
-          .height(FORUM_TAB_STICKY_ROW_HEIGHT)
-          // 常规吸顶：上下留白各取胶囊行的一半（底距 6vp），短线贴近分类行下沿。
-          .justifyContent(FlexAlign.End)
-          .padding({ bottom: 6 })
-          .accessibilityText(`分类 ${tab.name}${tab.id === this.vm.targetTabId() ? '，已选中' : ''}`)
-          .onClick((): void => { void this.selectForumTab(tab, index); })
-          .onAreaChange((_old: Area, area: Area): void => {
-            const width: number = Number(area.width);
-            if (this.topTabWidths.get(tab.id) !== width) {
-              this.topTabWidths.set(tab.id, width);
-              if (tab.id === this.vm.targetTabId()) { this.revealTopCategory(); }
+      Stack({ alignContent: Alignment.BottomStart }) {
+        Row({ space: FORUM_TAB_STICKY_GAP }) {
+          ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
+            Column() {
+              Text(tab.name).fontSize(15).maxFontScale(1.25)
+                .fontWeight(tab.id === this.displaySelectedTabId() ? FontWeight.Bold : FontWeight.Normal)
+                .fontColor(tab.id === this.displaySelectedTabId() ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
+                .maxLines(1)
             }
-          })
-        }, (tab: ForumTab) => String(tab.id))
+            .height(FORUM_TAB_STICKY_ROW_HEIGHT)
+            .justifyContent(FlexAlign.End)
+            .padding({ bottom: 11 })
+            .accessibilityText(`分类 ${tab.name}${tab.id === this.displaySelectedTabId() ? '，已选中' : ''}`)
+            .onClick((): void => { this.selectForumTab(tab, index); })
+            .onAreaChange((_old: Area, area: Area): void => {
+              const width: number = Number(area.width);
+              if (this.topTabWidths.get(tab.id) !== width) {
+                this.topTabWidths.set(tab.id, width);
+                this.topTabWidthRevision = (this.topTabWidthRevision || 0) + 1;
+                if (tab.id === this.vm.targetTabId()) { this.revealTopCategory(); }
+              }
+            })
+          }, (tab: ForumTab) => String(tab.id))
+        }
+        .height(FORUM_TAB_STICKY_ROW_HEIGHT)
+        .padding({ left: FORUM_TAB_PILL_INSET, right: FORUM_TAB_PILL_INSET })
+        .alignItems(VerticalAlign.Center)
+
+        if (this.hasValidSelectedTopTab()) {
+          Row()
+            .width(FORUM_TAB_STICKY_INDICATOR_WIDTH)
+            .height(3)
+            .borderRadius(1.5)
+            .backgroundColor(AppTheme.ACCENT)
+            .margin({ bottom: 6 })
+            .translate({ x: this.stickyIndicatorX() })
+            .animation({ duration: motionDuration(240, MotionEffect.MOVE), curve: FORUM_TAB_SILK_CURVE })
+            .hitTestBehavior(HitTestMode.None)
+        }
       }
       .height(FORUM_TAB_STICKY_ROW_HEIGHT)
-      .padding({ left: FORUM_TAB_PILL_INSET, right: FORUM_TAB_PILL_INSET })
-      .alignItems(VerticalAlign.Center)
     }
     .width('100%').height(FORUM_TAB_STICKY_ROW_HEIGHT)
     .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.Start)
@@ -928,19 +1071,20 @@ export struct ForumPage {
   }
   private revealTopCategory(): void {
     if (this.categoryPrefs.forumTabsFloating) { return; }
-    setTimeout((): void => {
+    this.getUIContext().postFrameCallback(new ForumTabFrameCallback((): void => {
       if (!this.active || this.categoryPrefs.forumTabsFloating) { return; }
+      const gap: number = this.topTabGap();
       let start: number = FORUM_TAB_PILL_INSET;
       for (const tab of this.vm.tabs) {
-        const width: number = this.topTabWidths.get(tab.id) ?? tab.name.length * 16;
-        if (tab.id === this.vm.targetTabId()) {
+        const width: number = this.topTabWidths.get(tab.id) ?? (this.stickyTabs() ? tab.name.length * 15 : tab.name.length * 15 + FORUM_TAB_PILL_PADDING * 2);
+        if (tab.id === this.displaySelectedTabId()) {
           this.topTabsScroller.scrollTo({ xOffset: Math.max(0, start + width / 2 - this.viewportWidth / 2),
-            yOffset: 0, animation: { duration: motionDuration(220), curve: Curve.EaseOut } });
+            yOffset: 0, animation: { duration: motionDuration(260, MotionEffect.MOVE), curve: Curve.EaseOut } });
           return;
         }
-        start += width + FORUM_TAB_PILL_GAP;
+        start += width + gap;
       }
-    }, 32);
+    }));
   }
 
   /** 两种模式共用分类数据与选择行为；顶部模式为实心胶囊分段（选中=强调色实底白字）。 */
@@ -951,56 +1095,81 @@ export struct ForumPage {
         if (this.stickyTabs()) {
           this.StickyTabsRow()
         } else {
-        Scroll(this.topTabsScroller) {
-          Row({ space: FORUM_TAB_PILL_GAP }) {
-            ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
-              if (this.tabsDocked && !this.categoryPrefs.forumTabsFloating) {
-                /*
-                 * 贴住工具栏后，**选中与未选中都换成官方材质胶囊**（2026-11-11 持有者定）：
-                 * GlassPillButton → MaterialTabs（ArkUI 优先，设备不支持时走 HDS）→ systemMaterial，
-                 * 与顶部返回/搜索圆钮同一条通道，不自绘玻璃。
-                 * 选中项用 `FORUM_TAB_SELECTION`（官方材质赋色）＋强调色 Medium 字；
-                 * 未选中用 `BACK_BUTTON` ＋主文字色。
-                 */
-                GlassPillButton({ label: tab.name,
-                  accessibilityLabel: `分类 ${tab.name}${tab.id === this.vm.targetTabId() ? '，已选中' : ''}`,
-                  pillWidth: this.tabPillWidth(tab), pillHeight: FORUM_TAB_PILL_HEIGHT,
-                  slot: tab.id === this.vm.targetTabId() ? MaterialSlot.FORUM_TAB_SELECTION : MaterialSlot.BACK_BUTTON,
-                  applyShadow: true, clipToPill: true, clipOutset: 0, staticMaterial: true,
-                  textColor: tab.id === this.vm.targetTabId() ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN,
-                  textWeight: tab.id === this.vm.targetTabId() ? FontWeight.Medium : FontWeight.Regular,
-                  onTap: (): void => { void this.selectForumTab(tab, index); } })
-              } else {
-              Row() {
-                Text(tab.name).fontSize(15).maxFontScale(1.25)
-                  .fontWeight(tab.id === this.vm.targetTabId() ? FontWeight.Medium : FontWeight.Normal)
-                  .fontColor(tab.id === this.vm.targetTabId() ? Color.White : AppTheme.TEXT_MAIN)
-                  .maxLines(1)
-              }
-              .height(FORUM_TAB_PILL_HEIGHT)
-              .padding({ left: FORUM_TAB_PILL_PADDING, right: FORUM_TAB_PILL_PADDING })
-              .borderRadius(FORUM_TAB_PILL_HEIGHT / 2)
-              // 未贴住：常规实心胶囊（选中＝强调色实底白字）；贴住后整行改由上面的材质胶囊承接。
-              .backgroundColor(tab.id === this.vm.targetTabId() ? AppTheme.ACCENT : AppTheme.CARD)
-              .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-              .accessibilityText(`分类 ${tab.name}${tab.id === this.vm.targetTabId() ? '，已选中' : ''}`)
-              .onClick((): void => { void this.selectForumTab(tab, index); })
-              .onAreaChange((_old: Area, area: Area): void => {
-                const width: number = Number(area.width);
-                // 横向滚动也会改变标签位置；只在宽度变化时重新定位，避免拖动时被拉回选中项。
-                if (this.topTabWidths.get(tab.id) !== width) {
-                  this.topTabWidths.set(tab.id, width);
-                  if (tab.id === this.vm.targetTabId()) { this.revealTopCategory(); }
+          Scroll(this.topTabsScroller) {
+            if (this.tabsDocked && !this.categoryPrefs.forumTabsFloating) {
+              Row({ space: FORUM_TAB_PILL_GAP }) {
+                ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
+                  GlassPillButton({ label: tab.name,
+                    accessibilityLabel: `分类 ${tab.name}${tab.id === this.displaySelectedTabId() ? '，已选中' : ''}`,
+                    pillWidth: this.tabPillWidth(tab), pillHeight: FORUM_TAB_PILL_HEIGHT,
+                    slot: tab.id === this.displaySelectedTabId() ? MaterialSlot.FORUM_TAB_SELECTION : MaterialSlot.BACK_BUTTON,
+                    applyShadow: true, clipToPill: true, clipOutset: 0, staticMaterial: true,
+                    textColor: tab.id === this.displaySelectedTabId() ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN,
+                    textWeight: tab.id === this.displaySelectedTabId() ? FontWeight.Medium : FontWeight.Regular,
+                    onTap: (): void => { this.selectForumTab(tab, index); } })
+                }, (tab: ForumTab) => String(tab.id))
+              }.height(FORUM_TAB_ROW_HEIGHT).alignItems(VerticalAlign.Top)
+                .padding({ left: FORUM_TAB_PILL_INSET, right: FORUM_TAB_PILL_INSET, top: FORUM_TAB_PILL_TOP_GAP })
+            } else {
+              Stack({ alignContent: Alignment.TopStart }) {
+                Row({ space: FORUM_TAB_PILL_GAP }) {
+                  ForEach(this.vm.tabs, (tab: ForumTab) => {
+                    Row()
+                      .width(this.tabPillWidth(tab))
+                      .height(FORUM_TAB_PILL_HEIGHT)
+                      .borderRadius(FORUM_TAB_PILL_HEIGHT / 2)
+                      .backgroundColor(AppTheme.CARD)
+                  }, (tab: ForumTab) => String(tab.id))
                 }
-              })
+                .height(FORUM_TAB_PILL_HEIGHT)
+                .hitTestBehavior(HitTestMode.None)
+
+                if (this.hasValidSelectedTopTab()) {
+                  Row()
+                    .width(this.capsuleIndicatorWidth())
+                    .height(FORUM_TAB_PILL_HEIGHT)
+                    .borderRadius(FORUM_TAB_PILL_HEIGHT / 2)
+                    .backgroundColor(AppTheme.ACCENT)
+                    .translate({ x: this.capsuleIndicatorX() })
+                    .animation({ duration: motionDuration(240, MotionEffect.MOVE), curve: FORUM_TAB_SILK_CURVE })
+                    .hitTestBehavior(HitTestMode.None)
+                }
+
+                Row({ space: FORUM_TAB_PILL_GAP }) {
+                  ForEach(this.vm.tabs, (tab: ForumTab, index: number) => {
+                    Row() {
+                      Text(tab.name).fontSize(15).maxFontScale(1.25)
+                        .fontWeight(tab.id === this.displaySelectedTabId() ? FontWeight.Medium : FontWeight.Normal)
+                        .fontColor(tab.id === this.displaySelectedTabId() ? Color.White : AppTheme.TEXT_MAIN)
+                        .maxLines(1)
+                    }
+                    .height(FORUM_TAB_PILL_HEIGHT)
+                    .padding({ left: FORUM_TAB_PILL_PADDING, right: FORUM_TAB_PILL_PADDING })
+                    .borderRadius(FORUM_TAB_PILL_HEIGHT / 2)
+                    .backgroundColor(Color.Transparent)
+                    .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+                    .accessibilityText(`分类 ${tab.name}${tab.id === this.displaySelectedTabId() ? '，已选中' : ''}`)
+                    .onClick((): void => { this.selectForumTab(tab, index); })
+                    .onAreaChange((_old: Area, area: Area): void => {
+                      const width: number = Number(area.width);
+                      // 横向滚动也会改变标签位置；只在宽度变化时重新定位，避免拖动时被拉回选中项。
+                      if (this.topTabWidths.get(tab.id) !== width) {
+                        this.topTabWidths.set(tab.id, width);
+                        this.topTabWidthRevision = (this.topTabWidthRevision || 0) + 1;
+                        if (tab.id === this.vm.targetTabId()) { this.revealTopCategory(); }
+                      }
+                    })
+                  }, (tab: ForumTab) => String(tab.id))
+                }
+                .height(FORUM_TAB_PILL_HEIGHT)
               }
-            }, (tab: ForumTab) => String(tab.id))
-          }.height(FORUM_TAB_ROW_HEIGHT).alignItems(VerticalAlign.Top)
-            .padding({ left: FORUM_TAB_PILL_INSET, right: FORUM_TAB_PILL_INSET, top: FORUM_TAB_PILL_TOP_GAP })
-        }.width('100%').height(FORUM_TAB_ROW_HEIGHT).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.Start)
+              .height(FORUM_TAB_ROW_HEIGHT)
+              .padding({ left: FORUM_TAB_PILL_INSET, right: FORUM_TAB_PILL_INSET, top: FORUM_TAB_PILL_TOP_GAP })
+            }
+          }.width('100%').height(FORUM_TAB_ROW_HEIGHT).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.Start)
         }
       }
-    // 分类行底色：整条横带始终不铺（2026-11-11 持有者定，对照「我的华为」社区页）；
+    // 分类行底色：整条横带始终不铺（对照「我的华为」社区页）；
     // 贴住工具栏后只把**胶囊本身**换成官方沉浸材质（见 ForumTabs 里 tabsDocked 分支）。
     }.width('100%')
       // 常规吸顶要铺面板色 + 细分割线：它固定在工具栏下，内容会从底下穿过。
@@ -1013,8 +1182,8 @@ export struct ForumPage {
   private async changePostOrder(sort: number): Promise<void> {
     const success: boolean = await this.vm.changeSort(this.hostContext(), sort);
     if (success) {
-      this.scroller.scrollTo({ xOffset: 0,
-        yOffset: Math.min(this.scroller.currentOffset().yOffset, this.contentTopOffset()), animation: false });
+      this.activeScroller().scrollTo({ xOffset: 0,
+        yOffset: Math.min(this.activeScroller().currentOffset().yOffset, this.contentTopOffset()), animation: false });
     } else if (this.vm.errorText.length > 0) {
       promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
     }
@@ -1056,67 +1225,58 @@ export struct ForumPage {
   private async changeHelpFilter(partition: number, sort: number): Promise<void> {
     const success: boolean = await this.vm.changeHelpFilter(this.hostContext(), partition, sort);
     if (success) {
-      this.scroller.scrollTo({ xOffset: 0,
-        yOffset: Math.min(this.scroller.currentOffset().yOffset, this.contentTopOffset()), animation: false });
+      this.activeScroller().scrollTo({ xOffset: 0,
+        yOffset: Math.min(this.activeScroller().currentOffset().yOffset, this.contentTopOffset()), animation: false });
     } else if (this.vm.errorText.length > 0) {
       promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
     }
   }
 
-  private animateTabContent(shift: number, opacity: number, duration: number): void {
-    this.getUIContext().animateTo({ duration: motionDuration(duration, MotionEffect.MOVE), curve: Curve.EaseOut }, (): void => {
-      this.contentShift = shift;
-    });
-    this.getUIContext().animateTo({ duration: motionDuration(duration, MotionEffect.FADE), curve: Curve.EaseOut }, (): void => {
-      this.contentOpacity = opacity;
-    });
-  }
-
   /**
-   * 切换真实吧页分类。滚动复位与错误提示沿用旧版行为；
-   * 成功后把选中签滚到视口中间（tab 多时点右侧的签不至于停在看不见的地方）。
+   * 点击分类标签：与首页 `ForumListView.changeChannel` 同口径，由原生 `SwiperController.changeIndex`
+   * 驱动整页平滑切换；`onAnimationStart` 即时同步标签高亮，`onChange` 再落定数据。
    */
-  private async selectForumTab(tab: ForumTab, index: number): Promise<void> {
-    if ((this.vm.loading && !this.vm.switchingTab) || tab.id === this.vm.targetTabId()) {
+  private selectForumTab(tab: ForumTab, index: number): void {
+    if ((this.vm.loading && !this.vm.switchingTab) || tab.id === this.displaySelectedTabId()) {
       return;
     }
-    const previous: number = this.vm.tabs.findIndex((value: ForumTab) => value.id === this.vm.targetTabId());
-    const direction: number = index >= previous ? 1 : -1;
-    const revision: number = ++this.tabAnimation;
-    const offset: number = Math.min(this.scroller.currentOffset().yOffset, this.contentTopOffset());
-    this.animateTabContent(-12 * direction, 0.65, 100);
-    const switching: Promise<boolean> = this.vm.switchTab(this.hostContext(), tab.id);
+    this.previewTabId = tab.id;
     this.revealTopCategory();
-    const success: boolean = await switching;
-    if (!this.active || revision !== this.tabAnimation) { return; }
+    this.syncInactiveTabHeaders(this.activeTabId(), Math.min(this.contentScrollOffset, this.coverSpacerHeight()));
+    this.tabSwiper.changeIndex(index, motionStore.isOn(MotionEffect.MOVE));
+  }
+
+  private onSwiperAnimationStart(targetIndex: number): void {
+    const tab: ForumTab | undefined = this.vm.tabs[targetIndex];
+    if (tab === undefined || tab.id === this.previewTabId) { return; }
+    this.previewTabId = tab.id;
+    this.revealTopCategory();
+  }
+
+  private async commitForumTab(index: number): Promise<void> {
+    const tab: ForumTab | undefined = this.vm.tabs[index];
+    if (tab === undefined) { return; }
+    if (tab.id === this.vm.selectedTabId) {
+      this.previewTabId = 0;
+      this.syncTabsSticky(tab.id);
+      return;
+    }
+    const revision: number = ++this.tabSwitchRevision;
+    const success: boolean = await this.vm.switchTab(this.hostContext(), tab.id);
+    if (!this.active || revision !== this.tabSwitchRevision) { return; }
+    this.previewTabId = 0;
     if (success) {
-      if (this.pageState !== undefined) { this.pageState.scrollOffset = offset; }
-      this.scroller.scrollTo({ xOffset: 0, yOffset: offset, animation: false });
-      // 新内容从相邻方向进入；只变换列表容器，不给每张卡片创建动画。
-      this.getUIContext().animateTo({ duration: 0 }, (): void => {
-        this.contentShift = 12 * direction;
-        this.contentOpacity = 0.65;
-      });
-      setTimeout((): void => {
-        if (!this.active || revision !== this.tabAnimation) { return; }
-        this.animateTabContent(0, 1, 260);
-      }, 16);
+      this.syncTabsSticky(tab.id);
+      this.revealTopCategory();
     } else {
-      this.animateTabContent(0, 1, 180);
       if (this.vm.errorText.length > 0) {
         promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
       }
+      const fallbackIndex: number = this.vm.tabs.findIndex((item: ForumTab): boolean => item.id === this.vm.selectedTabId);
+      if (fallbackIndex >= 0 && fallbackIndex !== index) {
+        this.tabSwiper.changeIndex(fallbackIndex, false);
+      }
     }
-    this.revealTopCategory();
-  }
-
-  private swipeForumTab(offset: number, verticalOffset: number): void {
-    const distance: number = this.categoryPrefs.forumTabsFloating ? 24 : 48;
-    if (Math.abs(offset) < distance || Math.abs(offset) < Math.abs(verticalOffset) * 1.2) { return; }
-    const current: number = this.vm.tabs.findIndex((tab: ForumTab) => tab.id === this.vm.targetTabId());
-    const next: number = current + (offset < 0 ? 1 : -1);
-    if (current < 0 || next < 0 || next >= this.vm.tabs.length) { return; }
-    void this.selectForumTab(this.vm.tabs[next], next);
   }
 
   private toolbarBackgroundProgress(): number {
@@ -1129,208 +1289,228 @@ export struct ForumPage {
   }
 
   @Builder
+  TabListPage(tab: ForumTab) {
+    List({ space: 0, scroller: this.scrollerForTab(tab.id) }) {
+      // 占位：图下露出段（吧信息本体在 hero 层）。
+      ListItem() {
+        this.ForumHeaderIdentity()
+      }
+      .clip(false)
+      .id(tab.id === this.activeTabId() ? 'forum-header-item' : `forum-header-item-${tab.id}`)
+      /*
+       * 分类行不再挂在 ListItemGroup 的 header 上：List 的吸顶 header
+       * 会在底部留一条固定的浅色接缝，且无法控制其底色。真正的分类行由 `TabsOverlay()` 悬浮绘制，
+       * 位置按滚动量自己算。
+       * 它那一行的高度**垫在 ListItemGroup 里面**（见下），不要放在组外：组外是透明的，
+       * 面板顶上移后会露出页面底色，贴顶停住时就是一条浅灰带。
+       */
+      ListItemGroup() {
+        // 分类行留白：透明，吃的是面板底色；面板顶因此仍落在「封面底 −20vp」压图的位置。
+        ListItem() {
+          Row().width('100%').height(this.forumHeaderHeight())
+        }
+        .id(tab.id === this.activeTabId() ? 'forum-tabs-slot' : `forum-tabs-slot-${tab.id}`)
+        if (tab.supportsPostOrder || tab.isHelp) {
+          ListItem() {
+            this.PostOrderBar()
+          }
+          .padding({ left: this.categoryPrefs.forumTabsFloating ? 8 : 0,
+            right: this.categoryPrefs.forumTabsFloating ? 8 : 0 })
+        }
+        // 保留零高度刷新项，收起时高度可连续回弹，不因移除组件而瞬间跳回。
+        ListItem() {
+          Row() {
+            if (tab.id === this.activeTabId() && (this.refreshing || this.pullDistance > 0)) { RefreshSpinner() }
+          }
+          .width('100%').height(tab.id === this.activeTabId() ? this.pullDistance : 0)
+          .justifyContent(FlexAlign.Center).clip(true)
+          .id(tab.id === this.activeTabId() ? 'forum-pull-refresh' : `forum-pull-refresh-${tab.id}`)
+        }
+        if (tab.id === this.activeTabId() && !this.refreshing && !this.vm.switchingTab && tab.supportsPostOrder && this.vm.loading) {
+          ListItem() {
+            Column({ space: 12 }) {
+              RefreshSpinner()
+              Text('正在加载分类…').fontSize(14).fontColor(AppTheme.TEXT_SUB)
+            }
+            .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
+            .justifyContent(FlexAlign.Center)
+            .id('forum-content-loading')
+          }
+        } else if (!this.vm.isTabCached(tab.id)) {
+          ListItem() {
+            Column({ space: 12 }) {
+              RefreshSpinner()
+              Text('正在加载分类…').fontSize(14).fontColor(AppTheme.TEXT_SUB)
+            }
+            .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
+            .justifyContent(FlexAlign.Center)
+          }
+        } else if (tab.id === this.activeTabId() && this.vm.errorText.length > 0 && this.vm.threadsForTab(tab.id).length === 0) {
+          ListItem() {
+            Column() { this.ErrorView() }
+              .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
+          }
+        } else if (tab.isVideo) {
+          if (this.videoItemsForTab(tab.id).length === 0) {
+            ListItem() { this.StatusView('这个分类暂无可播放视频') }
+          } else {
+            ListItem() {
+              Row({ space: 8 }) {
+                ForEach([0, 1], (side: number) => {
+                  Column({ space: 8 }) {
+                    ForEach(this.videoColumnForTab(tab.id, side), (item: ThreadBrief) => { this.VideoCard(item) }, (item: ThreadBrief) => `${item.tid}`)
+                  }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                }, (side: number) => `${side}`)
+              }.width('100%').alignItems(VerticalAlign.Top)
+            }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+              top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
+          }
+          ListItem() { this.PageFooter(tab.id) }.padding({ left: 8, right: 8 })
+        } else if (this.vm.threadsForTab(tab.id).length === 0) {
+          ListItem() {
+            Column() { this.StatusView(tab.isHelp ?
+              (this.vm.helpPartition === 1 ? '暂时没有未回答的求助' : '这个分类还没有求助帖') : '这个吧还没有帖子') }
+              .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
+          }
+        } else {
+          if (this.pinnedThreadsForTab(tab.id).length > 0) {
+            ListItem() {
+              this.PinnedSection(tab.id)
+            }
+            .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+              top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
+          }
+
+          /*
+           * 普通帖走 `LazyForEach` + `ThreadBriefDataSource`（虚拟化保留：按可视区 +
+           * 预加载区创建、滑出回收）。**不能换回 `Repeat`**：2026-11-13 真机实测，
+           * `Repeat`（含去掉 `virtualScroll` 的写法）在整批替换数据后不会重建已实例化的
+           * `ListItem` —— 刷新回源成功、批次指纹变了，屏上卡片却不动（首页同一病）。
+           */
+          LazyForEach(this.sourceForTab(tab.id), (item: ThreadBrief) => {
+            ListItem() {
+              if (tab.isHelp) {
+                HelpThreadCard({ item: item,
+                  onOpenThread: (): void => { this.openThread(item); },
+                  onOpenAnswer: (): void => {
+                    this.saveScrollPosition();
+                    NavigationService.openThreadDetail({ tid: item.tid, forumName: this.forumName,
+                      replyCount: item.replyCount, targetPid: item.answerPid, openComments: item.answerPid <= 0 });
+                  },
+                  onOpenImage: (): void => { this.openImages(item.images, 0); } })
+              } else {
+                this.ThreadCard(item)
+              }
+            }
+            .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
+              top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
+          }, (item: ThreadBrief): string => this.cardKey(item))
+
+          ListItem() {
+            this.PageFooter(tab.id)
+          }
+          .padding({ left: 8, right: 8 })
+        }
+      }
+      // 面板底色与 20vp 顶部圆角已抽到 Swiper 外的静止底板层，避免横滑切页时分类栏背后的圆角底板跟着分裂移动。
+      .backgroundColor(Color.Transparent)
+    }
+    .width('100%')
+    .height('100%')
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.None)
+    .sticky(StickyStyle.None)
+    .parallelGesture(PanGesture({ direction: PanDirection.Vertical, distance: 8 })
+      .onActionStart((event: GestureEvent) => {
+        if (tab.id !== this.activeTabId()) { return; }
+        this.categoryScrollNotified = false;
+        const offset: number = this.scrollerForTab(tab.id).currentOffset().yOffset;
+        const contentTop: number = Math.max(0, this.heroHeight() - FORUM_TOOLBAR_HEIGHT - offset)
+          + this.forumHeaderHeight()
+          + (tab.supportsPostOrder || tab.isHelp ? FORUM_POST_ORDER_HEIGHT : 0);
+        this.pullEligible = !this.refreshing && !this.vm.loading && !this.vm.switchingTab
+          && !this.vm.isLoadingMore && offset <= this.heroHeight() - FORUM_TOOLBAR_HEIGHT + 1
+          && event.fingerList.length > 0 && event.fingerList[0].localY - event.offsetY >= contentTop;
+      })
+      .onActionUpdate((event: GestureEvent) => {
+        if (tab.id !== this.activeTabId()) { return; }
+        if (!this.categoryScrollNotified && Math.abs(event.offsetY) > 12 && this.scrollerForTab(tab.id).currentOffset().yOffset > 8) {
+          this.categoryScrollNotified = true; ++this.categoryScrollRevision;
+        }
+        if (this.pullEligible) { this.pullDistance = this.dampedPullDistance(event.offsetY); }
+      })
+      .onActionEnd(() => {
+        if (!this.pullEligible) { return; }
+        const refresh: boolean = this.pullEligible && this.pullDistance >= FORUM_REFRESH_OFFSET;
+        this.pullEligible = false;
+        if (refresh) { void this.handleRefresh(); }
+        else { this.settlePullDistance(0); }
+      })
+      .onActionCancel(() => {
+        if (!this.pullEligible) { return; }
+        this.pullEligible = false; this.settlePullDistance(0);
+      }))
+    .hitTestBehavior(HitTestMode.Transparent)
+    .onAppear(() => {
+      this.alignTabScrollerOnAppear(tab.id);
+    })
+    .onDidScroll(() => {
+      this.syncTabsSticky(tab.id);
+    })
+    .onReachEnd(() => {
+      if (tab.id === this.activeTabId()) {
+        this.vm.loadMore(this.hostContext());
+      }
+    })
+    .onAreaChange(() => {
+      if (tab.id === this.activeTabId()) {
+        this.restoreScrollPosition();
+      }
+    })
+  }
+
+  @Builder
   ThreadList() {
     Stack({ alignContent: Alignment.TopStart }) {
       this.ForumHeroBackdrop()
+      if (!this.categoryPrefs.forumTabsFloating) {
+        Column()
+          .width('100%')
+          .height(LayoutPolicy.matchParent)
+          .backgroundColor(AppTheme.FORUM_TAB_BG)
+          .borderRadius({ topLeft: 20, topRight: 20 })
+          .position({ x: 0, y: this.tabsOverlayY() })
+          .hitTestBehavior(HitTestMode.None)
+      }
       Column() {
         Row().height(this.statusBarH + FORUM_TOOLBAR_HEIGHT).width('100%').hitTestBehavior(HitTestMode.None)
         Column() {
-          List({ space: 0, scroller: this.scroller }) {
-            // 占位：图下露出段（吧信息本体在 hero 层）。
-            ListItem() {
-              this.ForumHeaderIdentity()
-            }
-            .clip(false)
-            .id('forum-header-item')
-            /*
-             * 分类行不再挂在 ListItemGroup 的 header 上（2026-11-11 持有者定）：List 的吸顶 header
-             * 会在底部留一条固定的浅色接缝，且无法控制其底色。真正的分类行由 `TabsOverlay()` 悬浮绘制，
-             * 位置按滚动量自己算。
-             * 它那一行的高度**垫在 ListItemGroup 里面**（见下），不要放在组外：组外是透明的，
-             * 面板顶上移后会露出页面底色，贴顶停住时就是一条浅灰带（2026-11-11 持有者「不能有灰带」）。
-             */
-            ListItemGroup() {
-              // 分类行留白：透明，吃的是面板底色；面板顶因此仍落在「封面底 −20vp」压图的位置。
-              ListItem() {
-                Row().width('100%').height(this.forumHeaderHeight())
-              }
-              .id('forum-tabs-slot')
-              if (this.vm.hasPostOrder() || this.vm.isHelpTab()) {
-                ListItem() {
-                  this.PostOrderBar()
-                }
-                .padding({ left: this.categoryPrefs.forumTabsFloating ? 8 : 0,
-                  right: this.categoryPrefs.forumTabsFloating ? 8 : 0 })
-              }
-              // 保留零高度刷新项，收起时高度可连续回弹，不因移除组件而瞬间跳回。
-              ListItem() {
-                Row() {
-                  if (this.refreshing || this.pullDistance > 0) { RefreshSpinner() }
-                }
-                .width('100%').height(this.pullDistance)
-                .justifyContent(FlexAlign.Center).clip(true)
-                .id('forum-pull-refresh')
-              }
-              if (!this.refreshing && !this.vm.switchingTab && this.vm.hasPostOrder() && this.vm.loading) {
-                ListItem() {
-                  Column({ space: 12 }) {
-                    RefreshSpinner()
-                    Text('正在加载分类…').fontSize(14).fontColor(AppTheme.TEXT_SUB)
-                  }
-                  .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
-                  .justifyContent(FlexAlign.Center)
-                  .id('forum-content-loading')
-                }
-              } else if (this.vm.loading && !this.vm.loadedOnce) {
-                ListItem() {
-                  Column() { this.StatusView('正在加载…') }
-                    .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
-                }
-              } else if (this.vm.errorText.length > 0 && this.vm.threads.length === 0) {
-                ListItem() {
-                  Column() { this.ErrorView() }
-                    .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
-                }
-              } else if (this.vm.isVideoTab()) {
-                if (this.videoItems().length === 0) {
-                  ListItem() { this.StatusView('这个分类暂无可播放视频') }
-                } else {
-                  ListItem() {
-                    Row({ space: 8 }) {
-                      ForEach([0, 1], (side: number) => {
-                        Column({ space: 8 }) {
-                          ForEach(this.videoColumn(side), (item: ThreadBrief) => { this.VideoCard(item) }, (item: ThreadBrief) => `${item.tid}`)
-                        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-                      }, (side: number) => `${side}`)
-                    }.width('100%').alignItems(VerticalAlign.Top)
-                  }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
-                    .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
-                    .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
-                }
-                ListItem() { this.PageFooter() }.padding({ left: 8, right: 8 })
-              } else if (this.vm.threads.length === 0) {
-                ListItem() {
-                  Column() { this.StatusView(this.vm.isHelpTab() ?
-                    (this.vm.helpPartition === 1 ? '暂时没有未回答的求助' : '这个分类还没有求助帖') : '这个吧还没有帖子') }
-                    .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
-                }
-              } else {
-                if (this.pinnedThreads().length > 0) {
-                  ListItem() {
-                    this.PinnedSection()
-                  }
-                  .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
-                  .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
-                  .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
-                }
-
-                /*
-                 * 普通帖走 Repeat 虚拟列表（2026-11-11）：与首页 `ForumListView.FeedList` 同一口径。
-                 * 原 `ForEach` 会把整页卡片一次性建出来，卡片里的图片预览各挂
-                 * onAreaChange/onVisibleAreaChange 并回写状态；真机 trace 里单次事件带 152 个
-                 * onAreaChange 节点、`FlushDirtyNodeUpdate` 是首页的 34 倍，表现为"一抖一抖"。
-                 * 键用 `cardKey`（对象身份 + 递增号），`reusable` 走官方默认值 true。
-                 * 帮助分类与普通卡结构不同：按官方要求用 templateId/template 分池，
-                 * 不用 each 里的手工 if/else（官方注明手工分支顶替模板必须关复用，否则
-                 * 复用子组件时会选错模板导致渲染异常）。
-                 */
-                /*
-                 * 普通帖走 `LazyForEach` + `ThreadBriefDataSource`（虚拟化保留：按可视区 +
-                 * 预加载区创建、滑出回收）。**不能换回 `Repeat`**：2026-11-13 真机实测，
-                 * `Repeat`（含去掉 `virtualScroll` 的写法）在整批替换数据后不会重建已实例化的
-                 * `ListItem` —— 刷新回源成功、批次指纹变了，屏上卡片却不动（首页同一病）。
-                 * 帮助分类的卡片结构不同：`LazyForEach` 没有 template/templateId 分池，
-                 * 也就不存在"复用选错模板"的前提，这里直接按分类 if/else 分支。
-                 */
-                LazyForEach(this.threadSource, (item: ThreadBrief) => {
-                  ListItem() {
-                    if (this.vm.isHelpTab()) {
-                      HelpThreadCard({ item: item,
-                        onOpenThread: (): void => { this.openThread(item); },
-                        onOpenAnswer: (): void => {
-                          this.saveScrollPosition();
-                          NavigationService.openThreadDetail({ tid: item.tid, forumName: this.forumName,
-                            replyCount: item.replyCount, targetPid: item.answerPid, openComments: item.answerPid <= 0 });
-                        },
-                        onOpenImage: (): void => { this.openImages(item.images, 0); } })
-                    } else {
-                      this.ThreadCard(item)
-                    }
-                  }
-                  .padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
-                    top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
-                  .translate({ x: this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.MOVE) ? 0 : this.contentShift })
-                  .opacity(this.categoryPrefs.forumTabsFloating || !motionStore.isOn(MotionEffect.FADE) ? 1 : this.contentOpacity)
-                }, (item: ThreadBrief): string => this.cardKey(item))
-
-                ListItem() {
-                  this.PageFooter()
-                }
-                .padding({ left: 8, right: 8 })
-              }
-            }
-            // 分类胶囊随内容滚动、不再吸顶（2026-11-11 持有者定，参考「我的华为」社区页）；
-            // 内容面板与 20vp 顶部圆角保持原样（持有者明确要求圆角不能去掉）。
-            .backgroundColor(this.categoryPrefs.forumTabsFloating ? Color.Transparent : AppTheme.FORUM_TAB_BG)
-            // 内容区顶部 20vp 圆角（2026-11-11 持有者定）。必须加在 ListItemGroup 自身：
-            // 它自己的方形底色从组顶端铺开，只给 header（分类栏）加圆角会被这层同色底盖住看不见。
-            .borderRadius({ topLeft: this.categoryPrefs.forumTabsFloating ? 0 : 20,
-              topRight: this.categoryPrefs.forumTabsFloating ? 0 : 20 })
-            .clip(true)
-            // 顶部模式沿用旧版逐项动画，避免把分类栏和底色一起移走。
-            .translate({ x: this.categoryPrefs.forumTabsFloating && motionStore.isOn(MotionEffect.MOVE) ? this.contentShift : 0 })
-            .opacity(this.categoryPrefs.forumTabsFloating && motionStore.isOn(MotionEffect.FADE) ? this.contentOpacity : 1)
+          Swiper(this.tabSwiper) {
+            ForEach(this.displayTabs(), (tab: ForumTab) => {
+              this.TabListPage(tab)
+            }, (tab: ForumTab) => String(tab.id))
           }
           .width('100%')
           .layoutWeight(1)
-          .scrollBar(BarState.Off)
-
-          .edgeEffect(EdgeEffect.None)
-          // 分类行仍随面板吸顶到工具栏下沿，但不铺底色：胶囊之间能看见帖子从底下穿过
-          // （2026-11-11 持有者定，对照「我的华为」社区页：带动画滑上来后停住、无灰色底带）。
-          .sticky(StickyStyle.None)
-          .parallelGesture(PanGesture({ direction: PanDirection.Vertical, distance: 8 })
-            .onActionStart((event: GestureEvent) => {
-              this.categoryScrollNotified = false;
-              const offset: number = this.scroller.currentOffset().yOffset;
-              const contentTop: number = Math.max(0, this.heroHeight() - FORUM_TOOLBAR_HEIGHT - offset)
-                + this.forumHeaderHeight()
-                + (this.vm.hasPostOrder() || this.vm.isHelpTab() ? FORUM_POST_ORDER_HEIGHT : 0);
-              this.pullEligible = !this.refreshing && !this.vm.loading && !this.vm.switchingTab
-                && !this.vm.isLoadingMore && offset <= this.heroHeight() - FORUM_TOOLBAR_HEIGHT + 1
-                && event.fingerList.length > 0 && event.fingerList[0].localY - event.offsetY >= contentTop;
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              if (!this.categoryScrollNotified && Math.abs(event.offsetY) > 12 && this.scroller.currentOffset().yOffset > 8) {
-                this.categoryScrollNotified = true; ++this.categoryScrollRevision;
-              }
-              if (this.pullEligible) { this.pullDistance = this.dampedPullDistance(event.offsetY); }
-            })
-            .onActionEnd(() => {
-              if (!this.pullEligible) { return; }
-              const refresh: boolean = this.pullEligible && this.pullDistance >= FORUM_REFRESH_OFFSET;
-              this.pullEligible = false;
-              if (refresh) { void this.handleRefresh(); }
-              else { this.settlePullDistance(0); }
-            })
-            .onActionCancel(() => {
-              if (!this.pullEligible) { return; }
-              this.pullEligible = false; this.settlePullDistance(0);
-            }))
-          .hitTestBehavior(HitTestMode.Transparent)
-          .gesture(PanGesture({ direction: PanDirection.Horizontal,
-            distance: this.categoryPrefs.forumTabsFloating ? 24 : 48 })
-            .onActionEnd((event: GestureEvent) => { this.swipeForumTab(event.offsetX, event.offsetY); }))
-          .onDidScroll(() => {
-            this.syncTabsSticky();
+          .indicator(false)
+          .loop(false)
+          .cachedCount(1)
+          .duration(motionDuration(400))
+          .curve(motionSwiperCurve())
+          .disableSwipe(this.vm.tabs.length <= 1 || (this.vm.loading && !this.vm.switchingTab))
+          .onAppear(() => {
+            this.swiperReady = true;
+            const index: number = this.selectedTabIndex();
+            if (index >= 0) { this.tabSwiper.changeIndex(index, false); }
           })
-          .onReachEnd(() => {
-            this.vm.loadMore(this.hostContext());
+          .onGestureSwipe(() => {
+            this.syncInactiveTabHeaders(this.activeTabId(), Math.min(this.contentScrollOffset, this.coverSpacerHeight()));
           })
-          .onAreaChange(() => {
-            this.restoreScrollPosition();
+          .onAnimationStart((_index: number, targetIndex: number) => {
+            this.onSwiperAnimationStart(targetIndex);
+          })
+          .onChange((index: number) => {
+            void this.commitForumTab(index);
           })
         }
         .layoutWeight(1)
@@ -1346,7 +1526,7 @@ export struct ForumPage {
         .width('100%')
         .position({ x: 0, y: this.tabsOverlayY() })
         /*
-         * 触摸处理（2026-11-11 持有者反馈修正）：原来是 `HitTestMode.Transparent`（空白处放行纵向手势），
+         * 触摸处理：原来是 `HitTestMode.Transparent`（空白处放行纵向手势），
          * 但 Transparent 的语义是"自身不拦截、允许下层节点一起响应"——于是拖分类胶囊时列表也收到同一串事件，
          * 页面跟着滚。这里改回默认的 `Default`（自身与子节点响应、阻断下层兄弟）：在分类行上起手的拖拽
          * 只归这一行（横滑滚分类），不再带页面。代价：从这 56vp 带内起手不能纵向滚列表 / 触发下拉刷新。
@@ -1356,35 +1536,25 @@ export struct ForumPage {
         .accessibilityText('吧分类栏')
       }
       this.ForumToolbar()
-      if (this.vm.switchingTab) {
-        Row({ space: 8 }) {
-          RefreshSpinner()
-          Text('正在加载分类…').fontSize(14).fontColor(AppTheme.TEXT_SUB)
-        }
-        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-        .backgroundColor(AppTheme.FORUM_TAB_BG).borderRadius(16)
-        .position({ x: 12, y: this.statusBarH + FORUM_TOOLBAR_HEIGHT + 8 })
-        .hitTestBehavior(HitTestMode.None)
-      }
     }
     .width('100%').height(LayoutPolicy.matchParent)
   }
 
   /** 收起时保留首条置顶及总数；按钮独立于标题入口，避免误进帖子。 */
   @Builder
-  PinnedSection() {
+  PinnedSection(tabId: number) {
     Column() {
-      ForEach(this.visiblePinnedThreads(this.pinnedThreads()), (item: ThreadBrief, index: number) => {
+      ForEach(this.visiblePinnedThreads(this.pinnedThreadsForTab(tabId)), (item: ThreadBrief, index: number) => {
         Row({ space: 8 }) {
           Row({ space: 8 }) {
             TaggedThreadText({ text: item.title.length > 0 ? item.title : '（无标题）', labels: ['置顶'],
               textSize: 14, lineSize: 20, weight: FontWeight.Normal, textColor: AppTheme.TEXT_MAIN,
               lines: 1, fillPinned: false }).layoutWeight(1)
           }.layoutWeight(1).height('100%').alignItems(VerticalAlign.Center).onClick(() => { this.openThread(item); })
-          if (index === 0 && this.pinnedThreads().length > 1) {
+          if (index === 0 && this.pinnedThreadsForTab(tabId).length > 1) {
             Button({ type: ButtonType.Normal }) {
               Row({ space: 5 }) {
-                Text(this.pinnedExpanded ? '收起' : `共${this.pinnedThreads().length}条`)
+                Text(this.pinnedExpanded ? '收起' : `共${this.pinnedThreadsForTab(tabId).length}条`)
                   .fontSize(11).fontColor(AppTheme.TEXT_SUB)
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(10).fontColor([AppTheme.TEXT_SUB])
                   .rotate({ angle: this.pinnedExpanded ? -90 : 90 })
@@ -1392,33 +1562,34 @@ export struct ForumPage {
                 .border({ width: 0.5, color: AppTheme.TEXT_MUTED })
             }
               .backgroundColor(Color.Transparent).stateEffect(false).height(36).padding({ left: 0, right: 0 })
-              .accessibilityText(this.pinnedExpanded ? '收起置顶帖' : `展开全部${this.pinnedThreads().length}条置顶帖`)
+              .accessibilityText(this.pinnedExpanded ? '收起置顶帖' : `展开全部${this.pinnedThreadsForTab(tabId).length}条置顶帖`)
               .onClick(() => { this.pinnedExpanded = !this.pinnedExpanded; })
           }
         }
         .width('100%').height(36).padding({ left: 10, right: 10 }).alignItems(VerticalAlign.Center)
-        .border({ width: { bottom: index < this.visiblePinnedThreads(this.pinnedThreads()).length - 1 ? 1 : 0 },
+        .border({ width: { bottom: index < this.visiblePinnedThreads(this.pinnedThreadsForTab(tabId)).length - 1 ? 1 : 0 },
           color: AppTheme.DIVIDER })
       }, (item: ThreadBrief) => `${item.tid}`)
     }
     .width('100%').borderRadius(12).backgroundColor(AppTheme.CARD).padding({ top: 2, bottom: 2 })
-    .id('forum-pinned-section')
+    .id(tabId === this.activeTabId() ? 'forum-pinned-section' : `forum-pinned-section-${tabId}`)
   }
 
   /** 与首页共用完整卡片；吧内省略来源吧名，没有可用菜单时不预留菜单按钮。 */
-  private videoItems(): ThreadBrief[] {
-    return visibleThreads(this.vm.threads, threadBlockStore.rules(), false)
+  private videoItemsForTab(tabId: number): ThreadBrief[] {
+    void this.vm.tabSnapshotRevision;
+    return visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false)
       .filter((item: ThreadBrief): boolean => item.isVideo && item.video !== undefined);
   }
   private videoRatio(item: ThreadBrief): number {
     return item.video !== undefined && item.video.width > 0 && item.video.height > 0
       ? Math.max(0.6, Math.min(1.8, item.video.width / item.video.height)) : 1;
   }
-  private videoColumn(side: number): ThreadBrief[] {
+  private videoColumnForTab(tabId: number, side: number): ThreadBrief[] {
     const columns: ThreadBrief[][] = [[], []];
     const heights: number[] = [0, 0];
     const width: number = Math.max(120, (this.viewportWidth - 24) / 2);
-    for (const item of this.videoItems()) {
+    for (const item of this.videoItemsForTab(tabId)) {
       const target: number = heights[0] <= heights[1] ? 0 : 1;
       columns[target].push(item); heights[target] += width / this.videoRatio(item) + 94;
     }
@@ -1428,10 +1599,10 @@ export struct ForumPage {
   VideoCard(item: ThreadBrief) {
     Column({ space: 8 }) {
       Stack({ alignContent: Alignment.TopEnd }) {
-        if (!lowFlowStore.enabled && item.video !== undefined && item.video.cover.length > 0) {
+        if (!imageLoadStore.isAutoLoadOff() && item.video !== undefined && item.video.cover.length > 0) {
           Image(item.video.cover).width('100%').aspectRatio(this.videoRatio(item)).objectFit(ImageFit.Cover)
         } else {
-          Text(lowFlowStore.enabled ? '低流量模式' : '视频').width('100%').aspectRatio(this.videoRatio(item))
+          Text(imageLoadStore.isAutoLoadOff() ? '未自动加载封面' : '视频').width('100%').aspectRatio(this.videoRatio(item))
             .textAlign(TextAlign.Center).fontColor(AppTheme.TEXT_SUB).backgroundColor(AppTheme.SURFACE_MUTED)
         }
         SymbolGlyph($r('sys.symbol.play_fill')).fontSize(18).fontColor([Color.White])
@@ -1490,9 +1661,13 @@ export struct ForumPage {
   }
   /** 列表底部分别展示加载中、失败重试与到底状态。 */
   @Builder
-  PageFooter() {
-    ListFooter({ loading: this.vm.isLoadingMore, error: this.vm.loadMoreError, hasMore: this.vm.page.hasMore,
-      onRetry: (): void => { void this.vm.loadMore(this.hostContext(), true); } })
+  PageFooter(tabId: number) {
+    ListFooter({
+      loading: tabId === this.activeTabId() && this.vm.isLoadingMore,
+      error: tabId === this.activeTabId() ? this.vm.loadMoreError : '',
+      hasMore: this.vm.pageForTab(tabId).hasMore,
+      onRetry: (): void => { void this.vm.loadMore(this.hostContext(), true); }
+    })
   }
 
   @Builder

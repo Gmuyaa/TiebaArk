@@ -23,6 +23,7 @@ import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
+import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
 import { ImageViewer } from '../components/ImageViewer';
 import { closeImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
@@ -44,6 +45,7 @@ export struct MyListPage {
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
   @Local viewerImages: string[] = [];
+  @Local viewerItems: ViewerImage[] = [];
   @Local viewerIndex: number = 0;
   @Local favoriteResult: string = '';
   private favoriteResultTimer: number = -1;
@@ -54,11 +56,9 @@ export struct MyListPage {
   @Local pageVisible: boolean = false;
 
   /**
-   * `vm.items` 一变就推给 LazyForEach 数据源。
-   *
-   * 收藏页的三种变化都走这里：首屏/刷新（整表重建）、触底翻页（尾部追加）、
-   * 吧头像逐条补到（只重建那一行）——`Repeat` 在前两种上就不重建，是 2026-11-13
-   * 收藏页"头像不刷新"的根因，详见 model/MyListItemDataSource.ets 文件头。
+   * `vm.items` 一变就推给 LazyForEach 数据源。收藏页的三种变化都走这里：首屏/刷新（整表重建）、
+   * 触底翻页（尾部追加）、吧头像逐条补到（只重建那一行）—— `Repeat` 在前两种上就不重建，
+   * 这正是收藏页"头像不刷新"的根因，详见 model/MyListItemDataSource.ets 文件头。
    */
   @Monitor('vm.items')
   syncFavoriteSource(): void {
@@ -329,8 +329,8 @@ export struct MyListPage {
           .padding({ left: 16, right: 16, bottom: this.vm.managing ? FAVORITE_ACTION_INSET + 12 : AppTheme.BAR_SAFE_H + 16 })
       }
       if (this.viewerImages.length > 0) {
-        ImageViewer({ imageUrls: this.viewerImages, initialIndex: this.viewerIndex,
-          onClose: (): void => { this.viewerImages = []; } })
+        ImageViewer({ imageUrls: this.viewerImages, images: this.viewerItems, initialIndex: this.viewerIndex,
+          onClose: (): void => { this.viewerImages = []; this.viewerItems = []; } })
       }
       }.width('100%').height('100%')
     }
@@ -408,6 +408,7 @@ export struct MyListPage {
       onOpenImage: (index: number): void => {
         this.viewerIndex = index;
         this.viewerImages = item.originImages.length > 0 ? item.originImages : item.images;
+        this.viewerItems = viewerImagesForFeed(item.images, item.originImages);
       }
     })
   }

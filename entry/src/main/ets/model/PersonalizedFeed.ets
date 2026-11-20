@@ -2,6 +2,7 @@
 
 import { ThreadBrief } from './ThreadList';
 import { getForumAvatar } from './ForumAvatarStore';
+import { rememberFeedImage } from './HomeFeedPresentation';
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 
 const RES_ERROR: number = 1;
@@ -18,6 +19,7 @@ const T_VIEW_NUM: number = 5;
 const T_LAST_TIME_TEXT: number = 6;
 const T_LAST_TIME: number = 7;
 const T_AUTHOR: number = 18;
+const T_MEDIA: number = 22;
 const T_FORUM_ID: number = 27;
 const T_FORUM_NAME: number = 28;
 const T_CREATE_TIME: number = 45;
@@ -31,7 +33,14 @@ const T_THREAD_TYPE: number = 26;
 const CONTENT_TYPE: number = 1;
 // PbContent.text=2；与正文片段112同源，不使用推荐附图159中的文字。
 const CONTENT_TEXT: number = 2;
+const CONTENT_BSIZE: number = 5;
 const CONTENT_NORMAL_IMAGE: number = 8;
+const CONTENT_BIG_IMAGE: number = 9;
+const CONTENT_WIDTH: number = 18;
+const CONTENT_HEIGHT: number = 19;
+const CONTENT_ORIGIN_IMAGE: number = 25;
+const CONTENT_ORIGIN_SIZE: number = 27;
+const CONTENT_IS_LONG_PIC: number = 34;
 const CONTENT_ACTIVE_IMAGE: number = 36;
 
 const U_UID: number = 2;
@@ -147,8 +156,91 @@ export function parsePersonalizedFeed(bytes: Uint8Array): PersonalizedThread[] {
   return out;
 }
 
+const MEDIA_TYPE: number = 1;
+const MEDIA_BIG_PIC: number = 3;
+const MEDIA_SRC_PIC: number = 8;
+const MEDIA_WIDTH: number = 10;
+const MEDIA_HEIGHT: number = 11;
+const MEDIA_ORIGIN_PIC: number = 15;
+const MEDIA_ORIGIN_SIZE: number = 16;
+const MEDIA_DYNAMIC_PIC: number = 18;
+const MEDIA_IS_LONG_PIC: number = 19;
+
+class PersonalizedContentImage {
+  key: string = '';
+  normal: string = '';
+  big: string = '';
+  origin: string = '';
+  active: string = '';
+  width: number = 0;
+  height: number = 0;
+  originBytes: number = 0;
+  isLong: boolean = false;
+}
+
+class PersonalizedMediaVariant {
+  bigPic: string = '';
+  srcPic: string = '';
+  originPic: string = '';
+  dynamicPic: string = '';
+  width: number = 0;
+  height: number = 0;
+  originSize: number = 0;
+  isLong: boolean = false;
+}
+
+function imageFileKey(url: string): string {
+  if (url.length === 0) { return ''; }
+  const q: number = url.indexOf('?');
+  const h: number = url.indexOf('#');
+  const end: number = q >= 0 && h >= 0 ? Math.min(q, h) : (q >= 0 ? q : (h >= 0 ? h : url.length));
+  const clean: string = url.substring(0, end);
+  const slash: number = clean.lastIndexOf('/');
+  return slash >= 0 ? clean.substring(slash + 1).toLowerCase() : '';
+}
+
+function readThreadMedia(bytes: Uint8Array, byFile: Map<string, PersonalizedMediaVariant>): void {
+  let type: number = 0;
+  const variant: PersonalizedMediaVariant = new PersonalizedMediaVariant();
+  const reader: ProtoReader = new ProtoReader(bytes);
+  while (reader.hasMore()) {
+    const field: number = reader.readTag();
+    if (field === MEDIA_TYPE && reader.wireType === WireType.VARINT) {
+      type = Number(reader.readVarint());
+    } else if (field === MEDIA_BIG_PIC && reader.wireType === WireType.LENGTH_DELIMITED) {
+      variant.bigPic = reader.readString();
+    } else if (field === MEDIA_SRC_PIC && reader.wireType === WireType.LENGTH_DELIMITED) {
+      variant.srcPic = reader.readString();
+    } else if (field === MEDIA_ORIGIN_PIC && reader.wireType === WireType.LENGTH_DELIMITED) {
+      variant.originPic = reader.readString();
+    } else if (field === MEDIA_DYNAMIC_PIC && reader.wireType === WireType.LENGTH_DELIMITED) {
+      variant.dynamicPic = reader.readString();
+    } else if (field === MEDIA_WIDTH && reader.wireType === WireType.VARINT) {
+      variant.width = Number(reader.readVarint());
+    } else if (field === MEDIA_HEIGHT && reader.wireType === WireType.VARINT) {
+      variant.height = Number(reader.readVarint());
+    } else if (field === MEDIA_ORIGIN_SIZE && reader.wireType === WireType.VARINT) {
+      variant.originSize = Number(reader.readVarint());
+    } else if (field === MEDIA_IS_LONG_PIC && reader.wireType === WireType.VARINT) {
+      variant.isLong = Number(reader.readVarint()) === 1;
+    } else {
+      reader.skipField();
+    }
+  }
+  if (type !== 3) { return; }
+  const urls: string[] = [variant.originPic, variant.srcPic, variant.bigPic, variant.dynamicPic];
+  for (let i: number = 0; i < urls.length; i++) {
+    const fileKey: string = imageFileKey(urls[i]);
+    if (fileKey.length > 0 && !byFile.has(fileKey)) {
+      byFile.set(fileKey, variant);
+    }
+  }
+}
+
 function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
   const t: PersonalizedThread = new PersonalizedThread();
+  const contentImages: PersonalizedContentImage[] = [];
+  const mediaByFile: Map<string, PersonalizedMediaVariant> = new Map<string, PersonalizedMediaVariant>();
   let itemId: number = 0;
   let threadType: number = 0;
   let postId: number = 0;
@@ -202,6 +294,13 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
           reader.skipField();
         }
         break;
+      case T_MEDIA:
+        if (reader.wireType === WireType.LENGTH_DELIMITED) {
+          readThreadMedia(reader.readBytes(), mediaByFile);
+        } else {
+          reader.skipField();
+        }
+        break;
       case T_FORUM_ID:
         t.forumId = Number(reader.readVarint());
         break;
@@ -215,7 +314,7 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
       }
       case T_CONTENT:
         if (reader.wireType === WireType.LENGTH_DELIMITED) {
-          appendPrimaryContent(reader.readBytes(), t);
+          appendPrimaryContent(reader.readBytes(), t, contentImages);
         } else {
           reader.skipField();
         }
@@ -240,6 +339,23 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
         break;
     }
   }
+  for (let i: number = 0; i < contentImages.length; i++) {
+    const img: PersonalizedContentImage = contentImages[i];
+    const matched: PersonalizedMediaVariant | undefined =
+      mediaByFile.get(imageFileKey(img.origin || img.big || img.active || img.normal || img.key));
+    const width: number = img.width > 0 ? img.width : (matched?.width ?? 0);
+    const height: number = img.height > 0 ? img.height : (matched?.height ?? 0);
+    const isLong: boolean = img.isLong || (matched?.isLong ?? false);
+    const thumb: string = matched?.bigPic || matched?.dynamicPic || img.normal || img.active || img.key;
+    const high: string = img.big || matched?.srcPic || img.active || img.normal || img.key;
+    const origin: string = img.origin || matched?.originPic || img.big || matched?.srcPic || img.key;
+    const originBytes: number = img.originBytes > 0 ? img.originBytes : (matched?.originSize ?? 0);
+    rememberFeedImage(img.key, width, height, isLong, origin, {
+      thumb: thumb,
+      high: high,
+      originBytes: originBytes
+    });
+  }
   // 回复推荐的 id 可能是回复身份；官方 getTid 优先 tid，仅缺省时回退 id。
   if (t.tid === 0) { t.tid = itemId; }
   // type=79/81 的回复推荐使用虚拟 tid，pb/page 必须读 origin_thread_info.tid。
@@ -258,11 +374,27 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
  * 优先级：活动图（36）优先、缺失时回退常规图（8）。这与 `159` 的推荐附图不同，
  * 前者与正文文本、表情处在同一有序片段中，因而不会混入评论附件。
  */
-function appendPrimaryContent(bytes: Uint8Array, thread: PersonalizedThread): void {
+function parseBsize(bsize: string): number[] {
+  const comma: number = bsize.indexOf(',');
+  if (comma <= 0) { return [0, 0]; }
+  const w: number = Number.parseInt(bsize.substring(0, comma), 10);
+  const h: number = Number.parseInt(bsize.substring(comma + 1), 10);
+  return [Number.isFinite(w) && w > 0 ? w : 0, Number.isFinite(h) && h > 0 ? h : 0];
+}
+
+function appendPrimaryContent(bytes: Uint8Array, thread: PersonalizedThread,
+  contentImages: PersonalizedContentImage[]): void {
   let type: number = 0;
   let text: string = '';
+  let bsize: string = '';
   let normal: string = '';
+  let big: string = '';
+  let origin: string = '';
   let active: string = '';
+  let width: number = 0;
+  let height: number = 0;
+  let originBytes: number = 0;
+  let isLong: boolean = false;
   const reader: ProtoReader = new ProtoReader(bytes);
   while (reader.hasMore()) {
     const field: number = reader.readTag();
@@ -270,17 +402,49 @@ function appendPrimaryContent(bytes: Uint8Array, thread: PersonalizedThread): vo
       type = Number(reader.readVarint());
     } else if (field === CONTENT_TEXT && reader.wireType === WireType.LENGTH_DELIMITED) {
       text = reader.readString();
+    } else if (field === CONTENT_BSIZE && reader.wireType === WireType.LENGTH_DELIMITED) {
+      bsize = reader.readString();
     } else if (field === CONTENT_NORMAL_IMAGE && reader.wireType === WireType.LENGTH_DELIMITED) {
       normal = reader.readString();
+    } else if (field === CONTENT_BIG_IMAGE && reader.wireType === WireType.LENGTH_DELIMITED) {
+      big = reader.readString();
+    } else if (field === CONTENT_ORIGIN_IMAGE && reader.wireType === WireType.LENGTH_DELIMITED) {
+      origin = reader.readString();
     } else if (field === CONTENT_ACTIVE_IMAGE && reader.wireType === WireType.LENGTH_DELIMITED) {
       active = reader.readString();
+    } else if (field === CONTENT_WIDTH && reader.wireType === WireType.VARINT) {
+      width = Number(reader.readVarint());
+    } else if (field === CONTENT_HEIGHT && reader.wireType === WireType.VARINT) {
+      height = Number(reader.readVarint());
+    } else if (field === CONTENT_ORIGIN_SIZE && reader.wireType === WireType.VARINT) {
+      originBytes = Number(reader.readVarint());
+    } else if (field === CONTENT_IS_LONG_PIC && reader.wireType === WireType.VARINT) {
+      isLong = Number(reader.readVarint()) === 1;
     } else {
       reader.skipField();
     }
   }
   if (type === 3) {
-    const image: string = active.length > 0 ? active : normal;
-    if (image.length > 0) { thread.images.push(image); }
+    const image: string = active.length > 0 ? active : (normal.length > 0 ? normal : (big.length > 0 ? big : origin));
+    if (image.length > 0) {
+      if ((width <= 0 || height <= 0) && bsize.length > 0) {
+        const parsed: number[] = parseBsize(bsize);
+        width = parsed[0];
+        height = parsed[1];
+      }
+      thread.images.push(image);
+      const item: PersonalizedContentImage = new PersonalizedContentImage();
+      item.key = image;
+      item.normal = normal;
+      item.big = big;
+      item.origin = origin;
+      item.active = active;
+      item.width = width;
+      item.height = height;
+      item.originBytes = originBytes;
+      item.isLong = isLong;
+      contentImages.push(item);
+    }
   } else if (type === 0 || type === 1 || type === 2 || type === 4) {
     // 文本、链接名称、表情编码与提及保持正文顺序，不把媒体URL当正文。
     thread.summary += text;
@@ -350,7 +514,6 @@ export function personalizedToBrief(t: PersonalizedThread): ThreadBrief {
   return b;
 }
 
-/** 批量转换 */
 export function personalizedToBriefs(items: PersonalizedThread[]): ThreadBrief[] {
   const out: ThreadBrief[] = [];
   for (let i = 0; i < items.length; i++) {

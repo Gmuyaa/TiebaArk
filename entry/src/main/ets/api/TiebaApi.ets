@@ -1,3 +1,8 @@
+/**
+ * 接口层：每个方法对应一个端点，负责组参数（`net/TiebaParams`）、发请求（`net/HttpClient`）与判成功，
+ * 响应体交给 `model/` 的 `parse*` 解析。这里不持有状态、不做缓存；失败按 `ApiResult.ok` 如实返回，
+ * 服务端 errno/errmsg 原样带回，不伪造成功。
+ */
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ForumSquareData, parseForumSquare } from '../model/ForumSquare';
 import { AddPostResult } from '../model/AddPostResult';
@@ -90,19 +95,17 @@ export {
   TailWriteResponse, AvatarUploadResponse, CreateForumChallengeResponse, UserSearchResponse
 };
 
-/** 贴吧接口编排：参数、签名、传输、业务错误检查与模型解析。HTTP 200 仍可能携带业务错误；frs/page 和 pb/page 使用 JSON 解析。 */
+/** 贴吧接口编排：参数、签名、传输、业务错误检查与模型解析。HTTP 200 仍可能携带业务错误。 */
 
-/** 业务成功码 */
 const ERROR_OK: number = 0;
 /** `error_code` 存在但无法解析成数字时的兜底码；宁可判失败也不猜成成功 */
 const ERROR_UNKNOWN: number = -2;
 /** 帖子不存在或已删除的业务码。 */
 export const ERRNO_THREAD_DELETED: number = 4;
-/** client_user_token 使用账号标识，userinfo 请求需同时携带 BDUSS 与 STOKEN。 */
+/** 网页 userinfo 接口需要浏览器 UA，并同时携带 BDUSS 与 STOKEN。 */
 const BROWSER_UA: string = 'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36';
 const USERINFO_URL: string = 'https://tieba.baidu.com/f/user/json_userinfo';
 
-/** 个人资料 JSON 接口使用签名 POST，请求路径为 /c/u/user/profile。 */
 /** 社交资料走 protobuf 通道，由 SelfProfileParams 打包、parseSelfProfileProto 解析。 */
 
 /** 业务错误在模型解析前检查。error_code 可能为数字或字符串，统一归一后比较。 */
@@ -112,10 +115,8 @@ interface ApiEnvelope {
 }
 
 /**
- * 把 `error_code` 归一到数字。
- *
- * 服务端两种形态都出现过（数字 / 字符串），必须都认：
- * 无值视为成功码 0；非数字字符串按"未知非零错误"处理（保守判失败，不猜成成功）。
+ * 把 `error_code` 归一到数字：服务端数字与字符串两种形态都出现过，必须都认。
+ * 无值视为成功码 0；非数字字符串按未知非零错误处理（保守判失败，不猜成成功）。
  */
 function normalizeErrorCode(raw: number | string | undefined): number {
   if (raw === undefined) {
@@ -128,9 +129,6 @@ function normalizeErrorCode(raw: number | string | undefined): number {
   return Number.isNaN(parsed) ? ERROR_UNKNOWN : parsed;
 }
 
-/**
- * 取参数值；不存在返回 `'<missing>'`。仅供诊断日志使用。
- */
 function valueOf(params: SignParam[], key: string): string {
   for (let i = 0; i < params.length; i++) {
     if (params[i].key === key) {
@@ -148,10 +146,7 @@ function briefValue(value: string): string {
   return `${value.length > 12 ? value.slice(0, 12) : value}…(len=${value.length})`;
 }
 
-/**
- * HTTPS APP `/c/s/login` 的响应信封。
- * 除业务错误外还需读取 `anti.tbs` 与 `user.id`，用于确认凭据有效。
- */
+/** HTTPS APP `/c/s/login` 的响应信封；除业务错误还要读 `anti.tbs` 与 `user.id` 确认凭据有效。 */
 interface TbsEnvelope {
   error_code?: number | string;
   error_msg?: string;
@@ -175,7 +170,6 @@ interface PassportInfoData {
   uid?: number;
   uname?: string;
   displayName?: string;
-  /** 完整头像 URL（如 https://himg.bdimg.com/...） */
   portrait?: string;
 }
 
@@ -190,7 +184,7 @@ export class ForumSquareResponse extends ApiResult {
 }
 
 export class TiebaApi {
-  /** B-04验证码资料读取准备；不请求图片，不发送创建，类型未知不推断可完成。未接入生产（建吧链路未接，0 调用方）。 */
+  /** 读取建吧验证码资料；不请求图片、不发送创建，类型未知时不推断可完成。 */
   async fetchCreateForumChallenge(device: TiebaDevice, session: TiebaSession): Promise<CreateForumChallengeResponse> {
     const response: CreateForumChallengeResponse = new CreateForumChallengeResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取创建吧验证码'); return response; }
@@ -212,7 +206,7 @@ export class TiebaApi {
     response.ok = true; return response;
   }
 
-  /** E-01独立头像传输准备；accepted不是资料读回成功，尚无UI调用。 */
+  /** 头像上传；`accepted` 只表示服务端已接收，不等于资料已更新。 */
   async uploadAvatar(device: TiebaDevice, session: TiebaSession, input: AvatarUploadInput,
     traceId: number = 0): Promise<AvatarUploadResponse> {
     const response: AvatarUploadResponse = new AvatarUploadResponse();
@@ -238,27 +232,19 @@ export class TiebaApi {
     if (transport.code !== 200) { response.failLocal('头像上传HTTP结果未确认'); return response; }
     const rawBody: string = decodeUtf8(transport.bytes);
     response.data = parseAvatarUpload(rawBody);
-    /*
-     * 只记**形态**与业务码：字段名 + 类型 + 长度 + 服务端返回的业务文案（截断）。
-     * 不记响应正文、头像 hash、URL 或图片字节 —— 正文可能含头像标识。
-     * 目的：把"服务器明确拒绝"与"我们没认出成功字段"分开。
-     */
+    // 只记形态与业务码，不记响应正文、头像 hash、URL 或图片字节；目的是把"服务器明确拒绝"与"没认出成功字段"分开。
     const message: string = response.data.message.length > 80
       ? response.data.message.substring(0, 80) : response.data.message;
     avatarTracePhase('upload-parse', traceId, startedMs,
       `code=${response.data.code} pending=${response.data.pendingReview()} len=${transport.bytes.length}`
         + ` msg=${message} ${avatarUploadEnvelopeShape(rawBody)}`);
     if (response.data.code === -1) { response.failLocal(response.data.message); return response; }
-    /*
-     * `code=0` 与 `code=300003`（头像已上传，审核中）都算**服务端已接收**：
-     * 调用方据此发布本地预览并读回；其余非零码仍如实按业务失败处理。
-     * 审核中不等于资料已更新，界面必须如实标注（见 AvatarEditVM.pendingReview）。
-     */
+    // `code=0` 与 `code=300003`（审核中）都算服务端已接收；审核中不等于资料已更新，界面必须如实标注。
     if (!response.data.received()) { response.failBusiness(response.data.code, response.data.message); return response; }
     response.ok = true; return response;
   }
 
-  /** 单片传输准备；没有上传UI调用，不重试未知写结果，不把中间片当完整图片。 */
+  /** 单张图片分片上传；不重试未知写结果，不把中间片当完整图片。 */
   async uploadImageChunk(device: TiebaDevice, session: TiebaSession, chunk: ImageUploadChunk): Promise<ImageUploadChunkResponse> {
     const response: ImageUploadChunkResponse = new ImageUploadChunkResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能上传图片'); return response; }
@@ -271,7 +257,7 @@ export class TiebaApi {
     // 在异步签名前拷贝本片；调用方后续改变缓冲区不能修改已经准备的请求。
     const bytes: Uint8Array = chunk.bytes.slice();
     const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
-    // 当前 NetWork→xa.c 使用大写十六进制签名；仅上传通道按已取证格式转换。
+    // NetWork→xa.c 使用大写十六进制签名；只有上传通道需要这个形态。
     for (const param of signed) { if (param.key === 'sign') { param.value = param.value.toUpperCase(); } }
     const body: Uint8Array = ImageUploadParams.multipart(signed, bytes);
     if (body.length === 0) { response.failLocal('图片分片与请求边界冲突'); return response; }
@@ -319,7 +305,6 @@ export class TiebaApi {
     return response;
   }
 
-  /** 写链路供后续取证与 VM mock 验证；未经过写接口取证前界面不开放。 */
   async setMessageSetting(device: TiebaDevice, session: TiebaSession,
     field: MessageSettingField, value: number): Promise<ApiResult> {
     const response: ApiResult = new ApiResult();
@@ -340,10 +325,8 @@ export class TiebaApi {
     return response;
   }
   /**
-   * 吧务团队**全量**名单（官方 `GetBawuInfo`，cmd 301007，A-01 补）。
-   *
-   * 与 `fetchForumMembers` 的分工：后者给的吧务组**只有预览**（实测 52 人回 5 个），
-   * 这个端点给全量并按角色分组。两者都成功时由 `composeMemberGroups()` 用角色组替换预览组。
+   * 吧务团队全量名单（cmd 301007）。`fetchForumMembers` 给的吧务组只有预览，
+   * 两者都成功时由 `composeMemberGroups()` 用角色组替换预览组。
    */
   async fetchBawuTeam(device: TiebaDevice, session: TiebaSession,
     forumId: number): Promise<BawuTeamResponse> {
@@ -367,7 +350,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** C-03：公开语音二进制读取，无凭据/签名，编码由平台实际解析后裁决。 */
+  /** 公开语音二进制读取：无凭据、不签名，编码由平台实际解析后裁决。 */
   async fetchVoiceAudio(device: TiebaDevice, id: string): Promise<VoiceAudioResponse> {
     const response: VoiceAudioResponse = new VoiceAudioResponse();
     const source: string = VoiceAudioParams.url(id);
@@ -409,7 +392,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** D-03：候选人读取；普通选人契约，发送文本与界面仍待证实。 */
+  /** @ 候选人读取；普通选人契约，发送文本与界面仍待证实。 */
   async fetchAtCandidates(device: TiebaDevice, session: TiebaSession, kind: AtCandidateKind,
     word: string = ''): Promise<AtCandidatesResponse> {
     const response: AtCandidatesResponse = new AtCandidatesResponse();
@@ -425,7 +408,7 @@ export class TiebaApi {
     response.data = data; response.ok = true; return response;
   }
 
-  /** E-04/G-02：账号吧务隐私标记读取；当前 APK 静态契约，服务端待验收。 */
+  /** 账号隐私标记读取；当前只有 APK 静态契约，服务端待验收。 */
   async fetchPrivacyMarks(device: TiebaDevice, session: TiebaSession, uid: number): Promise<PrivacyMarksResponse> {
     const response: PrivacyMarksResponse = new PrivacyMarksResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取隐私标记'); return response; }
@@ -442,7 +425,6 @@ export class TiebaApi {
     return response;
   }
 
-  /** E-04/G-02：写契约准备；UI 未开放，动态写/回读取证待执行。 */
   async setPrivacyMark(device: TiebaDevice, session: TiebaSession, field: PrivacyMarkField, value: number): Promise<ApiResult> {
     const response: ApiResult = new ApiResult();
     if (!session.hasBduss() || session.tbs.length === 0 || !validPrivacyMark(field, value)) {
@@ -459,7 +441,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** E-04：账号屏蔽吧读取；当前 APK 静态契约已核对，服务端待验收。 */
+  /** 账号屏蔽吧读取；APK 静态契约已核对，服务端待验收。 */
   async fetchForbiddenForums(device: TiebaDevice, session: TiebaSession, uid: number,
     page: number): Promise<ForbiddenForumsResponse> {
     const response: ForbiddenForumsResponse = new ForbiddenForumsResponse();
@@ -512,10 +494,7 @@ export class TiebaApi {
     return response;
   }
 
-  /**
-   * 「解除屏蔽吧」——官方屏蔽吧列表页的取消动作（`submitCancelDislike`，只发 `forum_id`）。
-   * 需要有效 tbs：调用方拿不到就显式刷新一次（与 `AuthorBlockVM.set` 同一处理）。
-   */
+  /** 解除屏蔽吧（官方 `submitCancelDislike`，只发 `forum_id`）；需要有效 tbs，调用方拿不到就显式刷新一次。 */
   async unblockForum(device: TiebaDevice, session: TiebaSession, forumId: string): Promise<ApiResult> {
     const result: ApiResult = new ApiResult();
     if (!session.hasBduss() || session.tbs.length === 0) {
@@ -536,7 +515,7 @@ export class TiebaApi {
     return result;
   }
 
-  /** D-08：普通小尾巴读取，静态契约已核对；动态服务端待验收。 */
+  /** 小尾巴读取；静态契约已核对，服务端待验收。 */
   async fetchTails(device: TiebaDevice, session: TiebaSession): Promise<TailsResponse> {
     const response: TailsResponse = new TailsResponse();
     if (!session.hasBduss()) { response.failLocal('登录后才能读取小尾巴'); return response; }
@@ -760,16 +739,14 @@ export class TiebaApi {
   }
 
   /**
-   * 单个吧的头像读取（用于"手上这份响应没带吧头像"的补取）。
+   * 单个吧的头像读取（用于手上这份响应没带吧头像的补取）。
    *
-   * 已知 fid 时先走 `getforumdetail` —— 响应只有吧信息，比 `rn=1` 的整页 `frs/page`
-   * 轻约 3 倍（2026-11-13 真机 A/B：中位 364ms vs 1066ms，见 `docs/开发记录/2026-11-13-吧头像加载提速.md`）。
-   * 回退 `frs/page` 只有两个条件：详情请求成功却没拿到可用头像、或返回的吧名与请求的不一致
-   * （fid 过期/错配时宁可多查一次，也不能把别的吧的头像贴到这张卡上）。传输层失败**不**回退，
-   * 否则一次超时要等两遍；由调用方的冷却/重试决定后续。
+   * 已知 fid 时先走 `getforumdetail`：响应只有吧信息，比整页 `frs/page` 轻得多，
+   * 见 `docs/开发记录/2026-11-13-吧头像加载提速.md`。只有"详情成功却没拿到可用头像"或
+   * "返回的吧名与请求不一致"才回退 `frs/page` —— fid 过期/错配时宁可多查一次，也不能把别的吧的头像
+   * 贴到这张卡上。传输层失败不回退，否则一次超时要等两遍。
    *
-   * @param label 只用于日志区分调用点（首页 / 收藏 / 搜帖…），不参与协议。
-   * @returns 服务端当前给的头像完整 URL；空串 = 本次没拿到。
+   * @param label 只用于日志区分调用点，不参与协议。
    */
   async fetchForumAvatar(device: TiebaDevice, session: TiebaSession, forumName: string,
     forumId: number = 0, label: string = ''): Promise<string> {
@@ -837,7 +814,7 @@ export class TiebaApi {
     return client;
   }
 
-  /** 网页首页侧栏的真实热议榜。HAR 核对过这三个 GET 参数及 PC 签名。 */
+  /** 网页首页侧栏的热议榜；三个 GET 参数与 PC 签名经 HAR 核对。 */
   async fetchHotTopics(): Promise<HotTopicsResponse> {
     const response: HotTopicsResponse = new HotTopicsResponse();
     const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
@@ -877,7 +854,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 当前官方 hybrid-main-bawu/forumSquare：登录态、一级/二级分类与20条分页。 */
+  /** 官方 hybrid-main-bawu/forumSquare：登录态、一级/二级分类与 20 条分页。 */
   async fetchForumSquare(device: TiebaDevice, session: TiebaSession, category: string = '推荐',
     subcategory: string = '全部', page: number = 1): Promise<ForumSquareResponse> {
     const response: ForumSquareResponse = new ForumSquareResponse();
@@ -942,10 +919,7 @@ export class TiebaApi {
       return undefined;
     }
 
-    /*
-     * 归一后再比较：服务端 `error_code` 有数字（frs/page）与字符串（agree/opAgree）两种形态，
-     * 直接把字符串和 0 比较会让**成功响应被误判为失败**。详见 ApiEnvelope 注释。
-     */
+    // `error_code` 有数字与字符串两种形态，直接和 0 比较会把成功响应误判为失败（见 normalizeErrorCode）。
     const code: number = normalizeErrorCode(envelope.error_code);
 
     if (code !== ERROR_OK) {
@@ -965,12 +939,10 @@ export class TiebaApi {
     return true;
   }
 
-  /** 响应体不是合法 JSON 的统一文案（固定来源名）。 */
   private static failNotJson(out: ApiResult, what: string): void {
     out.failLocal(`${what}响应不是合法 JSON`);
   }
 
-  /** 响应体不是合法 JSON，附带解析器原始说明。 */
   private static failNotJsonDetail(out: ApiResult, detail: string): void {
     out.failLocal(`响应不是合法 JSON：${detail}`);
   }
@@ -1035,7 +1007,7 @@ export class TiebaApi {
       }
       const info: UserProfileInfo = parseUserInfo(decodeUtf8(res.bytes));
 
-      // 第二兜底：json_userinfo 缺昵称或头像时，仍试一次 passport（保持既有行为）
+      // 兜底：json_userinfo 缺昵称或头像时再试一次 passport
       if (info.nickName.length === 0 || info.portrait.length === 0) {
         await this.tryPassportApi(session, info);
       }
@@ -1052,7 +1024,7 @@ export class TiebaApi {
     }
   }
 
-  /** 读取当前账号的社交资料，包括关注、粉丝、等级与关注贴吧。使用 multipart protobuf 请求。 */
+  /** 读取当前账号的社交资料（关注、粉丝、等级、关注贴吧），走 multipart protobuf。 */
   async fetchSelfProfile(session: TiebaSession, device: TiebaDevice,
     portrait: string = ''): Promise<UserProfileInfo | undefined> {
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
@@ -1065,7 +1037,7 @@ export class TiebaApi {
       return undefined;
     }
     if (portrait.length === 0) {
-      // 没有头像 hash 就定位不到本人 —— `uid` 那条路已被证伪（见 SelfProfileParams 的方法注释）
+      // 没有头像 hash 就定位不到本人：uid 那条路走不通（见 SelfProfileParams.buildRequest）
       hilog.warn(0x0000, 'TiebaApi', 'self profile skipped: portrait unavailable');
       return undefined;
     }
@@ -1094,10 +1066,7 @@ export class TiebaApi {
   }
 
   /**
-   * 尝试从 passport 获取用户昵称与头像。
-   *
-   * 现在它是**第二兜底**：`json_userinfo` 实测已能给出昵称（`user_name_show`）
-   * 与头像（`user_portrait`），只有那次请求失败时才走到这里。
+   * 从 passport 取昵称与头像，是 `json_userinfo` 的第二兜底：只有那次请求缺字段时才会走到这里。
    */
   private async tryPassportApi(session: TiebaSession, profile: UserProfileInfo): Promise<void> {
     const client: HttpClient = TiebaApi.requestClient(BROWSER_UA);
@@ -1114,7 +1083,6 @@ export class TiebaApi {
         return;
       }
       const parsed: PassportInfo = JSON.parse(raw) as PassportInfo;
-      // passport 返回格式：{ errorCode: 0, data: { uname, displayName, portrait, uid } }
       if (parsed.errorCode !== 0 || parsed.data === undefined) {
         hilog.info(0x0000, 'TiebaApi', 'passport api: errorCode=%{public}d', parsed.errorCode);
         return;
@@ -1255,7 +1223,6 @@ export class TiebaApi {
     return parsed;
   }
 
-  /** 搜帖子；forumName 非空时添加 kw 参数进行吧内搜索。 */
   async searchPosts(device: TiebaDevice, session: TiebaSession, word: string,
     page: number, pageSize: number, forumName?: string): Promise<SearchPostResponse> {
     const response: SearchPostResponse = new SearchPostResponse();
@@ -1278,7 +1245,7 @@ export class TiebaApi {
     params.push(new SignParam('word', clean));
     params.push(new SignParam('pn', String(page)));
     params.push(new SignParam('rn', String(pageSize)));
-    // 吧内搜索：只多这一个参数（证据见方法头；空串不发，避免把空 kw 当成查询条件）
+    // 吧内搜索只多这一个参数；空串不发，避免把空 kw 当成查询条件
     const scope: string = searchScopeForum(forumName);
     if (scope.length > 0) {
       params.push(new SignParam('kw', scope));
@@ -1294,7 +1261,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 网页搜吧使用 GET /mo/q/search/forum，业务码为 no，page 从 1 开始；网页签名参考 lumina37/aiotieba（Unlicense）。 */
+  /** 网页搜吧 GET /mo/q/search/forum：业务码是 `no`，page 从 1 起；网页签名参考 lumina37/aiotieba（Unlicense）。 */
   async searchForums(word: string, page: number, pageSize: number): Promise<ForumSearchResponse> {
     const response: ForumSearchResponse = new ForumSearchResponse();
 
@@ -1459,12 +1426,9 @@ export class TiebaApi {
   /**
    * 我的收藏列表（`POST /c/f/post/threadstore`，旧版 form + 客户端签名）。
    *
-   * **翻页游标是 `offset`（条目偏移，从 0 起），不是 `pn`**——2026-11-08 真机探针
-   * （`entry/src/ohosTest/ets/test/StorePageProbe.test.ets`）实测：
-   * `pn=0/1/2/3` 与 `page_no`/`start`/`last_tid`/`max_tid`/`st_type` **全部返回同一批首 20 条**
-   * （页间交集 20/20），只有 `offset=20` 恰好接在第 1 页之后（交集 0）；`rn` 有效（rn=40/50
-   * 分别回 40/50 条）。旧实现发 `pn`，服务端忽略它 → 每次都是第 1 页 → 收藏永远只有 20 条。
-   * 别再改回 `pn`。
+   * **翻页游标是 `offset`（条目偏移，从 0 起），不是 `pn`**：`pn`/`page_no`/`start`/`last_tid` 都被忽略，
+   * 一律返回同一批首 20 条，只有 `offset` 能翻页（`rn` 有效）。别再改回 `pn`，否则收藏永远只有 20 条。
+   * 取证见 `entry/src/ohosTest/ets/test/StorePageProbe.test.ets`。
    */
   async fetchStoredThreads(device: TiebaDevice, session: TiebaSession, uid: number,
     offset: number, pageSize: number): Promise<StoredThreadsResponse> {
@@ -1508,12 +1472,8 @@ export class TiebaApi {
   }
 
   /**
-   * 我的回复 / 我的主题（pb `POST /c/u/feed/userpost?cmd=303002`）。
-   *
-   * `isThread = 0` → 回复；`1` → 主题帖。同一个端点同一个 cmd，只差这个开关。
-   * 请求体构造见 `UserPostParams`；响应解析在 `model/MyContent.ets`（Node 侧同测）。
-   *
-   * **不签名**（pb 通道的规矩），身份靠 Cookie 与 `common.BDUSS`。
+   * 我的回复 / 我的主题（pb `POST /c/u/feed/userpost?cmd=303002`）：`isThread` 0 = 回复、1 = 主题。
+   * pb 通道不签名，身份靠 Cookie 与 `common.BDUSS`；响应解析在 `model/MyContent.ets`。
    */
   async fetchUserPosts(device: TiebaDevice, session: TiebaSession, uid: number,
     isThread: number, page: number, pageSize: number): Promise<UserPostsResponse> {
@@ -1657,7 +1617,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 当前 APK qpe.e 指定吧批量签到；普通路径不发送空 authsid，不使用全账号隐式分支。 */
+  /** 官方 qpe.e 指定吧批量签到；普通路径不发送空 authsid，也不走全账号隐式分支。 */
   async fetchOfficialSignCapability(device: TiebaDevice, session: TiebaSession, uid: number): Promise<OfficialSignCapabilityResponse> {
     const response: OfficialSignCapabilityResponse = new OfficialSignCapabilityResponse();
     if (!session.hasBduss() || !Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('请先登录'); return response; }
@@ -1690,7 +1650,7 @@ export class TiebaApi {
     device.clientVersion = TiebaVersion.LATEST;
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
     const params: SignParam[] = TiebaCommonParams.build(device, session);
-    // 当前 APK 普通路径的 authsid 为 null，NetWorkCoreByBdHttp 省略空参数。
+    // 官方普通路径的 authsid 为 null，NetWorkCoreByBdHttp 省略空参数。
     params.push(new SignParam('user_id', String(uid)), new SignParam('forum_ids', forumIds.join(',')));
     const text: string | undefined = await this.postJsonText(client, '/c/c/forum/msign', params, response);
     if (text === undefined) { return response; }
@@ -1759,11 +1719,11 @@ export class TiebaApi {
   /**
    * 拉取帖子详情（主题 + 一页楼层）。
    *
-   * `kz` 是帖子 id，`pn` 是**楼层页**页码（不是主题列表页）。
-   * `r=0/1/2` 分别表示正序、倒序、热门序；`lz=1` 表示只看楼主。
+   * `kz` 是帖子 id，`pn` 是**楼层页**页码（不是主题列表页）；`r=0/1/2` 为正序/倒序/热门，`lz=1` 只看楼主。
+   * 带 `with_floor=1&floor_rn=5` 时每层附带最多 5 条楼中楼内联预览（外面还包一层
+   * `sub_post_list: { pid, sub_post_list: [...] }`）；预览是摘要，完整一页仍要 `fetchSubPosts`。
    *
-   * 注意本响应**不含楼中楼**：即使某楼 `sub_post_number > 0`，`sub_post_list` 也是空的，
-   * 要看楼中楼得再调 `fetchSubPosts`。这是实测结论，不是解析漏了。
+   * 版本必须是 `TiebaVersion.DETAIL`：低版本会把预览里的图片降级成 `[图片]` 文本。
    */
   async fetchThreadDetail(device: TiebaDevice, session: TiebaSession, tid: number,
     page: number, pageSize: number, sortType: ReplySortType = ReplySortType.ASC,
@@ -1780,12 +1740,12 @@ export class TiebaApi {
       return response;
     }
 
-    device.clientVersion = TiebaVersion.LATEST;
-    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.LATEST}`);
+    device.clientVersion = TiebaVersion.DETAIL;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.DETAIL}`);
 
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('kz', String(tid)));
-    // 真机读回：pid 定位需要 pn=0；pn=1 会得到空 post_list。
+    // pid 定位需要 pn=0；pn=1 会得到空 post_list
     params.push(new SignParam('pn', String(targetPid > 0 ? 0 : page)));
     params.push(new SignParam('rn', String(pageSize)));
     if (targetPid > 0) {
@@ -1795,10 +1755,8 @@ export class TiebaApi {
     const serverSort: number = onlyAuthor ? ReplySortType.ASC : sortType;
     params.push(new SignParam('r', String(serverSort)));
     params.push(new SignParam('lz', onlyAuthor ? '1' : '0'));
-    /*
-     * 诊断用：按官方 protobuf `DataReq` 的 with_floor/floor_rn 语义，试着让服务端
-     * 随楼层下发前几条楼中楼。若 JSON 通道也认这两个参数，就不用走 protobuf 解析。
-     */
+    // 楼中楼内联预览：`with_floor=1&floor_rn=N` 让服务端随楼层下发前 N 条，预览块靠它一次成型；
+    // 图片能否保留取决于上面的 `_client_version`，必须与 DETAIL 版本一起用。
     params.push(new SignParam('with_floor', '1'));
     params.push(new SignParam('floor_rn', '5'));
 
@@ -1813,7 +1771,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 背景补卡片取首页两楼；rn=1实测会对有效帖子返回29，仍须严格检查业务码和主题身份。 */
+  /** 背景补卡片取首页两楼；rn=1 会对有效帖子回 29，仍须严格检查业务码与主题身份。 */
   async fetchHotTopicCard(device: TiebaDevice, session: TiebaSession, tid: number): Promise<HotTopicCardResponse> {
     const response: HotTopicCardResponse = new HotTopicCardResponse();
     if (!Number.isSafeInteger(tid) || tid <= 0) {
@@ -1860,12 +1818,9 @@ export class TiebaApi {
   }
 
   /**
-   * 拉取某楼的楼中楼。
-   *
-   * 端点是 `/c/f/pb/floor`（实测；`/c/f/pb/lfloor` 返回空体，不是它）。
-   * `pid` 是楼层 id（楼层列表里的 `id`，不是 tid）。
-   * `threadAuthorId` 用来标记"楼主"——楼中楼响应里带内联作者，但没有主题作者 id，
-   * 只能由调用方从详情页拿过来。
+   * 拉取某楼的楼中楼。端点是 `/c/f/pb/floor`（`/c/f/pb/lfloor` 返回空体，不是它）；
+   * `pid` 是楼层 id（不是 tid）。`threadAuthorId` 只能由调用方从详情页带过来——
+   * 楼中楼响应里的内联作者没有主题作者 id。
    */
   async fetchSubPosts(device: TiebaDevice, session: TiebaSession, tid: number, pid: number,
     threadAuthorId: number, page: number, pageSize: number): Promise<SubPostResponse> {
@@ -1901,14 +1856,10 @@ export class TiebaApi {
     return response;
   }
 
-  /** HTTPS 校验裸 BDUSS 并获取 anti.tbs；不将待校验凭据发布到当前会话。
-   * 协议来源：https://github.com/lumina37/aiotieba/blob/master/src/aiotieba/api/login/_api.py
-   * 旧网页 dc/common/tbs 的 HTTPS 分流返回未登录，当前改走已真机验证的客户端路径。
-   */
+  /** 用裸 BDUSS 校验并取 `anti.tbs`（HTTPS `/c/s/login`，协议参考 aiotieba `api/login/_api.py`）；不把待校验凭据写进当前会话。 */
   async fetchTbsWithBduss(bduss: string): Promise<TbsResponse> {
     const response: TbsResponse = new TbsResponse();
     if (bduss.length === 0) { response.failLocal('缺少 BDUSS'); return response; }
-    // aiotieba api/login/_api.py：两个参数 APP 签名，HTTPS /c/s/login，anti.tbs。
 
     const signed: SignParam[] = await CryptoUtil.appendSign([
       new SignParam('_client_version', TiebaVersion.LATEST), new SignParam('bdusstoken', bduss)
@@ -1935,7 +1886,7 @@ export class TiebaApi {
     return response;
   }
 
-  /** 点赞与取消点赞共用 opAgree，由 op_type 区分。obj_type：主题=3、楼层=1、楼中楼=2；主题状态读 thread.agree。签名覆盖最终全部字段，CUID 使用持久化设备标识。协议参考 aiotieba api/agree/_api.py（Unlicense）。 */
+  /** 点赞与取消点赞共用 opAgree，由 op_type 区分；obj_type 主题=3、楼层=1、楼中楼=2，主题状态读 thread.agree。签名覆盖最终全部字段（协议参考 aiotieba api/agree/_api.py，Unlicense）。 */
   async agreePost(device: TiebaDevice, session: TiebaSession, tid: number, pid: number,
     agree: boolean, objType: AgreeObjType = AgreeObjType.POST,
     forumId: number = 0): Promise<AgreeResponse> {
@@ -1992,9 +1943,7 @@ export class TiebaApi {
 
     if (text === undefined) {
       /*
-       * 诊断日志放在**判定之后**：此处 ok 必然是 false。
-       * 早先把它放在 `response.ok = true` 之前，日志会打印赋值前的旧值，
-       * 于是"成功响应"被日志显示成 ok=false —— 日志必须反映最终状态，否则比没有更误导。
+       * 诊断日志必须在判定之后：此处 ok 必然是 false。日志要反映最终状态，否则比没有更误导。
        */
       hilog.info(0x0000, 'TiebaApi',
         'agree result: path=/c/c/agree/opAgree agree_type=2 op_type=%{public}s obj_type=%{public}s'
@@ -2007,7 +1956,6 @@ export class TiebaApi {
 
     response.ok = true;
 
-    /* 解析 data.agree.score / is_first_agree，用于客户端即时判定点赞是否落账 */
     try {
       const obj: object = JSON.parse(text);
       if (typeof obj === 'object' && obj !== null) {
@@ -2030,7 +1978,6 @@ export class TiebaApi {
     return response;
   }
 
-  /** 收藏主题，发送 POST /c/c/post/addstore。 */
   async addStoreThread(device: TiebaDevice, session: TiebaSession, tid: number,
     pid: number): Promise<StoreOpResponse> {
     const response: StoreOpResponse = new StoreOpResponse();
@@ -2060,11 +2007,7 @@ export class TiebaApi {
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = StoreParams.buildAdd(device, session, tid, pid);
     const text: string | undefined = await this.postJsonText(client, StoreParams.ADD_PATH, params, response);
-    /*
-     * 成功判定：postJsonText 只负责标记失败（transport/JSON/业务错误），
-     * 拿到响应文本且没被标记失败就是成功——**必须显式置 ok=true**，
-     * 否则"服务端已收藏成功、客户端却报失败"，首轮真机实测就抓到过这个漏洞。
-     */
+    // postJsonText 只负责标记失败；拿到响应文本就是成功，必须显式置 ok=true，否则会出现"服务端已收藏、客户端报失败"。
     if (text !== undefined) {
       response.ok = true;
     }
@@ -2102,7 +2045,7 @@ export class TiebaApi {
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = StoreParams.buildRemove(device, session, tid, uid);
     const text: string | undefined = await this.postJsonText(client, StoreParams.RM_PATH, params, response);
-    // 同 addstore：拿到响应文本即成功（postJsonText 已把失败标好），必须显式置 ok
+    // 同 addstore：拿到响应文本即成功（postJsonText 已标记失败），必须显式置 ok
     if (text !== undefined) {
       response.ok = true;
     }
@@ -2153,11 +2096,10 @@ export class TiebaApi {
   }
 
   /**
-   * 收藏表情全量推送（`POST /c/e/meme/collect`）—— 协议在 `MemeEmojiParams` 注释里。
+   * 收藏表情全量推送（`POST /c/e/meme/collect`），协议见 `MemeEmojiParams`。
    *
-   * 全量语义：调用方必须提供完整目标态，不得使用面板过滤后的列表。
-   * SavedEmojiManagerVM在用户确认后先做原样推回不变性检查，再执行目标增删，
-   * 写前核对完整云端列表，写后读回确认；未知写结果不自动重试。
+   * 全量语义：调用方必须给完整目标态，不得用面板过滤后的列表；写前核对云端完整列表、写后读回确认，
+   * 未知写结果不自动重试。
    */
   async pushMemeCollect(device: TiebaDevice, session: TiebaSession, pics: string,
     picUpdateTimeMs: number): Promise<MemeCollectResponse> {
@@ -2257,7 +2199,7 @@ export class TiebaApi {
         tid, parsed.errorCode, parsed.errorMsg);
       return response;
     }
-    // 拿到 bytes 且 errorno=0 才算成功——必须显式置位，理由见方法注释
+    // 拿到 bytes 且 errorno=0 才算成功，必须显式置 ok
     response.ok = true;
     hilog.info(0x0000, 'TiebaApi',
       'reply accepted tid=%{public}d fid=%{public}d pid=%{public}d targetPid=%{public}s',
@@ -2266,11 +2208,9 @@ export class TiebaApi {
   }
 
   /**
-   * 发表**主题帖**，走 form 通道 `POST /c/c/thread/add`（与回复用的 protobuf addPost 是两条链路）。
+   * 发表主题帖，走 form 通道 `POST /c/c/thread/add`（与回复的 protobuf addPost 是两条链路，见 `AddThreadParams`）。
    *
-   * 协议依据与字段取舍见 `AddThreadParams` 的类注释。成功判定只看响应 JSON 的结果码：
-   * 拿到响应体且结果码为 0 才算受理；解析不出结果码按失败处理，不当成成功。
-   * 响应里带 tid 时回填给调用方跳转，带不出来也不影响发布判定。
+   * 拿到响应体且结果码为 0 才算受理，解析不出结果码按失败；响应带 tid 时回填给调用方跳转。
    */
   async addThread(device: TiebaDevice, session: TiebaSession, title: string, content: string,
     fid: number, forumName: string, nickname: string, topicId: number,
@@ -2313,7 +2253,7 @@ export class TiebaApi {
     const params: SignParam[] = AddThreadParams.build(device, session, trimmedTitle, trimmedContent,
       fid, forum, nickname.trim(), topicId, isHide, contentStatement);
     // 与关注、点赞同一条通道：form + APP 盐签名，BDUSS/STOKEN/tbs 由公共参数进 body。
-    // 免签 web 表单的写法在 110001 上撞过两次（见 AddThreadParams 注释），不再回退。
+    // 免签 web 表单会回 110001（见 AddThreadParams 注释），不要回退。
     const text: string | undefined = await this.postJsonText(client, AddThreadParams.PATH, params, response);
     if (text === undefined) {
       hilog.warn(0x0000, 'TiebaApi', 'thread add not accepted fid=%{public}d code=%{public}d local=%{public}s',

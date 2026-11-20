@@ -1,13 +1,7 @@
 /**
- * 一级回复下方的**楼中楼预览灰块**。
- *
- * 全页只有这一块用浅灰底：主帖与一级回复都保持页面底色，
- * 靠"灰块"这一个视觉信号把"主回复"和"讨论串"分成两层。
- * 灰块不带阴影、不带边框，圆角 10；左右内边距 12，上下 10。
- *
- * 五条以内全部展示；总回复数超过五条时显示"查看 X 条回复 ›"。
- * 点击灰块任意位置与点击底部入口是**同一个动作**——从底部弹出回复详情面板
- * （`SubReplyDetailSheet`），不再跳独立页面。
+ * 一级回复下方的楼中楼预览灰块：全页只有这一块用浅灰底，靠它把"主回复"与"讨论串"分成两层（不带阴影与边框）。
+ * 五条以内全部展示，超过时显示"查看 X 条回复 ›"；点灰块任意位置与点底部入口是同一个动作 —— 弹出回复详情面板
+ * （`SubReplyDetailSheet`），不跳独立页面。
  */
 
 import { SubPostItem } from '../model/ThreadDetail';
@@ -34,15 +28,11 @@ export struct SubReplyPreviewBox {
   @Require @Param subPosts: SubPostItem[];
   /** 该楼层的回复总数，用于"查看 X 条回复 ›" */
   @Param totalCount: number = 0;
-  /** 是否正在加载第一页 */
   @Param loading: boolean = false;
   /** 首页加载失败提示；为空表示没有失败 */
   @Param errorText: string = '';
-  /** 打开回复详情面板 */
   @Event onOpenDetail: () => void = (): void => {};
-  /** 首页失败后重试 */
   @Event onRetry: () => void = (): void => {};
-  /** 预览里的图片点击 */
   @Event onViewImage: (url: string) => void = (): void => {};
 
   /** 预览条数：不超过上限，也不超过已加载条数 */
@@ -58,11 +48,8 @@ export struct SubReplyPreviewBox {
   }
 
   /**
-   * 只要有回复就给出入口。
-   *
-   * 原来只在超过 5 条时显示"查看 X 条回复"；但服务端并非每层都下发内联预览，
-   * 没有预览的层如果连入口都藏起来，整块灰区就是空的。改成只要有条数就亮入口，
-   * 高度固定，不随异步数据变化。
+   * 只要有条数就给入口：服务端并非每层都下发内联预览，没有预览的层若连入口都藏起来，整块灰区就是空的。
+   * 高度因此固定，不随异步数据变化。
    */
   private shouldShowEntry(): boolean {
     return this.totalForEntry() > 0;

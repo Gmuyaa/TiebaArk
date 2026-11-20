@@ -69,7 +69,7 @@ export class SearchResultVM {
         const cached: string = getForumAvatar(name);
         if (cached.length > 0) { return cached; }
       }
-      // 落盘地址在 TTL 内直接复用，不发请求（2026-11-13 方案 2）。
+      // 落盘地址在 TTL 内直接复用，不发请求。
       const fromDisk: string = getCachedForumAvatarUrl(name, Date.now(), FORUM_AVATAR_URL_TTL_MS);
       if (fromDisk.length > 0) {
         markForumAvatarFetched(name);

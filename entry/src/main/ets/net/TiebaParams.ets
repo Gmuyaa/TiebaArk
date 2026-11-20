@@ -7,15 +7,10 @@ import { PrivacyMarkField, validPrivacyMark } from '../model/PrivacyMarks';
 import { AtCandidateKind, validAtKind } from '../model/AtCandidates';
 import { VideoFeedEnvironment } from '../model/VideoFeed';
 /**
- * 贴吧请求的公共参数与客户端身份。
+ * 贴吧请求的公共参数与客户端身份；客户端版本与域名常量取自 aiotieba 的 const。
  *
- * 参数构成依据公开协议资料：
- * - 客户端版本、域名常量来自 aiotieba 的 const 定义
- * - 设备指纹字段的格式来自 aiotieba 的 Account 契约说明
- *
- * 重要：本文件只负责"装参数的容器"，不负责生成设备指纹。
- * c3_aid / cuid_galaxy2 / enuid 这类字段依赖与官方实现一致的算法，
- * 未验证前不要伪造随机值 —— 服务端会校验失败。相关生成逻辑见 utils/DeviceUtil（待实现）。
+ * 本文件只负责装参数，不生成设备指纹：c3_aid / cuid_galaxy2 等依赖与官方一致的算法，
+ * 未验证前不要伪造随机值，服务端会校验失败（生成逻辑见 utils/DeviceUtil）。
  */
 
 import { CryptoUtil, SignParam, SignSalt } from '../utils/CryptoUtil';
@@ -25,10 +20,11 @@ import { TransferStats, TransferStatsSnapshot } from './TransferStats';
 
 /** 客户端版本常量。不同端点要求不同版本，用错版本服务端会返回格式错误。 */
 export class TiebaVersion {
-  /** 大部分 API 使用此版本 */
   static readonly LATEST: string = '22.6.5.1';
   /** 楼中楼图片要求此版本；22.6.5.1 会把 type=3 降级为 [图片] 文本。 */
   static readonly SUB_POST: string = '22.11.1.0';
+  /** 帖子详情 `/c/f/pb/page`。低版本（22.6.5.1）会把内联楼中楼的图片降级成 `[图片]` 文本，必须用 22.11.1.0。 */
+  static readonly DETAIL: string = '22.11.1.0';
   /** 部分依赖旧版响应格式的 API（如帖子列表）使用此版本 */
   static readonly LEGACY: string = '12.64.1.1';
   static readonly CHAT: string = '12.68.1.0';
@@ -44,7 +40,6 @@ export class TiebaHost {
 
 }
 
-/** B-04当前原生创建/验证码；创建参数仅准备，无写API/UI调用。 */
 export class CreateForumParams {
   static readonly CHALLENGE_PATH: string = '/c/f/anti/vcode';
   static readonly CREATE_PATH: string = '/c/c/forum/create';
@@ -53,7 +48,7 @@ export class CreateForumParams {
     params.push(new SignParam('fid', '0'), new SignParam('pub_type', '0'), new SignParam('fname', ''), new SignParam('tid', '0'));
     return params;
   }
-  /** 建吧参数（未接入生产：`TiebaApi` 没有创建吧的写入口，唯一消费者是 `CreateForum.test`） */
+  /** 建吧参数；没有生产写入口，唯一消费者是 `CreateForum.test`。 */
   static create(device: TiebaDevice, session: TiebaSession, draft: CreateForumDraft): SignParam[] {
     if (session.tbs.length === 0 || createForumDraftError(draft).length > 0) { return []; }
     const params: SignParam[] = TiebaCommonParams.build(device, session);
@@ -63,7 +58,7 @@ export class CreateForumParams {
   }
 }
 
-/** E-01 NetWork.uploadImage：普通头像pic全图，独立于帖子分片。 */
+/** 普通头像整图上传（官方 NetWork.uploadImage），与帖子分片上传是两条链路。 */
 export class AvatarUploadParams {
   static readonly PATH: string = '/c/c/img/portrait';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -91,7 +86,7 @@ export class AvatarUploadParams {
   }
 }
 
-/** D-02 普通帖图分片，当前 c27/NetWork/f8 契约；不复用头像上传。 */
+/** 普通帖图分片上传（官方 NetWork/f8 契约）；multipart 形态与头像上传不同，不能复用。 */
 export class ImageUploadParams {
   static readonly PATH: string = '/c/s/uploadPicture';
   static readonly BOUNDARY: string = '--------7da3d81520810*';
@@ -109,7 +104,7 @@ export class ImageUploadParams {
     if (chunk.forumName.length > 0) { params.push(new SignParam('small_flow_fname', chunk.forumName)); }
     return params;
   }
-  /** 当前 APK f8：UTF-8文本，chunk文件名file，不给文件片单独加Content-Type。 */
+  /** 官方 f8：UTF-8 文本，文件片字段名 chunk、filename=file，不给文件片单独加 Content-Type。 */
   static multipart(params: SignParam[], bytes: Uint8Array): Uint8Array {
     const marker: string = `--${ImageUploadParams.BOUNDARY}`;
     const prefix: Uint8Array = encodeUtf8(marker);
@@ -166,7 +161,7 @@ export class AtCandidatesParams {
   }
 }
 
-/** 当前 APK pwb/cxb.makeHttpParam；普通首屏/续页，无已读位置 ids 和筛选。 */
+/** 官方 pwb/cxb.makeHttpParam：普通首屏/续页，没有已读位置 ids 与筛选参数。 */
 export class AtMentionsParams {
   static readonly PATH: string = '/c/u/feed/atme';
   static build(device: TiebaDevice, session: TiebaSession, uid: number, page: number): SignParam[] {
@@ -179,7 +174,7 @@ export class AtMentionsParams {
   }
 }
 
-/** 当前 APK s66→in6 资源类型23；普通下载无签名、凭据或 play_from 参数。 */
+/** 官方 s66→in6 资源类型 23：普通下载不带签名、凭据或 play_from 参数。 */
 export class VoiceAudioParams {
   static url(id: string): string {
     if (id.length === 0 || id.trim() !== id || /[\s\u0000-\u001f\u007f]/.test(id)) { return ''; }
@@ -207,7 +202,7 @@ export class VideoFeedParams {
   }
 }
 
-/** 当前 SettingStatic/OfficialAccountPushRequestMessage：cmd309620，只有 common。 */
+/** 官方 SettingStatic/OfficialAccountPushRequestMessage：cmd=309620，请求体只有 common。 */
 export class OfficialMessagesParams {
   static url(): string { return `https://${TiebaHost.APP}/c/u/user/getOfficialSwitch?cmd=309620`; }
   static build(device: TiebaDevice, session: TiebaSession): Uint8Array {
@@ -228,13 +223,7 @@ export class OfficialMessagesParams {
   }
 }
 
-/**
- * 设备与身份参数。
- *
- * 这些字段决定服务端把请求当成"哪个设备上的哪个客户端"，
- * 缺失或格式不符会导致鉴权失败或返回降级内容。
- * 各字段的长度与字符集在协议侧有明确约束，构造时不要随意截断或补位。
- */
+/** 设备与身份参数：决定服务端把请求当成哪台设备上的哪个客户端，缺失或格式不符会鉴权失败或返回降级内容；字段长度与字符集有协议约束，不要随意截断或补位。 */
 export class TiebaDevice {
   /** 16 位小写十六进制，8 字节。例：91be894d01799c49 */
   androidId: string = '';
@@ -248,16 +237,14 @@ export class TiebaDevice {
   c3Aid: string = '';
   /** 形如 wappc_1653660000000_123 */
   clientId: string = '';
-  /** 客户端版本号，默认取 LATEST */
   clientVersion: string = TiebaVersion.LATEST;
   /** _os_version 使用 deviceInfo.sdkApiVersion，空串不发送。 */
   osVersion: string = '';
-  /** net_type 当前固定为 1，尚无官方取值证据；空串不发送。 */
+  /** net_type 固定为 1（尚无官方取值证据）；空串不发送。 */
   netType: string = '';
   /** model 使用 deviceInfo.model，空串不发送。 */
   model: string = '';
 
-  /** 该设备的身份参数是否已经具备发出请求的最低条件 */
   isUsable(): boolean {
     return this.androidId.length > 0 && this.uuid.length > 0 && this.cuid.length > 0;
   }
@@ -265,10 +252,7 @@ export class TiebaDevice {
 
 /** 登录态。凭证只应存在于内存与安全存储中，不得写入日志或源码。 */
 export class TiebaSession {
-  /**
-   * BDUSS。客户端接口的鉴权载体。
-   * 这是账号凭证，日志与异常信息中必须脱敏。
-   */
+  /** BDUSS，客户端接口的鉴权载体；属账号凭证，日志与异常信息中必须脱敏。 */
   bduss: string = '';
   /** 网页 STOKEN。仅部分网页接口需要。 */
   stoken: string = '';
@@ -281,11 +265,9 @@ export class TiebaSession {
 }
 
 /**
- * 点赞对象类型（`obj_type`）。
+ * 点赞对象类型（`obj_type`），取值来自 aiotieba `api/agree/_api.py` 的三分支。
  *
- * 取值来自 aiotieba `api/agree/_api.py` 的三分支：
- * 传了 `post_id` 时按"是不是楼中楼"分 1/2，**没传 `post_id`** 才是"赞主题本身"（3）。
- * 也就是说主帖点赞与首楼点赞不是一回事：前者 `obj_type=3` 且 `post_id=0`。
+ * 主帖点赞与首楼点赞不是一回事：主题是 `obj_type=3` 且 `post_id=0`；传了 `post_id` 才按楼层/楼中楼分 1/2。
  */
 export enum AgreeObjType {
   /** 主题帖（主帖、底栏点赞）：`obj_type=3`，`post_id` 必须为 0 */
@@ -296,16 +278,16 @@ export enum AgreeObjType {
   SUB_POST = 2
 }
 
-/** 写请求统计参数依据官方 NetWork.addStatisticsDataParam 与 NetWorkState。耗时与响应字节数由 HttpClient 测量；本实现只保留最近一条统计、不自动重试，stTimesNum=0、stMode=1。无可用统计时仅发送 timestamp 与 stErrorNums，失败时回填统计与错误数。 */
+/** 写请求的反爬统计参数，依据官方 NetWork.addStatisticsDataParam 与 NetWorkState：只保留最近一条统计、不自动重试（stTimesNum=0、stMode=1）；无可用统计时只发 timestamp 与 stErrorNums，失败时回填统计与错误数。 */
 export class AntiSpamParams {
-  /** 取用本项目自己测到的统计生成一次（生产路径走这个） */
+  /** 取用实际传输统计生成一次（生产路径走这个） */
   static generate(nowMs: number): SignParam[] {
     const stats: TransferStatsSnapshot | undefined = TransferStats.take();
     const errorNums: number = TransferStats.takeErrorNums();
     return AntiSpamParams.compose(nowMs, stats, errorNums);
   }
 
-  /** 固定取值版本，**只给用例锁签名用**（实测值随网络变化，无法与独立算出的期望值比对） */
+  /** 固定取值版本，**只给用例锁签名用**（真实统计随网络变化，无法与独立算出的期望值比对） */
   static fixed(nowMs: number, stTime: number, stSize: number): SignParam[] {
     const stats: TransferStatsSnapshot = new TransferStatsSnapshot();
     stats.elapsedMs = stTime;
@@ -333,7 +315,7 @@ export class AntiSpamParams {
     return params;
   }
 
-  /** 日志用：只取时间戳与传输统计（都不是凭据）。当前无调用方（写操作日志未接入）。 */
+  /** 日志用：只取时间戳与传输统计，两者都不是凭据。 */
   static describe(params: SignParam[]): string {
     let out: string = '';
     for (let i = 0; i < params.length; i++) {
@@ -346,7 +328,7 @@ export class AntiSpamParams {
   }
 }
 
-/** opAgree 的字段与签名依据官方 TbConfig、HttpRequest、CommonReq 和 NetWork。签名对未编码原值按 key 排序拼接后加盐取 MD5，最后追加 sign。当前 mini 域、12.52.1.0、ka=open 和客户端标识格式尚无完整官方取值证据，不应视为已确认协议。 */
+/** opAgree 的字段与签名依据官方 TbConfig、HttpRequest、CommonReq 与 NetWork：未编码原值按 key 排序拼接后加盐取 MD5，最后追加 sign。mini 域、12.52.1.0、ka=open 尚无完整官方证据，不应视为已确认协议。 */
 export class AgreeParams {
   /** 待定：官方缺省 host 是 `tiebac.baidu.com`，当前为本项目沿用的 mini 域取值 */
   static readonly HOST: string = 'c.tieba.baidu.com';
@@ -361,12 +343,7 @@ export class AgreeParams {
   /** 待定：本项目沿用的 Cookie，尚无官方取证 */
   static readonly COOKIE: string = 'ka=open';
 
-  /**
-   * 拼出**已按 key 排序**的待签名参数表（不含 `sign`）。
-   *
-   * 排序是有意的：本项目签名前先按 key 升序排，所以 body 的字节顺序也是排序序。
-   * 调用方拿到后直接 `appendSign` 即可。
-   */
+  /** 拼出已按 key 排序的待签名参数表（不含 `sign`）：本项目签名前按 key 升序排，所以 body 的字节顺序也是排序序。 */
   static build(device: TiebaDevice, session: TiebaSession, uid: number, tid: number,
     pid: number, opType: string, objType: AgreeObjType, antiSpam: SignParam[],
     forumId: number = 0): SignParam[] {
@@ -385,15 +362,15 @@ export class AgreeParams {
       params.push(new SignParam('z_id', '000'));
     }
 
-    // ② 账号（官方公共字段，字段名见类注释）
+    // ② 账号（官方公共字段）
     params.push(new SignParam('BDUSS', session.bduss));
-    /** STOKEN 非空时才加入参数和签名输入，空值不发送。 */
+    // STOKEN 只在非空时进参数表与签名输入
     if (session.stoken.length > 0) {
       params.push(new SignParam('STOKEN', session.stoken));
     }
     params.push(new SignParam('tbs', session.tbs));
 
-    // ③ 设备身份（官方公共字段，取值形态见类注释）
+    // ③ 设备身份（官方公共字段）
     params.push(new SignParam('cuid', device.cuid));
     params.push(new SignParam('cuid_galaxy2', device.cuidGalaxy2));
     params.push(new SignParam('_client_id', device.clientId));
@@ -422,12 +399,7 @@ export class AgreeParams {
     return params;
   }
 
-  /**
-   * 本项目当前请求头组（**尚无官方取证，待定**）。
-   *
-   * UA 由 `_client_version` 拼出（`bdtb for Android ` + 版本）；
-   * `client_user_token` 是账号 uid。
-   */
+  /** 本项目当前请求头组（尚无官方取证）：UA 由 `_client_version` 拼出，`client_user_token` 是账号 uid。 */
   static headers(uid: number): Record<string, string> {
     const h: Record<string, string> = {};
     h['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -448,14 +420,13 @@ export class TiebaCommonParams {
   static build(device: TiebaDevice, session: TiebaSession): SignParam[] {
     const params: SignParam[] = [];
 
-    // 客户端标识
     params.push(new SignParam('_client_type', '2'));
     params.push(new SignParam('_client_version', device.clientVersion));
     params.push(new SignParam('_phone_imei', device.androidId));
     params.push(new SignParam('from', '1020011'));
     params.push(new SignParam('model', 'HarmonyOS'));
 
-    /** 设备身份字段包括 cuid、cuid_galaxy2、_client_id、_os_version 与 net_type；与请求头及客户端版本保持一致。 */
+    // 设备身份字段要与请求头、客户端版本保持一致
     if (device.cuid.length > 0) {
       params.push(new SignParam('cuid', device.cuid));
     }
@@ -480,7 +451,6 @@ export class TiebaCommonParams {
     if (session.hasBduss()) {
       params.push(new SignParam('BDUSS', session.bduss));
     }
-    /** 仅在非空时发送 STOKEN，其余参数保持公共参数表定义。 */
     if (session.stoken.length > 0) {
       params.push(new SignParam('STOKEN', session.stoken));
     }
@@ -491,7 +461,6 @@ export class TiebaCommonParams {
     return params;
   }
 
-  /** 把参数列表序列化为 application/x-www-form-urlencoded 请求体 */
   static encodeForm(params: SignParam[]): string {
     const parts: string[] = [];
     for (let i = 0; i < params.length; i++) {
@@ -501,7 +470,7 @@ export class TiebaCommonParams {
   }
 }
 
-/** 用户资料使用 multipart protobuf，请求头 x_bd_data_type: protobuf，part 名 data、filename=file。封装形态参考 aiotieba core/http.py pack_proto_request（Unlicense）。 */
+/** 用户资料走 multipart protobuf：请求头 `x_bd_data_type: protobuf`，part 名 data、filename=file（形态参考 aiotieba core/http.py pack_proto_request，Unlicense）。 */
 export class SelfProfileParams {
   static readonly PATH: string = '/c/u/user/profile';
   /** aiotieba `api/profile/_const.py` 的 `CMD` */
@@ -511,7 +480,7 @@ export class SelfProfileParams {
   static readonly PROTO_HEADER: string = 'x_bd_data_type';
   static readonly PROTO_HEADER_VALUE: string = 'protobuf';
 
-  /** 构造 ProfileReqIdl。早期字段参考公开 proto，请求形态参考 aiotieba（Unlicense）；字段号另经官方 ProfileReqIdl、DataReq 与 CommonReq 核对。查询本人使用 friend_uid_portrait，open_uid 不等于贴吧 User.id。 */
+  /** 构造 ProfileReqIdl；查询本人用 friend_uid_portrait，passport 的 open_uid 不等于贴吧 User.id。字段号依据官方 ProfileReqIdl、DataReq 与 CommonReq。 */
   static buildRequest(portrait: string, device: TiebaDevice): Uint8Array {
     return SelfProfileParams.buildForUser(0, portrait, device, 1);
   }
@@ -546,7 +515,6 @@ export class SelfProfileParams {
     }
 
     const data: ProtoWriter = new ProtoWriter();
-    // 不发送 passport uid（字段 1）；使用头像标识或真实贴吧 friend_uid 定位。
     if (portrait.length > 0) {
       data.writeString(16, portrait);              // friend_uid_portrait 优先定位
     } else if (uid > 0) {
@@ -561,7 +529,6 @@ export class SelfProfileParams {
     return root.toUint8Array();
   }
 
-  /** 把 protobuf 字节包成 multipart body（分界符同上） */
   static wrapMultipart(pb: Uint8Array): Uint8Array {
     const head: Uint8Array = encodeUtf8(
       `--${SelfProfileParams.BOUNDARY}\r\nContent-Disposition: form-data;`
@@ -579,10 +546,7 @@ export class SelfProfileParams {
     return `https://${host}${SelfProfileParams.PATH}?cmd=${SelfProfileParams.CMD}`;
   }
 
-  /**
-   * 请求头。**必须含 `x_bd_data_type: protobuf`**，否则服务端回 110001。
-   * Cookie 带 BDUSS/STOKEN —— pb 通道**不签名**，身份靠 Cookie。
-   */
+  /** 必须含 `x_bd_data_type: protobuf`，否则服务端回 110001；pb 通道不签名，身份靠 Cookie（BDUSS/STOKEN）。 */
   static headers(session: TiebaSession): Record<string, string> {
     const h: Record<string, string> = {};
     h['Content-Type'] = `multipart/form-data; boundary=${SelfProfileParams.BOUNDARY}`;
@@ -592,18 +556,13 @@ export class SelfProfileParams {
   }
 }
 
-/** 用户内容请求参考 aiotieba get_user_contents（Unlicense），字段号另经官方 UserPostReqIdl、DataReq 与 CommonReq 核对。is_thread=1 为主题、0 为回复；无签名，BDUSS 放入 common。 */
+/** 用户内容请求（aiotieba get_user_contents，Unlicense；字段号经官方 UserPostReqIdl、DataReq 与 CommonReq 核对）：is_thread=1 主题、0 回复；不签名，BDUSS 放入 common。 */
 export class UserPostParams {
   static readonly PATH: string = '/c/u/feed/userpost';
   /** aiotieba `get_user_contents/_const.py` 的 `CMD` */
   static readonly CMD: string = '303002';
 
-  /**
-   * 构造 `UserPostReqIdl` 请求体。
-   *
-   * @param uid       目标用户 uid（真实贴吧 uid，**不是** `json_userinfo.open_uid`）
-   * @param isThread  1 = 我发布的主题帖，0 = 我发布的回复
-   */
+  /** `uid` 必须是真实贴吧 uid，**不是** `json_userinfo.open_uid`；`isThread` 1 = 主题帖，0 = 回复。 */
   static buildRequest(uid: number, isThread: number, pn: number, rn: number,
     device: TiebaDevice, session: TiebaSession): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
@@ -650,7 +609,6 @@ export class UserPostParams {
     return root.toUint8Array();
   }
 
-  /** multipart 包装：与 profile 通道同一套分隔符与字段名，直接复用 */
   static wrapMultipart(pb: Uint8Array): Uint8Array {
     return SelfProfileParams.wrapMultipart(pb);
   }
@@ -664,10 +622,9 @@ export class UserPostParams {
   }
 }
 
-/** 个性化推荐使用 multipart protobuf，无签名，以 Cookie 鉴权。端点与 cmd 依据官方 TbConfig 与 RecPersonalizePageModel；请求形态曾参考 aiotieba pack_proto_request。字段号已核对官方 PersonalizedReqIdl、DataReq 与 CommonReq；load_type=1 刷新、2 续页，时间戳使用毫秒。 */
+/** 个性化推荐流：multipart protobuf、不签名、Cookie 鉴权（端点与 cmd 依据官方 TbConfig 与 RecPersonalizePageModel，字段号已核对 PersonalizedReqIdl、DataReq 与 CommonReq）；load_type=1 刷新、2 续页，时间戳用毫秒。 */
 export class PersonalizedParams {
   static readonly PATH: string = '/c/f/excellent/personalized';
-  /** 推荐流的接口 cmd。 */
   static readonly CMD: string = '309264';
   /** 官方 load_type 语义：1 = 刷新（首屏/下拉刷新），2 = 加载更多（翻页） */
   static readonly LOAD_REFRESH: number = 1;
@@ -708,7 +665,6 @@ export class PersonalizedParams {
     return root.toUint8Array();
   }
 
-  /** multipart 包装：与 profile / userpost 通道同一套分隔符与字段名，直接复用 */
   static wrapMultipart(pb: Uint8Array): Uint8Array {
     return SelfProfileParams.wrapMultipart(pb);
   }
@@ -722,19 +678,17 @@ export class PersonalizedParams {
   }
 }
 
-/** 收藏载荷依据官方 MarkModel 与 fv7。data 为 JSON 数组字符串，原值参与签名、发送时才编码；取消收藏发送 user_id、tid、fid。当前 tid/pid 使用字符串、status 使用数字、取消 fid 使用字面量 null；这些具体取值尚未完整核实官方语义。 */
+/** 收藏载荷（官方 MarkModel 与 fv7）：data 是 JSON 数组字符串，原值参与签名、发送时才编码；取消收藏发 user_id、tid、fid。tid/pid 用字符串、status 用数字、取消时 fid 用字面量 null 的取值尚未完整核实官方语义。 */
 export class StoreParams {
   static readonly ADD_PATH: string = '/c/c/post/addstore';
   static readonly RM_PATH: string = '/c/c/post/rmstore';
   /** 待定：本项目 `fid` 当前占位值为字面字符串 `"null"`，尚无官方取值证据；保留现值 */
   static readonly FID_PLACEHOLDER: string = 'null';
 
-  /** addstore 的 `data` 字段值。tid/pid 转字符串、status 保持数字 1 */
   static addData(tid: number, pid: number): string {
     return `[{"tid":"${tid}","pid":"${pid}","status":1}]`;
   }
 
-  /** addstore 的完整待签字段表（公共参数 + data） */
   static buildAdd(device: TiebaDevice, session: TiebaSession, tid: number,
     pid: number): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
@@ -742,7 +696,6 @@ export class StoreParams {
     return params;
   }
 
-  /** rmstore 的完整待签字段表（公共参数 + tid/fid/user_id） */
   static buildRemove(device: TiebaDevice, session: TiebaSession, tid: number,
     uid: number): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
@@ -753,23 +706,21 @@ export class StoreParams {
   }
 }
 
-/** 收藏表情接口使用公共参数与签名。getAllMeme 无业务参数；collect 的 pics 为 pic_id 对象数组的 JSON 字符串，按全量替换处理，清空使用 all_delete。 */
+/** 收藏表情：公共参数 + 签名。getAllMeme 无业务参数；collect 的 pics 是 pic_id 对象数组的 JSON 字符串，按全量替换处理，清空用 all_delete。 */
 export class MemeEmojiParams {
   static readonly ALL_PATH: string = '/c/e/meme/getAllMeme';
   static readonly COLLECT_PATH: string = '/c/e/meme/collect';
   /** 清空收藏时 `pics` 字段的字面量（照抄官方 UserCollectModel） */
   static readonly ALL_DELETE: string = 'all_delete';
 
-  /** getAllMeme 的完整待签字段表 = 纯公共参数 */
   static buildAll(device: TiebaDevice, session: TiebaSession): SignParam[] {
     return TiebaCommonParams.build(device, session);
   }
 
-  /** collect 的完整待签字段表（公共参数 + pics + pic_update_time） */
   static buildCollect(device: TiebaDevice, session: TiebaSession, pics: string,
     picUpdateTimeMs: number): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
-    // 官方UserCollectModel先wp4.t(JSON)再交给签名/表单层；all_delete不变。
+    // 官方 UserCollectModel 先把 JSON 交给 wp4.t 编码再进签名层；all_delete 原样透传。
     const encoded: string = pics === MemeEmojiParams.ALL_DELETE ? pics : encodeURIComponent(pics)
       .replace(/[!'()~]/g, (char: string): string => '%' + char.charCodeAt(0).toString(16).toUpperCase())
       .replace(/%20/g, '+');
@@ -779,10 +730,10 @@ export class MemeEmojiParams {
   }
 }
 
-/** 回复使用 multipart protobuf，无签名，需要 Cookie、BDUSS 与 tbs。端点与 cmd 依据官方 AddPostRequest，字段号依据 AddPostDataReq。当前字段 44、45、46、49 的取值语义尚未逐项确认；修改映射须以发布后读回验证，不能只依赖成功回执。 */
+/** 回复走 multipart protobuf，不签名，需要 Cookie、BDUSS 与 tbs（端点依据官方 AddPostRequest，字段号依据 AddPostDataReq）。字段 44/45/46/49 的取值语义尚未逐项确认，改动须靠发布后读回验证。 */
 export class AddPostParams {
   static readonly PATH: string = '/c/c/post/add';
-  /** cmd：官方 `AddPostRequest` 的 309731（类注释有取证行号） */
+  /** cmd：官方 `AddPostRequest` 的 309731。 */
   static readonly CMD: string = '309731';
 
   /** `post_from`：一级评论（对主帖发言）的取值 */
@@ -792,15 +743,6 @@ export class AddPostParams {
   /** `data(16)`：本项目当前固定填 `"12"`；官方取值与具体语义尚未举证，待定 */
   static readonly CLIENT_TYPE_TAG: string = '12';
 
-  /**
-   * 构造 `AddPostReqIdl` 请求体。
-   *
-   * @param content   正文（纯文本）
-   * @param fid       吧 id（字符串形式，`fid` 的详情来自 `ThreadDetail.forumId`）
-   * @param forumName 吧名
-   * @param tid       帖子 id
-   * @param target    可选：回复目标。都不给 = 对主帖发表一级评论
-   */
   static buildRequest(content: string, fid: string, forumName: string, tid: string,
     device: TiebaDevice, session: TiebaSession,
     target?: AddPostTarget, nickname?: string, withTail?: boolean): Uint8Array {
@@ -866,8 +808,7 @@ export class AddPostParams {
     }
     data.writeInt64(64, BigInt(0));
     data.writeInt64(67, BigInt(0));
-    // 当前22.11.1 AddPost.DataReq.with_tail=76 uint32；独立于正文内容。
-    // 未指定保留既有请求，明确选择时才发送0/1，不从管理页is_selected推断。
+    // with_tail = 76（22.11.1 的 AddPost.DataReq，uint32），独立于正文；未指定就不发 0/1，不从管理页状态推断。
     if (withTail !== undefined) { data.writeInt32(76, withTail ? 1 : 0); }
 
     const root: ProtoWriter = new ProtoWriter();
@@ -875,7 +816,6 @@ export class AddPostParams {
     return root.toUint8Array();
   }
 
-  /** multipart 包装：与 profile / userpost / personalized 同一套分隔符与字段名 */
   static wrapMultipart(pb: Uint8Array): Uint8Array {
     return SelfProfileParams.wrapMultipart(pb);
   }
@@ -889,11 +829,7 @@ export class AddPostParams {
   }
 }
 
-/**
- * `AddPostParams.buildRequest` 的**可选回复目标**（独立取值，不塞进必填参数里）。
- *
- * `postId` 为空 = 对主帖发表一级评论；给了 = 回复该楼层；`subPostId` 再给 = 回复楼中楼。
- */
+/** 回复目标：`postId` 为空 = 对主帖发一级评论，给了 = 回复该楼层，`subPostId` 再给 = 回复楼中楼。 */
 export class AddPostTarget {
   postId: string = '';
   subPostId: string = '';
@@ -901,45 +837,21 @@ export class AddPostTarget {
 }
 
 /**
- * 发**主题帖** `POST /c/c/thread/add` —— 走 **form 表单**通道，与回复用的
- * protobuf `AddPostParams`（`/c/c/post/add?cmd=309731`）是两条不同的链路。
+ * 发**主题帖**走 form 表单 `POST /c/c/thread/add`，与回复用的 protobuf `AddPostParams` 是两条链路。
  *
- * 依据：
- * - 端点与语义：`references/code-audit-2026-10-11/ref-audit/t137458` 的
- *   `api/TiebaAPI.ets` `addThread`（注释称对齐 Android `MiniTiebaApi.addThreadFlow`）；
- * - 同一端点的客户端 protobuf 版本（`?cmd=309730`、`AddThreadRequest`、DataReq 90 字段）
- *   见 `docs/协议/APK分析/023-D-01 发主题帖与 C-02 投票（REA 取证补充）.md`。
- *
- * 为什么本项目走表单而不是 protobuf：响应是 JSON（`error_code`/`error_msg`），字段名可读，
- * 且本站已有 `forumGuide` 这类带 BDUSS/STOKEN Cookie 的表单写接口先例；protobuf 版
- * 还缺 DataReq 的字段编号取证，且要额外处理 vcode 图片验证码。
- *
- * 字段取舍：**只发本项目确有来源的项**。参考实现里的 `z_id`（登录初始化的设备 id）
- * 本项目没有对应数据源，按回复通道既有结论（缺项照样受理）暂不发；若服务端回报缺参，
- * 以真实报错为准再补，不凭猜测加字段。
+ * 选表单是因为响应是 JSON、字段名可读，且本站已有 `forumGuide` 这类带 Cookie 的表单写接口先例；
+ * protobuf 版（`?cmd=309730`）还缺 DataReq 字段编号取证。只发有来源的项：`z_id` 没有数据源就不发，
+ * 服务端若回报缺参再按真实报错补。取证见 `docs/协议/APK分析/023-D-01 发主题帖与 C-02 投票（REA 取证补充）.md`。
  */
 export class AddThreadParams {
   static readonly PATH: string = '/c/c/thread/add';
 
 
   /**
-   * 构造**待签名**的表单参数：`TiebaCommonParams` 打底（`_client_type`/`_client_version`/
-   * `_phone_imei`/`from`/`cuid`/`cuid_galaxy2`/`BDUSS`/`STOKEN`/`tbs` 等），再追加发帖字段；
+   * 构造待签名表单参数：`TiebaCommonParams` 打底（含 BDUSS/STOKEN/tbs），再追加发帖字段；
    * 签名由调用方 `CryptoUtil.appendSign(..., SignSalt.APP)` 追加。
    *
-   * 为什么不走「web 免签表单」：`/c/c/thread/add` 与 `/c/c/post/add`、`/c/c/agree/opAgree`
-   * 同属 `/c/c/` 写接口。2026-10-25 真机实测（21:12 与 21:36 两次）：只发 Cookie +
-   * `client_user_token` 的免签表单稳定回 `error_code=110001`（项目既有结论里该码为
-   * 参数/签名校验失败，`error_msg` 只有「未知错误」）。因此改走与关注、点赞同一套签名通道。
-   *
-   * @param title     标题；空标题时 `is_ntitle=0`（服务端按无标题帖处理）
-   * @param content   正文纯文本，图片按 `#(pic,<id>,<w>,<h>)` 由调用方拼好
-   * @param fid       吧 id；必须 > 0，`kw` 不参与服务端定吧
-   * @param forumName 吧名（`kw`）
-   * @param nickname  当前账号昵称（`name_show`），空串则不发
-   * @param topicId   话题 id；`0` 表示没选话题，此时不发 `topic_id`
-   * @param isHide    展示范围：`'0'` 全场景可见、`'1'` 个人主页不可见
-   * @param contentStatement 内容声明文案（如「帖子含AI内容」）；空串表示没选，不发
+   * 不能走免签 web 表单：只发 Cookie + `client_user_token` 会稳定回 `error_code=110001`（参数/签名校验失败）。
    */
   static build(device: TiebaDevice, session: TiebaSession, title: string, content: string,
     fid: number, forumName: string, nickname: string, topicId: number,
@@ -962,27 +874,12 @@ export class AddThreadParams {
     params.push(new SignParam('call_from', '2'));
     params.push(new SignParam('can_no_forum', '0'));
     params.push(new SignParam('cuid_gid', ''));
-    /*
-     * 话题：官方 22.11.1.0 的写帖 Model（`com.baidu.tieba.ps8` / 验证码重发
-     * `write/vcode/oldVcode/VcodeActivity:319`）与 proto `AddThreadRequest.encode`
-     * 都用同一个键名 `topic_id`，值是不带前缀的整数话题 id；只有选了话题才发。
-     */
+    /* 话题：官方写帖 Model 与 proto AddThreadRequest.encode 都用同一个键 `topic_id`，值是不带前缀的整数 id；只有选了话题才发。 */
     if (topicId > 0) { params.push(new SignParam('topic_id', String(topicId))); }
     /*
-     * 展示范围与内容声明：2026-10-25 从 PC 发帖页 bundle
-     * `tb3.bdstatic.com/tb/pc/pc-main-core/static/js/publish.<hash>.js` 取证（HAR 内提取）：
-     *   roundList = ['全场景可见', '个人主页不可见']
-     *   handleRoundChange: round = ('全场景可见' === 选项) ? '0' : '1'
-     *   提交体 = { fid, kw, title, content, is_hide: round, is_pictxt: '1',
-     *              content_statement: <声明文案>,
-     *              ext: JSON.stringify({ is_hide: round, needImage: '1',
-     *                                    content_statement: <声明文案> }) }
-     * 声明文案由 `POST /c/f/pc/publishConf` 下发
-     * （`data.config.content_statement.statements`，当前为 ['帖子含AI内容','帖子原创声明']），
-     * 与本项目发帖页的选项文案一致，因此直接传文本本身，不传下标。
-     *
-     * 旧实现把展示范围当成 `is_repost_to_dynamic`（proto 字段，form 通道从不发）——
-     * 该键在官方 form 通道没有任何写入点，已废弃。
+     * 展示范围与内容声明，取证自 PC 发帖页 bundle `tb3.bdstatic.com/tb/pc/pc-main-core/static/js/publish.<hash>.js`：
+     * `is_hide` 取 '0'（全场景可见）或 '1'（个人主页不可见）；`content_statement` 传声明文案本身，不传下标，
+     * `ext` 里同时带这两个字段。旧实现把展示范围当成 `is_repost_to_dynamic`（form 通道从不发该键），已废弃。
      */
     const statement: string = contentStatement.trim();
     if (statement.length > 0) {
@@ -997,16 +894,13 @@ export class AddThreadParams {
   }
 }
 
-/** PC 吧头图接口返回 activityhead.head_imgs[].img_url。签名前先对 kw 做一次 URL 编码，再对完整表单编码；使用 SignSalt.PC。 */
+/** PC 吧头图接口，响应取 activityhead.head_imgs[].img_url；签名前先对 kw 做一次 URL 编码，用 SignSalt.PC。 */
 export class FrsHeadlineParams {
   static readonly PATH: string = '/c/f/frs/frsBottom_pc';
 
   /**
-   * 构造签名后的 form body。
-   *
-   * 签名细节：`kw` 参数值 = `encodeURIComponent(吧名)`（单编码形态）参与 MD5；
-   * `TiebaCommonParams.encodeForm` 发送时整体再编码一次 → 服务端收到双编码值，
-   * decode 两次得到吧名 —— 与浏览器 HAR 逐字节一致。`tbs` 传空（实测可通）。
+   * `kw` 先 `encodeURIComponent` 再参与 MD5，发送时 `encodeForm` 又编码一次 → 服务端收到双编码值，
+   * decode 两次得到吧名，与浏览器 HAR 逐字节一致。`tbs` 传空也能通。
    */
   static async buildBody(kw: string): Promise<string> {
     const params: SignParam[] = [
@@ -1038,7 +932,7 @@ export class FollowParams {
   }
 }
 
-/** GetMemberInfo API cmd 为 301004；请求 data{forum_id=1, common=2}，响应 data=1、error=2，与常用 error=1 的信封不同。依据官方 ForumMemberRequestMessage 与 GetMemberInfo proto。 */
+/** GetMemberInfo（cmd 301004）：请求 data{forum_id=1, common=2}，响应 data=1、error=2，与常用 error=1 的信封不同。依据官方 ForumMemberRequestMessage 与 GetMemberInfo proto。 */
 export class ForumMemberParams {
   static readonly PATH: string = '/c/f/forum/getMemberInfo';
   static readonly CMD: string = '301004';
@@ -1047,7 +941,6 @@ export class ForumMemberParams {
     return `https://${TiebaHost.APP}${ForumMemberParams.PATH}?cmd=${ForumMemberParams.CMD}`;
   }
 
-  /** `root{ data{ forum_id, common } }`，再走与其它 pb 端点相同的 multipart 封装 */
   static build(device: TiebaDevice, session: TiebaSession, forumId: number): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
     common.writeInt32(1, 2);
@@ -1074,13 +967,11 @@ export class ForumMemberParams {
 }
 
 /**
- * 官方 `GetBawuInfo`（A-01 补：吧务全量名单）：消息 id 1001705，**API cmd = 301007**。
- * 同样来自反编译：`com/baidu/tieba/forumMember/bawu/BawuTeamRequestMessage` 的 `super(1001705, 301007)`。
+ * 官方 `GetBawuInfo`（吧务全量名单）：消息 id 1001705，API cmd = 301007
+ * （`BawuTeamRequestMessage` 的 `super(1001705, 301007)` 反编译证据）。
  *
- * ⚠️ 字段顺序与 `GetMemberInfo` **相反**：`GetBawuInfo/DataReq{ common=1, forum_id=2 }`
- * （成员端点是 `forum_id=1, common=2`）。响应 `GetBawuInfoResIdl{ data=1, error=2 }`，
- * `DataRes.bawu_team_info=1` 才是 `BawuTeam{ total_num=1, bawu_team_list=2 }`（**多一层**，
- * 真机首轮就把这层数错了，探针里已留注释）。
+ * ⚠️ 字段顺序与 `GetMemberInfo` 相反：`DataReq{ common=1, forum_id=2 }`；响应 `DataRes.bawu_team_info=1`
+ * 才是 `BawuTeam{ total_num=1, bawu_team_list=2 }`，比成员端点多一层。
  */
 export class BawuTeamParams {
   static readonly PATH: string = '/c/f/forum/getBawuInfo';
@@ -1157,7 +1048,7 @@ export class ReplyMeParams {
     return `https://${TiebaHost.APP}${ReplyMeParams.PATH}?cmd=${ReplyMeParams.CMD}`;
   }
 
-  /** `root{ data{ pn=1, common=2 } }`；官方还发屏幕尺寸等，此处只发被服务端需要的最小集（探针已验证可用） */
+  /** `root{ data{ pn=1, common=2 } }`；官方还发屏幕尺寸等，这里只发服务端需要的最小集。 */
   static build(device: TiebaDevice, session: TiebaSession, page: number): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
     common.writeInt32(1, 2);
@@ -1297,7 +1188,7 @@ export class ForbiddenForumsParams {
   }
 }
 
-/** 屏蔽贴吧使用官方 submitDislike 负反馈接口，dislike 为 JSON 数组，原因 ID 为 7。成功与否仍需读取屏蔽列表核对；请求已接收不等于已落库。 */
+/** 屏蔽贴吧走官方 submitDislike 负反馈接口：dislike 是 JSON 数组，原因 ID 为 7。请求被接收不等于已落库，成功与否要读屏蔽列表核对。 */
 export class SubmitDislikeParams {
   static readonly PATH: string = '/c/c/excellent/submitDislike';
   /** 负反馈来源：首页推荐流（官方 `FrsFragment.java:6453` 传的就是 "frs"） */
@@ -1306,11 +1197,7 @@ export class SubmitDislikeParams {
   static readonly DISLIKE_ID_BLOCK_FORUM: string = '7';
 
 
-  /**
-   * 构造 `dislike` 数组（单元素）。字段顺序与官方一致，便于抓包对照。
-   *
-   * `fid` / `tid` 传 0 时**不写该字段**（官方是"有值才写"，不写空串）。
-   */
+  /** 构造单元素 `dislike` 数组；`fid`/`tid` 传 0 时不写该字段（官方是有值才写，不写空串）。 */
   static buildBody(tid: number, fid: number, dislikeIds: string, from: string): string {
     const fields: string[] = [];
     if (tid > 0) { fields.push(`"tid":"${tid}"`); }
@@ -1322,7 +1209,6 @@ export class SubmitDislikeParams {
     return `[{${fields.join(',')}}]`;
   }
 
-  /** 待签名参数：common 一组 + `dislike` / `dislike_from` */
   static build(device: TiebaDevice, session: TiebaSession, body: string, from: string): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('dislike', body));
@@ -1331,7 +1217,7 @@ export class SubmitDislikeParams {
   }
 }
 
-/** 取消屏蔽使用 submitCancelDislike，参数为 forum_id，需有效 tbs。依据官方 ml8.java 的 HttpMessage(1003487)。 */
+/** 取消屏蔽走 submitCancelDislike，参数为 forum_id，需有效 tbs；依据官方 ml8.java 的 HttpMessage(1003487)。 */
 export class CancelForbiddenForumParams {
   static readonly PATH: string = '/c/c/excellent/submitCancelDislike';
 
@@ -1413,14 +1299,12 @@ export class TailsParams {
 }
 
 /**
- * 官方「赞我」（F-01）：消息 id 1002211，**API cmd = 309593**。
+ * 官方「赞我」：消息 id 1002211，API cmd = 309593
+ * （`ij7.java` 静态注册 `ur8.c(309593, 1002211, "c/u/feed/agreeme", …)`）。
  *
- * 证据：`ij7.java` 静态注册 `ur8.c(309593, 1002211, "c/u/feed/agreeme", …)`；
- * 请求 `AgreeMeRequestMessage.id` = **上一批最后一条的 `AgreeList.id`**（游标分页，
- * `ij7.i()` 里 `this.c = 最后一条.k()`，首屏游标为 0）；`rn` 是每页条数。
- * 字段号来自官方 proto：`AgreeMeReqIdl{ data=1 }`、`DataReq{ common=1, id=2(uint64), rn=3 }`、
+ * 请求 `AgreeMeRequestMessage.id` 是上一批最后一条的 `AgreeList.id`（游标分页，首屏传 0），`rn` 是每页条数。
+ * 字段号：`AgreeMeReqIdl{ data=1 }`、`DataReq{ common=1, id=2(uint64), rn=3 }`、
  * `AgreeMeResIdl{ error=1, data=2 }`、`DataRes{ has_more=1, agree_list=2 }`。
- * 真机实测（`NotifyProbe`）：游标 0 拿到 13 条、has_more=0、末条 id=65474625（游标有效）。
  */
 export class AgreeMeParams {
   static readonly PATH: string = '/c/u/feed/agreeme';
@@ -1430,7 +1314,6 @@ export class AgreeMeParams {
     return `https://${TiebaHost.APP}${AgreeMeParams.PATH}?cmd=${AgreeMeParams.CMD}`;
   }
 
-  /** `root{ data{ common=1, id=2, rn=3 } }`；`cursor` 首屏传 0 */
   static build(device: TiebaDevice, session: TiebaSession, cursor: number, rn: number): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
     common.writeInt32(1, 2);

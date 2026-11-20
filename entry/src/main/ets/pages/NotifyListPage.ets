@@ -135,7 +135,6 @@ export struct NotifyListPage {
     }.hideTitleBar(true)
   }
 
-  /** 尾部：加载更多 / 失败重试 / 到底了（与全站列表页同构） */
   @Builder
   PageFooter() {
     if (this.vm.hasItems()) {
@@ -157,7 +156,6 @@ export struct NotifyListPage {
     else { this.InteractionCard(item) }
   }
 
-  /** 头像/用户名/时间 → 互动内容 → 独立原帖信息块。 */
   @Builder
   InteractionCard(item: NotifyItem) {
     Column({ space: 14 }) {
@@ -227,7 +225,6 @@ export struct NotifyListPage {
     .onClick(() => { this.openTarget(item, true); })
   }
 
-  /** @我的保留原有紧凑卡片。 */
   @Builder
   MentionRow(item: NotifyItem) {
     Row({ space: 12 }) {
