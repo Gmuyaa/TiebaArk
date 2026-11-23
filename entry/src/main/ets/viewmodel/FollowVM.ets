@@ -79,7 +79,8 @@ export class FollowVM {
       if (!this.currentExperience(request)) { return; }
       applyForumRead(response);
       const matches: boolean = response.ok && response.data.forum.id === request.item.fid;
-      this.forums = this.forums.map((value: FollowForumItem): FollowForumItem => {
+      let changed: boolean = false;
+      const next: FollowForumItem[] = this.forums.map((value: FollowForumItem): FollowForumItem => {
         if (value.fname !== request.item.fname || value.fid !== request.item.fid) { return value; }
         const updated: FollowForumItem = FollowForumItem.copy(value);
         updated.experienceError = matches ? '' : (response.ok ? '吧信息不匹配' : response.describeFailure());
@@ -94,14 +95,33 @@ export class FollowVM {
           updated.totalCount = membership.totalCount;
           if (membership.currentScore < 0) { updated.experienceError = '服务端未返回经验'; }
         }
+        if (updated.experienceError === value.experienceError &&
+          updated.isSigned === value.isSigned &&
+          updated.signKnown === value.signKnown &&
+          updated.level === value.level &&
+          updated.levelName === value.levelName &&
+          updated.currentScore === value.currentScore &&
+          updated.nextScore === value.nextScore &&
+          updated.continuousCount === value.continuousCount &&
+          updated.totalCount === value.totalCount) {
+          return value;
+        }
+        changed = true;
         return updated;
       });
+      if (changed) { this.forums = next; }
     } catch (_) {
       if (!this.currentExperience(request)) { return; }
-      this.forums = this.forums.map((value: FollowForumItem): FollowForumItem => {
+      let changed: boolean = false;
+      const next: FollowForumItem[] = this.forums.map((value: FollowForumItem): FollowForumItem => {
         if (value.fname !== request.item.fname) { return value; }
-        const updated: FollowForumItem = FollowForumItem.copy(value); updated.experienceError = '经验读取失败'; return updated;
+        if (value.experienceError === '经验读取失败') { return value; }
+        const updated: FollowForumItem = FollowForumItem.copy(value);
+        updated.experienceError = '经验读取失败';
+        changed = true;
+        return updated;
       });
+      if (changed) { this.forums = next; }
     }
   }
 

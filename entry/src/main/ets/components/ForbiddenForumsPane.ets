@@ -7,6 +7,7 @@ import { ForbiddenForum } from '../model/ForbiddenForums';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
 import { SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import { SwipeDeleteButton } from './SwipeDeleteButton';
 
 @ComponentV2
 export struct ForbiddenForumsPane {
@@ -86,8 +87,8 @@ export struct ForbiddenForumsPane {
   }
 
   build() {
-    List({ scroller: this.scroller }) {
-      ListItem() { Row().height(this.topInset).width('100%') }
+    List({ space: 10, scroller: this.scroller }) {
+      ListItem() { Row().height(Math.max(0, this.topInset - 10)).width('100%') }
       if (this.vm.items.length === 0 && (this.vm.loading || (this.vm.loaded && this.vm.error.length === 0))) {
         ListItem() {
           SettingsInfoRow({ label: this.vm.loading ? '正在读取…' : '账号暂无屏蔽吧', showDivider: false })
@@ -95,13 +96,11 @@ export struct ForbiddenForumsPane {
       }
       Repeat<ForbiddenForum>(this.vm.items)
         .each((row: RepeatItem<ForbiddenForum>) => {
-          ListItem() { this.ForumRow(row.item, row.index) }
-            .backgroundColor(AppTheme.CARD)
-            .borderRadius({ topLeft: row.index === 0 ? SettingsLayout.CARD_RADIUS : 0,
-              topRight: row.index === 0 ? SettingsLayout.CARD_RADIUS : 0,
-              bottomLeft: row.index === this.vm.items.length - 1 ? SettingsLayout.CARD_RADIUS : 0,
-              bottomRight: row.index === this.vm.items.length - 1 ? SettingsLayout.CARD_RADIUS : 0 })
-            .clip(true)
+          ListItem() { this.ForumRow(row.item) }
+            .swipeAction({
+              end: this.vm.selecting ? undefined : (): void => { this.DeleteSwipeAction(row.item); },
+              edgeEffect: SwipeEdgeEffect.Spring
+            })
         })
         .key((item: ForbiddenForum): string => item.id)
         .virtualScroll({ reusable: false })
@@ -138,17 +137,16 @@ export struct ForbiddenForumsPane {
   }
 
   @Builder
-  ForumRow(item: ForbiddenForum, index: number) {
+  ForumRow(item: ForbiddenForum) {
     Row() {
       SettingsEntryRow({
         label: item.name.length > 0 ? (item.name.endsWith('吧') ? item.name : `${item.name}吧`) : '吧名未返回',
-        summary: this.vm.selecting ? '' : '取消屏蔽',
+        summary: '',
         avatarUrl: item.avatar, avatarName: item.name,
         showChevron: false,
-        showDivider: index < this.vm.items.length - 1,
+        showDivider: false,
         onTap: (): void => {
           if (this.vm.selecting) { this.vm.toggleItem(item.id); }
-          else { void this.confirmUnblock([item.id]); }
         }
       }).layoutWeight(1)
       if (this.vm.selecting) {
@@ -161,7 +159,21 @@ export struct ForbiddenForumsPane {
             if (selected !== this.vm.isSelected(item.id)) { this.vm.toggleItem(item.id); }
           })
       }
-    }.width('100%').enabled(!this.vm.actionBusy)
+    }
+    .width('100%')
+    .backgroundColor(AppTheme.CARD)
+    .borderRadius(SettingsLayout.CARD_RADIUS)
+    .clip(true)
+    .enabled(!this.vm.actionBusy)
+  }
+
+  @Builder
+  DeleteSwipeAction(item: ForbiddenForum) {
+    SwipeDeleteButton({
+      accessibilityLabel: `取消屏蔽${item.name}`,
+      buttonEnabled: !this.vm.actionBusy && !this.vm.loading && !this.vm.loadingMore,
+      onTap: (): void => { void this.confirmUnblock([item.id]); }
+    })
   }
 
   @Builder

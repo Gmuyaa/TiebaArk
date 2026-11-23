@@ -22,7 +22,7 @@ export class SettingsLayout {
   /** 设置内容到底后的底部间距；覆盖手势区并让末卡圆角完整可见。 */
   static readonly PAGE_BOTTOM_GAP: number = 32;
   static readonly CARD_RADIUS: number = 20;
-  static readonly GROUP_GAP: number = 24;
+  static readonly GROUP_GAP: number = 12;
   static readonly GROUP_TITLE_GAP: number = 8;
 
   static readonly ROW_GAP: number = 10;

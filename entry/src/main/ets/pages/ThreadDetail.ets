@@ -34,17 +34,18 @@ import { FrameCallback, LengthMetrics, promptAction, UIUtils, window, display } 
 import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import {
   ContentBlock, ContentImage, ContentKind, ContentPiece, PostItem, ReplySortType, SubPostItem, UserBrief,
+  ThreadReplyPermission, ThreadReplyPermissionOption, THREAD_REPLY_PERMISSION_OPTIONS,
   REPLY_EMOTICON_CODES, collectPreviewImageUrls, collectViewerImages, emojiCodeFromReplyToken, emojiImageUrl,
   forumChipText, groupContentBlocks,
   isReplySortSupported, resolveForumName, subPostsHaveThreadAuthor, unsupportedSortTip
 } from '../model/ThreadDetail';
-import { ViewerImage, bodyTransitionKey } from '../model/ImageLoadPolicy';
+import { ViewerImage, bodyTransitionKey, isGifBodyImage } from '../model/ImageLoadPolicy';
 import { formatTimeText } from '../model/TimeText';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { POST_BODY_SIZE, POST_NICKNAME_SIZE, POST_TITLE_SIZE,
   COMMENT_BODY_SIZE, COMMENT_NICKNAME_SIZE, SUB_REPLY_BODY_SIZE, SUB_REPLY_LINE_HEIGHT } from '../common/appearance/PostTypography';
 import { MemePicItem } from '../model/MemeEmoji';
-import { ThreadDetailVM } from '../viewmodel/ThreadDetailVM';
+import { FloorJumpResult, FloorJumpStatus, ThreadDetailVM } from '../viewmodel/ThreadDetailVM';
 import { AgreeState } from '../viewmodel/AgreeActionVM';
 import { MyListVM } from '../viewmodel/MyListVM';
 import { ReplyImagesVM } from '../viewmodel/ReplyImagesVM';
@@ -179,6 +180,8 @@ export struct ThreadDetailPage {
   @Local refreshing: boolean = false;
   /** 非零表示正在展开该一级回复的全屏回复详情面板 */
   @Local subDetailPid: number = 0;
+  /** 面板展开后要自动定位的目标楼中楼子回复 id */
+  @Local subDetailTargetPid: number = 0;
   /** 回复详情面板是否可见。内容层关闭后要在 onDisappear 里同步回落 */
   @Local showSubSheet: boolean = false;
   private pendingUser: UserBrief | undefined = undefined;
@@ -269,6 +272,11 @@ export struct ThreadDetailPage {
     updateEmojiEditorTextColor(this.richCtl, AppTheme.TEXT_MAIN);
   }
   @Local showMore: boolean = false;
+  @Local showCommentPermission: boolean = false;
+  @Local pendingCommentPermission: ThreadReplyPermission = ThreadReplyPermission.UNKNOWN;
+  private commentPermissionOwner: string = '';
+  private commentPermissionDialogId: number = 0;
+  private commentPermissionDialogSeq: number = 0;
   private deleteConfirming: boolean = false;
   /** 列表滚动位置（vp），由 onDidScroll 回报；标题栏渐变由原生导航负责。 */
   @Local navScrollOffset: number = 0;
@@ -349,6 +357,88 @@ export struct ThreadDetailPage {
     } finally { this.deleteConfirming = false; }
   }
 
+  private openCommentPermissionSheet(): void {
+    if (this.vm.deletePending || !this.vm.canManageReplyPermission()) { return; }
+    this.commentPermissionOwner = this.vm.deletionOwner();
+    this.showMore = false;
+    this.pendingCommentPermission = ThreadReplyPermission.UNKNOWN;
+    this.showCommentPermission = true;
+    if (this.commentPermissionDialogId !== 0) { return; }
+    const seq: number = ++this.commentPermissionDialogSeq;
+    const width: number = this.screenWvp > 0
+      ? Math.min(Math.max(this.screenWvp - 48, 280), 328) : 312;
+    this.getUIContext().getPromptAction().openCustomDialog({
+      builder: (): void => { this.CommentPermissionSheet(); },
+      alignment: DialogAlignment.Center,
+      width,
+      cornerRadius: 24,
+      isModal: true,
+      autoCancel: true,
+      dialogTransition: popupMotion(),
+      maskTransition: popupMotion(),
+      systemMaterial: materialManager.officialOf(MaterialSlot.SHEET, true, true),
+      backgroundColor: materialManager.useArkUI ? undefined : AppTheme.CARD,
+      onWillDismiss: (action: DismissDialogAction): void => {
+        if (!this.vm.replyPermissionPending) { action.dismiss(); }
+      },
+      onDidDisappear: (): void => {
+        if (this.commentPermissionDialogSeq === seq) {
+          this.commentPermissionDialogId = 0;
+          this.showCommentPermission = false;
+          this.pendingCommentPermission = ThreadReplyPermission.UNKNOWN;
+        }
+      }
+    }).then((id: number): void => {
+      if (this.commentPermissionDialogSeq !== seq || !this.showCommentPermission || !this.commentsActive) {
+        try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) {}
+        return;
+      }
+      this.commentPermissionDialogId = id;
+    }).catch((): void => {
+      if (this.commentPermissionDialogSeq === seq) {
+        this.commentPermissionDialogId = 0;
+        this.showCommentPermission = false;
+      }
+    });
+  }
+
+  private closeCommentPermissionDialog(): void {
+    this.commentPermissionDialogSeq++;
+    this.showCommentPermission = false;
+    this.pendingCommentPermission = ThreadReplyPermission.UNKNOWN;
+    const id: number = this.commentPermissionDialogId;
+    this.commentPermissionDialogId = 0;
+    if (id !== 0) {
+      try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) {}
+    }
+  }
+
+  private async selectCommentPermission(target: ThreadReplyPermission): Promise<void> {
+    if (this.vm.replyPermissionPending || !this.commentsActive) { return; }
+    if (this.vm.replyPermission === target) {
+      this.closeCommentPermissionDialog();
+      return;
+    }
+    const previous: ThreadReplyPermission = this.vm.replyPermission;
+    this.pendingCommentPermission = target;
+    try {
+      const message: string = await this.vm.setReplyPermission(
+        this.hostContext(), target, this.commentPermissionOwner);
+      if (!this.commentsActive) { return; }
+      if (message.length > 0) {
+        this.getUIContext().getPromptAction().showToast({ message });
+        return;
+      }
+      if (previous === ThreadReplyPermission.SELF_ONLY || target === ThreadReplyPermission.SELF_ONLY) {
+        this.sourceReplyCount = -1;
+      }
+      this.closeCommentPermissionDialog();
+      this.getUIContext().getPromptAction().showToast({ message: '设置成功' });
+    } finally {
+      this.pendingCommentPermission = ThreadReplyPermission.UNKNOWN;
+    }
+  }
+
   private async confirmDeleteComment(post: PostItem, sub?: SubPostItem): Promise<void> {
     if (this.deleteConfirming || this.vm.deletePending ||
       !(sub === undefined ? this.vm.canDeletePost(post) : this.vm.canDeleteSubPost(post.pid, sub))) { return; }
@@ -393,8 +483,12 @@ export struct ThreadDetailPage {
   }
 
   private handleSystemBack(): boolean {
+    if (this.showCommentPermission) {
+      if (!this.vm.replyPermissionPending) { this.closeCommentPermissionDialog(); }
+      return true;
+    }
     if (this.popupMenuShow) { this.popupMenuShow = false; return true; }
-    if (this.showJump) { this.showJump = false; return true; }
+    if (this.showJump) { this.closeJumpDialog(); return true; }
     if (this.viewerUrl.length > 0 || this.viewerUrls.length > 0) {
       closeImageTransition(this.getUIContext(), (): void => {
         this.clearImagePreview();
@@ -429,14 +523,20 @@ export struct ThreadDetailPage {
 
     const tidForHistory: number = this.vm.tid > 0 ? this.vm.tid : tid;
     const targetPid: number = this.routeParams?.targetPid ?? 0;
-    this.vm.load(context, tid, targetPid).then(() => {
+    const targetIsSubPost: boolean = this.routeParams?.targetIsSubPost === true;
+    this.vm.load(context, tid, targetPid, targetIsSubPost).then(() => {
       this.requestCommentsJump();
       if (targetPid > 0 && this.vm.errorText.length === 0) {
-        const index: number = this.vm.visiblePosts.findIndex((post: PostItem) => post.pid === targetPid);
-        if (index >= 0) {
+        const focusPid: number = this.vm.focusedReplyPid > 0 ? this.vm.focusedReplyPid : targetPid;
+        const focusSubPid: number = this.vm.focusedSubPostPid;
+        const index: number = this.vm.visiblePosts.findIndex((post: PostItem) => post.pid === focusPid);
+        if (index >= 0 && (focusSubPid > 0 || !targetIsSubPost)) {
           this.getUIContext().runScopedTask(() => {
             setTimeout(() => {
               this.jumpToPost(index);
+              if (focusSubPid > 0) {
+                this.openSubDetailByPid(focusPid, focusSubPid);
+              }
             }, 200);
           });
         } else {
@@ -453,11 +553,17 @@ export struct ThreadDetailPage {
       if (this.vm.errorText.length > 0 || !this.vm.loadedOnce) { return; }
       // 封面 = 首楼第一张图的展示地址（列表卡片右侧要用）；没有图就存空串
       let cover: string = '';
+      let coverIsGif: boolean = false;
       for (const post of this.vm.posts) {
         if (post.floor === 1) {
-          const urls: string[] = collectPreviewImageUrls(post.contents);
-          if (urls.length > 0) {
-            cover = urls[0];
+          for (const piece of post.contents) {
+            if (piece.kind !== ContentKind.IMAGE) { continue; }
+            const url: string = piece.imageUrl.length > 0 ? piece.imageUrl : piece.originImageUrl;
+            if (url.length > 0) {
+              cover = url;
+              coverIsGif = isGifBodyImage(piece);
+              break;
+            }
           }
           break;
         }
@@ -468,7 +574,7 @@ export struct ThreadDetailPage {
         cover, this.vm.detail.forumAvatar,
         // 标题与吧名都没有 → 这个帖子在服务端已经不存在，历史里就标成已删除
         this.vm.detail.title.length === 0 && forumName.length === 0,
-        this.vm.detail.forumId);
+        this.vm.detail.forumId, coverIsGif);
     }).catch(() => {
       // 加载失败不记历史，也不打断页面
     });
@@ -524,6 +630,7 @@ export struct ThreadDetailPage {
   aboutToDisappear(): void {
     ++this.keyboardWatchSeq;
     this.commentsActive = false;
+    this.closeCommentPermissionDialog();
     // 离页后不再补页：探测回调哪怕排上了队也一并撤掉
     if (this.atEndProbeTimer >= 0) {
       clearTimeout(this.atEndProbeTimer);
@@ -668,7 +775,7 @@ export struct ThreadDetailPage {
    *      加载态只体现在列表区域。
    * `item` 为空表示从别处（如主帖展开区）按 pid 打开。
    */
-  private openSubDetailByPid(pid: number): void {
+  private openSubDetailByPid(pid: number, targetSubPid: number = 0): void {
     if (pid <= 0) {
       return;
     }
@@ -679,6 +786,7 @@ export struct ThreadDetailPage {
     }
     const authorId: number = this.vm.detail.author.id;
     this.subDetailPid = pid;
+    this.subDetailTargetPid = targetSubPid;
     this.showSubSheet = true;
     const state = this.vm.subState(pid);
     if (!state.loadedOnce && !state.loading) {
@@ -696,6 +804,7 @@ export struct ThreadDetailPage {
 
   private closeSubSheet(): void {
     this.showSubSheet = false;
+    this.subDetailTargetPid = 0;
   }
 
   /** 按 pid 找已加载的楼层，用作面板顶部的锚点回复；找不到返回空对象（与 `vm.postByPid` 同源，不再自己扫一遍） */
@@ -1266,19 +1375,42 @@ export struct ThreadDetailPage {
     this.toastNotAvailable(label);
   }
 
-  /** 跳到指定楼层号，只在当前已加载且可见的楼层中精确匹配 */
-  private jumpToFloor(): void {
-    const floor: number = Number.parseInt(this.jumpText.trim(), 10);
-    if (!Number.isNaN(floor)) {
-      const posts: PostItem[] = this.vm.visiblePosts;
-      for (let i = 0; i < posts.length; i++) {
-        if (posts[i].floor === floor) {
-          this.jumpToPost(i);
-          break;
-        }
-      }
-    }
+  private closeJumpDialog(): void {
     this.showJump = false;
+    this.vm.cancelJumpToFloor();
+  }
+
+  private async jumpToFloor(): Promise<void> {
+    if (this.vm.isJumpingFloor) { return; }
+    const raw: string = this.jumpText.trim();
+    if (!/^\d+$/.test(raw)) {
+      promptAction.showToast({ message: '请输入有效的楼层号', duration: 1800 });
+      return;
+    }
+    const floor: number = Number(raw);
+    if (!Number.isSafeInteger(floor) || floor < 1) {
+      promptAction.showToast({ message: '请输入有效的楼层号', duration: 1800 });
+      return;
+    }
+
+    const result: FloorJumpResult = await this.vm.jumpToFloor(this.hostContext(), floor);
+    if (!this.commentsActive) { return; }
+    if (result.status === FloorJumpStatus.FOUND) {
+      this.showJump = false;
+      if (result.loadedNewPage) {
+        this.getUIContext().postFrameCallback(new ThreadCommentsFrame((): void => {
+          if (!this.commentsActive) { return; }
+          this.jumpToPost(result.index);
+        }));
+      } else {
+        this.jumpToPost(result.index);
+      }
+      return;
+    }
+    if (result.status === FloorJumpStatus.CANCELLED) { return; }
+    if (result.message.length > 0) {
+      promptAction.showToast({ message: result.message, duration: 2200 });
+    }
   }
 
   @Builder
@@ -1444,6 +1576,7 @@ export struct ThreadDetailPage {
           onDisappear: (): void => {
             this.showSubSheet = false;
             this.subDetailPid = 0;
+            this.subDetailTargetPid = 0;
             this.clearImagePreview();
             const user: UserBrief | undefined = this.pendingUser;
             this.pendingUser = undefined;
@@ -1549,6 +1682,7 @@ export struct ThreadDetailPage {
         void this.confirmDeleteComment(this.anchorPost(this.subDetailPid), sub);
       },
       subPosts: this.vm.subState(this.subDetailPid).subPosts,
+      targetSubPid: this.subDetailTargetPid,
       totalReplies: this.vm.subState(this.subDetailPid).loadedOnce
         ? this.vm.subState(this.subDetailPid).page.totalCount
         : this.anchorPost(this.subDetailPid).subPostCount > 0
@@ -1830,6 +1964,17 @@ export struct ThreadDetailPage {
           this.showMore = false;
           this.shareThread();
         })
+      if (this.vm.canManageReplyPermission()) {
+        Text('评论权限')
+          .fontSize(14)
+          .textAlign(TextAlign.Center)
+          .fontColor(AppTheme.TEXT_MAIN)
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .enabled(!this.vm.deletePending)
+          .id('thread-comment-permission-entry')
+          .onClick((): void => { this.openCommentPermissionSheet(); })
+      }
       if (this.vm.canDeleteThread()) {
         Text(this.vm.deletePending ? '正在删除…' : '删除帖子')
           .fontSize(14)
@@ -1848,6 +1993,92 @@ export struct ThreadDetailPage {
   }
 
   @Builder
+  CommentPermissionSheet() {
+    Column() {
+      Column({ space: 4 }) {
+        Text('评论权限')
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(AppTheme.TEXT_MAIN)
+          .textAlign(TextAlign.Center)
+        Text('仅对该贴生效，不影响设置页权限')
+          .fontSize(12.5)
+          .fontColor(AppTheme.TEXT_SUB)
+          .textAlign(TextAlign.Center)
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Center)
+      .padding({ left: 24, right: 24, top: 22, bottom: 14 })
+
+      Divider()
+        .color(AppTheme.DIVIDER)
+        .strokeWidth(0.5)
+        .margin({ left: 20, right: 20 })
+
+      ForEach(THREAD_REPLY_PERMISSION_OPTIONS, (option: ThreadReplyPermissionOption, index: number) => {
+        Column() {
+          Row({ space: 12 }) {
+            Text(option.label)
+              .fontSize(15)
+              .fontWeight(this.vm.replyPermission === option.permission ? FontWeight.Medium : FontWeight.Regular)
+              .fontColor(this.vm.replyPermission === option.permission ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)
+              .layoutWeight(1)
+            if (this.vm.replyPermissionPending && this.pendingCommentPermission === option.permission) {
+              LoadingProgress()
+                .width(18)
+                .height(18)
+                .color(AppTheme.ACCENT)
+            } else if (this.vm.replyPermission === option.permission) {
+              SymbolGlyph($r('sys.symbol.checkmark'))
+                .fontSize(18)
+                .maxFontScale(1)
+                .fontColor([AppTheme.ACCENT])
+            }
+          }
+          .width('100%')
+          .constraintSize({ minHeight: 50 })
+          .padding({ left: 24, right: 24, top: 12, bottom: 12 })
+          .alignItems(VerticalAlign.Center)
+          .enabled(!this.vm.replyPermissionPending)
+          .accessibilityGroup(true)
+          .accessibilityText(option.label)
+          .accessibilitySelected(this.vm.replyPermission === option.permission)
+          .id(`thread-comment-permission-option-${option.permission}`)
+          .onClick((): void => { void this.selectCommentPermission(option.permission); })
+
+          if (index < THREAD_REPLY_PERMISSION_OPTIONS.length - 1) {
+            Divider()
+              .color(AppTheme.DIVIDER)
+              .strokeWidth(0.5)
+              .margin({ left: 24, right: 24 })
+          }
+        }
+        .width('100%')
+      }, (option: ThreadReplyPermissionOption): string => String(option.permission))
+
+      Divider()
+        .color(AppTheme.DIVIDER)
+        .strokeWidth(0.5)
+        .margin({ left: 20, right: 20 })
+
+      Text('取消')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(AppTheme.TEXT_SUB)
+        .textAlign(TextAlign.Center)
+        .width('100%')
+        .padding({ top: 14, bottom: 16 })
+        .enabled(!this.vm.replyPermissionPending)
+        .id('thread-comment-permission-cancel')
+        .onClick((): void => {
+          if (!this.vm.replyPermissionPending) { this.closeCommentPermissionDialog(); }
+        })
+    }
+    .width('100%')
+    .id('thread-comment-permission-sheet')
+  }
+
+  @Builder
   JumpDialog() {
     Stack() {
       Column({ space: 14 }) {
@@ -1860,6 +2091,7 @@ export struct ThreadDetailPage {
           .caretColor(AppTheme.ACCENT)
           .selectedBackgroundColor(BrandTheme.SELECTION_BACKGROUND)
           .type(InputType.Number)
+          .enabled(!this.vm.isJumpingFloor)
           .fontSize(15)
           .fontColor(AppTheme.TEXT_MAIN)
           .placeholderColor(AppTheme.TEXT_MUTED)
@@ -1871,7 +2103,7 @@ export struct ThreadDetailPage {
             this.jumpText = value;
           })
           .onSubmit(() => {
-            this.jumpToFloor();
+            void this.jumpToFloor();
           })
 
         Row({ space: 12 }) {
@@ -1884,10 +2116,10 @@ export struct ThreadDetailPage {
             .borderRadius(19)
             .backgroundColor(AppTheme.SURFACE_MUTED)
             .onClick(() => {
-              this.showJump = false;
+              this.closeJumpDialog();
             })
 
-          Text('跳转')
+          Text(this.vm.isJumpingFloor ? '跳转中…' : '跳转')
             .fontSize(14)
             .fontColor(BrandTheme.ON_ACCENT)
             .textAlign(TextAlign.Center)
@@ -1895,8 +2127,10 @@ export struct ThreadDetailPage {
             .height(38)
             .borderRadius(19)
             .backgroundColor(AppTheme.ACCENT)
+            .opacity(this.vm.isJumpingFloor ? 0.65 : 1)
+            .enabled(!this.vm.isJumpingFloor)
             .onClick(() => {
-              this.jumpToFloor();
+              void this.jumpToFloor();
             })
         }
       }
@@ -1904,6 +2138,7 @@ export struct ThreadDetailPage {
       .borderRadius(18)
       .backgroundColor(AppTheme.CARD)
       .shadow({ radius: 24, color: '#40000000', offsetY: 8 })
+      .onClick(() => {})
     }
     .width('100%')
     .height('100%')
@@ -1911,7 +2146,7 @@ export struct ThreadDetailPage {
     .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE)
       .animation({ duration: motionDuration(180, MotionEffect.FADE), curve: Curve.EaseOut }))
     .onClick(() => {
-      this.showJump = false;
+      this.closeJumpDialog();
     })
   }
 
@@ -3080,7 +3315,7 @@ export struct ThreadDetailPage {
       viewportWidth: this.popupViewportWidth,
       viewportHeight: this.popupViewportHeight,
       topInset: this.titleBarH,
-      active: this.pageVisible && !this.showMore && this.viewerUrl.length === 0,
+      active: this.pageVisible && !this.showMore && !this.showCommentPermission && this.viewerUrl.length === 0,
       open: this.popupMenuShow,
       onOpenChange: (open: boolean): void => { this.popupMenuShow = open; },
       action: (index: number): void => { this.PopupActionAt(index); }

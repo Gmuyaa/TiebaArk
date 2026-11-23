@@ -55,7 +55,9 @@ export enum ThemeColorRole {
   MEDIA_ACCENT,
   HOME_TOP_BACKDROP,
   HOME_TOP_BACKDROP_CLEAR,
-  COMPOSE_TINT
+  COMPOSE_TINT,
+  FOLLOW_LEVEL_SIGNED_BG,
+  FOLLOW_LEVEL_UNSIGNED_BG
 }
 
 const PINE_COLORS: Array<Resource | undefined> = [
@@ -112,6 +114,8 @@ const PINE_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_pine_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 const LILAC_COLORS: Array<Resource | undefined> = [
@@ -168,6 +172,8 @@ const LILAC_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_lilac_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 const CLAY_COLORS: Array<Resource | undefined> = [
@@ -224,6 +230,8 @@ const CLAY_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_clay_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 const SKY_COLORS: Array<Resource | undefined> = [
@@ -280,6 +288,8 @@ const SKY_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_sky_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 const BERRY_COLORS: Array<Resource | undefined> = [
@@ -336,6 +346,8 @@ const BERRY_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_berry_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 const ORANGE_COLORS: Array<Resource | undefined> = [
@@ -392,6 +404,8 @@ const ORANGE_COLORS: Array<Resource | undefined> = [
   undefined, // HOME_TOP_BACKDROP uses the caller's classic resource
   undefined, // HOME_TOP_BACKDROP_CLEAR uses the caller's classic resource
   $r('app.color.theme_orange_compose_tint'), // COMPOSE_TINT
+  undefined, // FOLLOW_LEVEL_SIGNED_BG
+  undefined, // FOLLOW_LEVEL_UNSIGNED_BG
 ];
 
 /** 新增六色仅覆盖强调与交互色，页面和内容表面始终沿用调用方的经典资源。 */

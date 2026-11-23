@@ -192,7 +192,8 @@ export struct UserPage {
   }
   private openPost(item: UserPostItem): void {
     NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName,
-      targetPid: this.vm.tab === 1 && item.pid > 0 ? item.pid : undefined });
+      targetPid: this.vm.tab === 1 && item.pid > 0 ? item.pid : undefined,
+      targetIsSubPost: this.vm.tab === 1 && item.pid > 0 && item.isComment ? true : undefined });
   }
 
   @Builder

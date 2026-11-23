@@ -5,6 +5,7 @@ import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpi
 
 import { common } from '@kit.AbilityKit';
 import { accessibility } from '@kit.AccessibilityKit';
+import { image } from '@kit.ImageKit';
 import { promptAction } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppTheme } from '../theme/Theme';
@@ -23,7 +24,14 @@ import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { ContentPiece } from '../model/ThreadDetail';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
-import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
+import {
+  ImageLoadPolicy, ImageQuality, ViewerImage, feedPreviewSource, isGifFeedImage, viewerImagesForFeed
+} from '../model/ImageLoadPolicy';
+import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
+import { feedImageInfo } from '../model/HomeFeedPresentation';
+import {
+  StaticGifFrameResult, loadStaticGifFrameWithMeta, releaseStaticGifFrame
+} from '../utils/StaticGifFrame';
 import { ImageViewer } from '../components/ImageViewer';
 import { closeImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
@@ -193,7 +201,8 @@ export struct MyListPage {
 
     NavigationService.openThreadDetail({
       tid: item.tid, forumName: item.forumName,
-      targetPid: this.vm.kind === 'reply' && item.pid > 0 ? item.pid : undefined
+      targetPid: this.vm.kind === 'reply' && item.pid > 0 ? item.pid : undefined,
+      targetIsSubPost: this.vm.kind === 'reply' && item.pid > 0 && item.isComment ? true : undefined
     });
   }
 
@@ -619,11 +628,7 @@ export struct MyListPage {
 
       // ── 右侧圆角封面图：没有图就不占位置，只留标题 ──
       if (item.coverUrl.length > 0) {
-        Image(item.coverUrl)
-          .width(112)
-          .height(84)
-          .borderRadius(10)
-          .objectFit(ImageFit.Cover)
+        MyListCoverImage({ url: item.coverUrl, coverIsGif: item.coverIsGif })
       }
     }
     .width('100%')
@@ -635,5 +640,157 @@ export struct MyListPage {
       if (this.vm.managing) { this.vm.toggleSelected(item.tid); }
       else { this.openThread(item); }
     })
+  }
+}
+
+@ComponentV2
+struct MyListCoverImage {
+  @Require @Param url: string;
+  @Param coverIsGif: boolean = false;
+  @Local imageLoad: ImageLoadStore = imageLoadStore;
+  @Local private policy: ImageLoadPolicy = imageLoadStore.currentPolicy();
+  @Local private staticFrame: image.PixelMap | undefined = undefined;
+  @Local private staticFrameUrl: string = '';
+  @Local private detectedGif: boolean = false;
+  private staticFrameLoadingUrl: string = '';
+  private alive: boolean = false;
+  private requestEpoch: number = 0;
+
+  aboutToAppear(): void {
+    this.alive = true;
+    this.policy = this.imageLoad.currentPolicy();
+    this.resetFrame();
+    this.ensureStaticFrame();
+  }
+
+  aboutToDisappear(): void {
+    this.alive = false;
+    this.resetFrame();
+  }
+
+  private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private resolvedSource(): string {
+    return feedPreviewSource(feedImageInfo(this.url), this.url, this.policy);
+  }
+
+  private isGif(): boolean {
+    return this.coverIsGif || this.detectedGif || isGifFeedImage(feedImageInfo(this.url), this.url);
+  }
+
+  private needsStaticGifFrame(): boolean {
+    if (this.isOff() || this.policy.gifPlays) { return false; }
+    if (this.isGif()) { return true; }
+    const src: string = this.resolvedSource();
+    // 兼容旧浏览历史/收藏中未带 isGif 标记的无 g=0 动图地址
+    return /\/forum\//i.test(src) && !/(?:g%3D0|g=0)/i.test(src);
+  }
+
+  private resetFrame(): void {
+    ++this.requestEpoch;
+    const prev: image.PixelMap | undefined = this.staticFrame;
+    this.staticFrame = undefined;
+    this.staticFrameUrl = '';
+    this.staticFrameLoadingUrl = '';
+    releaseStaticGifFrame(prev);
+  }
+
+  private ensureStaticFrame(): void {
+    if (!this.alive || !this.needsStaticGifFrame()) { return; }
+    const src: string = this.resolvedSource();
+    if (src.length === 0) { return; }
+    if (this.staticFrameUrl === src && this.staticFrame !== undefined) { return; }
+    if (this.staticFrameLoadingUrl === src) { return; }
+    const url: string = this.url;
+    const epoch: number = this.requestEpoch;
+    this.staticFrameLoadingUrl = src;
+    void loadStaticGifFrameWithMeta(src).then((result: StaticGifFrameResult): void => {
+      if (!this.alive || this.isOff() || !this.needsStaticGifFrame() ||
+        epoch !== this.requestEpoch || url !== this.url || this.resolvedSource() !== src) {
+        releaseStaticGifFrame(result.frame);
+        return;
+      }
+      this.getUIContext().runScopedTask((): void => {
+        if (!this.alive || this.isOff() || !this.needsStaticGifFrame() ||
+          epoch !== this.requestEpoch || url !== this.url || this.resolvedSource() !== src) {
+          releaseStaticGifFrame(result.frame);
+          return;
+        }
+        this.staticFrameLoadingUrl = '';
+        if (result.isGif) { this.detectedGif = true; }
+        if (result.frame === undefined) { return; }
+        const old: image.PixelMap | undefined = this.staticFrame;
+        this.staticFrame = result.frame;
+        this.staticFrameUrl = src;
+        releaseStaticGifFrame(old);
+      });
+    });
+  }
+
+  @Monitor('url', 'coverIsGif')
+  onUrlChanged(): void {
+    this.policy = this.imageLoad.currentPolicy();
+    this.detectedGif = false;
+    this.resetFrame();
+    this.ensureStaticFrame();
+  }
+
+  @Monitor('imageLoad.revision')
+  onPolicyChanged(): void {
+    const prevOff: boolean = this.isOff();
+    const prevSource: string = this.resolvedSource();
+    const prevStatic: boolean = this.needsStaticGifFrame();
+    this.policy = this.imageLoad.currentPolicy();
+    const nextOff: boolean = this.isOff();
+    const nextSource: string = this.resolvedSource();
+    const nextStatic: boolean = this.needsStaticGifFrame();
+    if (prevOff !== nextOff || prevSource !== nextSource || prevStatic !== nextStatic) {
+      this.resetFrame();
+      this.ensureStaticFrame();
+    }
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      if (this.isOff()) {
+        Text('查看图片')
+          .fontSize(12)
+          .fontColor(AppTheme.TEXT_SUB)
+          .width('100%')
+          .height('100%')
+          .textAlign(TextAlign.Center)
+      } else if (this.resolvedSource().length > 0) {
+        if (this.needsStaticGifFrame()) {
+          if (this.staticFrame !== undefined && this.staticFrameUrl === this.resolvedSource()) {
+            Image(this.staticFrame)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          }
+        } else {
+          ForEach([this.resolvedSource()], (src: string) => {
+            Image(src)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          }, (src: string) => src)
+        }
+      }
+      if (!this.isOff() && this.isGif()) {
+        Text('GIF')
+          .fontSize(10)
+          .fontColor(Color.White)
+          .backgroundColor('#88000000')
+          .borderRadius(4)
+          .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+          .margin({ right: 5, bottom: 5 })
+          .hitTestBehavior(HitTestMode.None)
+      }
+    }
+    .width(112)
+    .height(84)
+    .borderRadius(10)
+    .clip(true)
+    .backgroundColor(AppTheme.SURFACE_MUTED)
   }
 }

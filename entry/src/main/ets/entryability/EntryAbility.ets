@@ -5,12 +5,12 @@
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { applyNativeTheme } from '../theme/NativeTheme';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
+import { followLayoutStore } from '../common/appearance/FollowLayoutStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { hdsMaterial } from '@kit.UIDesignKit';
-import { authSession } from '../auth/AuthSession';
 import { materialManager } from '../common/material/MaterialManager';
 import { threadActionBarStore } from '../common/appearance/ThreadActionBarStore';
 import { homeTopNavStore } from '../common/appearance/HomeTopNavStore';
@@ -18,34 +18,33 @@ import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHide
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
 import { imageLoadStore } from '../common/appearance/ImageLoadStore';
-import { networkKindWatch } from '../utils/NetworkKindWatch';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
+import { voicePlayerStyleStore } from '../common/appearance/VoicePlayerStyleStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
 import { motionStore } from '../common/appearance/MotionStore';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
-import { restoreForumCache } from '../viewmodel/ForumReadCache';
 import { threadBlockScope } from '../viewmodel/SessionOwner';
 import { setThreadBlockScopeProvider } from '../utils/ThreadBlockStore';
 import { foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import app from '@system.app';
 import { IMAGE_DISK_CACHE_BYTES } from '../model/CachePolicy';
 import { trimExportCache } from '../utils/ExportCachePolicy';
-import { flushForumAvatarCache, initForumAvatarCache } from '../utils/ForumAvatarPrefs';
+import { flushForumAvatarCache } from '../utils/ForumAvatarPrefs';
+import { launchDisclaimerStore } from '../utils/LaunchDisclaimerStore';
+import { startPostConsentServices, stopPostConsentServices } from '../viewmodel/AppStartup';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    launchDisclaimerStore.load(this.context);
     app.setImageFileCacheSize(IMAGE_DISK_CACHE_BYTES);
     try { trimExportCache(this.context); }
     catch (_) { hilog.warn(DOMAIN, 'CachePolicy', 'export cache maintenance failed'); }
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onCreate');
-
-    // 吧头像落盘索引服务首页/收藏/搜帖三处，放在 Ability 层而不住在某个页面里。
-    void initForumAvatarCache(this.context);
 
     // 屏蔽名单按账号分键，但落盘层（utils/ThreadBlockStore）不该 import 认证层：
     // 账号作用域在这里注入一次，口径在 viewmodel/SessionOwner；惰性求值，只需早于第一个读取它的页面。
@@ -59,20 +58,16 @@ export default class EntryAbility extends UIAbility {
 
     fontScaleStore.load(this.context);
 
-    networkKindWatch.start();
     imageLoadStore.load(this.context).catch(() => {});
     imageLayoutStore.load(this.context).catch(() => {});
+    voicePlayerStyleStore.load(this.context).catch(() => {});
     forumDefaultTabStore.load(this.context).catch(() => {});
 
     superResolutionStore.load(this.context).catch(() => {});
 
-    // 恢复登录态：异步且不 await——启动流程不被存储 IO 拖住，读不到就当未登录。
-    authSession.restore(this.context).then(() => {
-      restoreForumCache(this.context);
-      hilog.info(DOMAIN, 'TiebaArk', 'auth restore done: %{public}s', authSession.describe());
-    }).catch(() => {
-      hilog.warn(DOMAIN, 'TiebaArk', '%{public}s', 'auth restore failed, fallback to logged-out');
-    });
+    if (launchDisclaimerStore.accepted) {
+      startPostConsentServices(this.context);
+    }
     /*
      * 沉浸光感偏好：异步、不 await——`MaterialManager.load` 内部已吞异常并回落 `SYSTEM`。
      * 必须在首帧前发起：`mode` 是 `@Trace` 的，读到偏好后会自己刷新一次。
@@ -83,6 +78,7 @@ export default class EntryAbility extends UIAbility {
 
     // 首页顶部频道页签样式偏好：同上（异步、不 await、异常已吞）；`style` 是 `@Trace` 的。
     forumLevelStore.load(this.context).catch(() => {});
+    followLayoutStore.load(this.context).catch(() => {});
     signStrategyStore.load(this.context).catch(() => {});
     homeTopNavStore.load(this.context).catch(() => {});
     homeNavigationHideStore.load(this.context).catch(() => {});
@@ -98,7 +94,7 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     motionStore.stopSystemTracking();
-    networkKindWatch.stop();
+    stopPostConsentServices();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onDestroy');
   }
 
@@ -164,7 +160,9 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     motionStore.startSystemTracking();
     smartReachStore.foreground = true;
-    foregroundRefresh.onForeground();
+    if (launchDisclaimerStore.accepted) {
+      foregroundRefresh.onForeground();
+    }
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onForeground');
   }
 

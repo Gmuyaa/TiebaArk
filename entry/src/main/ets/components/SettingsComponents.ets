@@ -48,6 +48,7 @@ export struct SettingsCard {
 @ComponentV2
 export struct SettingsGroupTitle {
   @Param title: string = '';
+  @Param first: boolean = false;
 
   build() {
     Text(this.title)
@@ -56,7 +57,7 @@ export struct SettingsGroupTitle {
       .fontColor(AppTheme.NOTE_TEXT)
       .width('100%')
       .padding({ left: 4, right: 4 })
-      .margin({ top: SettingsLayout.GROUP_GAP, bottom: SettingsLayout.GROUP_TITLE_GAP })
+      .margin({ top: this.first ? 0 : SettingsLayout.GROUP_GAP, bottom: SettingsLayout.GROUP_TITLE_GAP })
   }
 }
 

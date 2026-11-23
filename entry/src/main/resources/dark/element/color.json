@@ -206,6 +206,10 @@
       "value": "#FF7979"
     },
     {
+      "name": "swipe_delete_bg",
+      "value": "#E84026"
+    },
+    {
       "name": "app_popup_line",
       "value": "#323439"
     },
@@ -686,6 +690,10 @@
     { "name": "theme_clay_compose_tint", "value": "#E6DDB098" },
     { "name": "theme_sky_compose_tint", "value": "#E68AB4FF" },
     { "name": "theme_berry_compose_tint", "value": "#E6FF9FBB" },
-    { "name": "theme_orange_compose_tint", "value": "#E6FFB57D" }
+    { "name": "theme_orange_compose_tint", "value": "#E6FFB57D" },
+    { "name": "follow_level_signed_bg", "value": "#5BA854" },
+    { "name": "follow_level_unsigned_bg", "value": "#5E636E" },
+    { "name": "paper_follow_level_signed_bg", "value": "#5D965B" },
+    { "name": "paper_follow_level_unsigned_bg", "value": "#625E55" }
   ]
 }

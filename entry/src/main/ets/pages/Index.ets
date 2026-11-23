@@ -67,6 +67,12 @@ import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHide
 import { readStatusBarVp } from '../utils/SafeArea';
 import { avatarTrace } from '../utils/AvatarTrace';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
+import { LaunchDisclaimerStore, launchDisclaimerStore } from '../utils/LaunchDisclaimerStore';
+import { startPostConsentServices } from '../viewmodel/AppStartup';
+import {
+  LaunchDisclaimerContent, launchDisclaimerBodyMaxHeight, launchDisclaimerDialogOptions,
+  launchDisclaimerDialogWidth
+} from '../components/LaunchDisclaimerDialog';
 
 /** 一个 Tab 槽位的静态描述 */
 interface TabSlot {
@@ -114,19 +120,26 @@ struct Index {
   @Local foreground: ForegroundRefresh = foregroundRefresh;
   @Local unread: NotifyUnreadVM = notifyUnreadVM;
   @Local unreadAuth: AuthSession = authSession;
+  @Local private disclaimer: LaunchDisclaimerStore = launchDisclaimerStore;
+  @Local private disclaimerBusy: boolean = false;
+  @Local private disclaimerDialogFallback: boolean = false;
+  private disclaimerDialogId: number = 0;
+  private disclaimerDialogOpening: boolean = false;
+  private disclaimerDialogSeq: number = 0;
   private unreadTimer: number = -1;
   private foregroundRevision: number = foregroundRefresh.revision;
 
   /** 外壳统一读取计数，消息页与底栏共用；不自动读取会消费未读的分类列表。 */
   @Monitor('foreground.isForeground', 'foreground.revision', 'pageVisible', 'homeNavVisible',
-    'unreadAuth.snapshot', 'unread.previewRevision')
+    'unreadAuth.snapshot', 'unread.previewRevision', 'disclaimer.acceptedVersion')
   private syncUnreadRefresh(): void {
     this.stopUnreadRefresh();
+    if (!this.disclaimer.accepted) { return; }
     this.unread.syncAccount();
     if (!this.pageVisible || !this.foreground.isForeground || !authSession.isLoggedIn()) { return; }
     void this.reloadUnread();
     this.unreadTimer = setInterval((): void => {
-      if (this.pageVisible && this.foreground.isForeground && authSession.isLoggedIn()) {
+      if (this.disclaimer.accepted && this.pageVisible && this.foreground.isForeground && authSession.isLoggedIn()) {
         void this.reloadUnread();
       }
     }, 30000);
@@ -142,7 +155,8 @@ struct Index {
 
   @Monitor('foreground.revision', 'pageVisible', 'homeNavVisible')
   onForegroundRefresh(): void {
-    if (!this.pageVisible || !this.homeNavVisible || this.foregroundRevision === this.foreground.revision) { return; }
+    if (!this.disclaimer.accepted || !this.pageVisible || !this.homeNavVisible ||
+      this.foregroundRevision === this.foreground.revision) { return; }
     this.foregroundRevision = this.foreground.revision;
     this.refreshMyProfile();
   }
@@ -214,6 +228,7 @@ struct Index {
 
   /** 首页查看器独占系统返回；普通内容页仍由共享导航栈处理。 */
   onBackPress(): boolean {
+    if (!this.disclaimer.accepted) { return true; }
     if (this.viewerUrls.length === 0) { return false; }
     closeImageTransition(this.getUIContext(), (): void => {
       this.viewerUrls = [];
@@ -223,7 +238,7 @@ struct Index {
   }
 
   private refreshMyProfile(): void {
-    if (!this.pageVisible || !this.homeNavVisible || this.viewerUrls.length > 0) { return; }
+    if (!this.disclaimer.accepted || !this.pageVisible || !this.homeNavVisible || this.viewerUrls.length > 0) { return; }
     const showsOwnAvatar: boolean = this.currentIndex === 3 ||
       (this.currentIndex === 0 && this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW);
     if (showsOwnAvatar && authSession.isLoggedIn()) {
@@ -236,6 +251,10 @@ struct Index {
     // uiMaterial 的能力查询依赖当前 UI 容器，不能放在 Ability.onCreate 的偏好加载中。
     this.getUIContext().runScopedTask((): void => { materialManager.refreshCapabilities(); });
     this.pageVisible = true;
+    if (!this.disclaimer.accepted) {
+      this.ensureDisclaimerDialog();
+      return;
+    }
     // 只记"外壳页真的回到前台"（含我们页当前页签），用来和状态发布时间对齐。
     avatarTrace('page-visible', 0, `page=index tab=${this.currentIndex}`);
     // 设置页里可能刚换过顶栏样式：回前台时同步一次（值没变则不会触发重绘）
@@ -250,14 +269,116 @@ struct Index {
       this.getUIContext().getHostContext() as common.UIAbilityContext;
     readStatusBarVp(context).then((vp: number) => { this.homeStatusBarH = vp; }).catch(() => {});
 
-    const widthVp: number = px2vp(display.getDefaultDisplaySync().width);
+    const screen: display.Display = display.getDefaultDisplaySync();
+    const widthVp: number = px2vp(screen.width);
+    const heightVp: number = px2vp(screen.height);
+    if (this.homeViewportWidth <= 0) { this.homeViewportWidth = widthVp; }
+    if (this.homeViewportHeight <= 0) { this.homeViewportHeight = heightVp; }
     this.barSideMargin = bottomBarSideMarginVp(widthVp);
-    this.syncUnreadRefresh();
+    if (this.disclaimer.accepted) {
+      this.syncUnreadRefresh();
+    }
   }
 
   aboutToDisappear(): void {
+    if (this.disclaimerDialogId) {
+      this.closeDisclaimerDialog();
+    }
     this.stopUnreadRefresh();
     this.unread.reset();
+  }
+
+  private ensureDisclaimerDialog(): void {
+    if (this.disclaimer.accepted || this.disclaimerDialogOpening || this.disclaimerDialogId !== 0) {
+      return;
+    }
+    this.disclaimerDialogFallback = false;
+    this.disclaimerDialogOpening = true;
+    const seq: number = ++this.disclaimerDialogSeq;
+    this.getUIContext().getPromptAction().openCustomDialog(
+      launchDisclaimerDialogOptions(
+        (): void => { this.DisclaimerDialog(); },
+        this.homeViewportWidth,
+        (): void => {
+          if (this.disclaimerDialogSeq === seq) {
+            this.disclaimerDialogId = 0;
+            this.disclaimerDialogOpening = false;
+          }
+        }
+      )
+    ).then((id: number): void => {
+      if (this.disclaimerDialogSeq !== seq || this.disclaimer.accepted) {
+        try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) {}
+        return;
+      }
+      this.disclaimerDialogId = id;
+      this.disclaimerDialogOpening = false;
+    }).catch((err: Error): void => {
+      hilog.warn(0x0000, 'LaunchDisclaimer', 'openCustomDialog failed: %{public}s', err.message);
+      if (this.disclaimerDialogSeq === seq) {
+        this.disclaimerDialogOpening = false;
+        this.disclaimerDialogId = 0;
+        this.disclaimerDialogFallback = true;
+      }
+    });
+  }
+
+  private closeDisclaimerDialog(): void {
+    ++this.disclaimerDialogSeq;
+    this.disclaimerDialogOpening = false;
+    const id: number = this.disclaimerDialogId;
+    this.disclaimerDialogId = 0;
+    if (id !== 0) {
+      try {
+        this.getUIContext().getPromptAction().closeCustomDialog(id);
+      } catch (_) {}
+    }
+  }
+
+  private handleAgreeDisclaimer(): void {
+    if (this.disclaimerBusy) { return; }
+    this.disclaimerBusy = true;
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const saved: boolean = launchDisclaimerStore.accept(context);
+    if (!saved) {
+      this.disclaimerBusy = false;
+      this.getUIContext().getPromptAction().showToast({
+        message: '保存确认状态失败，请重试',
+        duration: 2000
+      });
+      return;
+    }
+    this.disclaimerDialogFallback = false;
+    this.closeDisclaimerDialog();
+    startPostConsentServices(context);
+    this.disclaimerBusy = false;
+    this.syncUnreadRefresh();
+  }
+
+  private handleDeclineDisclaimer(): void {
+    if (this.disclaimerBusy) { return; }
+    this.disclaimerBusy = true;
+    this.closeDisclaimerDialog();
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    context.terminateSelf().catch((err: Error): void => {
+      hilog.warn(0x0000, 'LaunchDisclaimer', 'terminateSelf failed: %{public}s', err.message);
+      this.disclaimerBusy = false;
+      if (!this.disclaimer.accepted) {
+        this.ensureDisclaimerDialog();
+      }
+    });
+  }
+
+  @Builder
+  DisclaimerDialog() {
+    LaunchDisclaimerContent({
+      maxBodyHeight: launchDisclaimerBodyMaxHeight(this.homeViewportHeight),
+      busy: this.disclaimerBusy,
+      onAgree: (): void => { this.handleAgreeDisclaimer(); },
+      onDecline: (): void => { this.handleDeclineDisclaimer(); }
+    })
   }
 
   onPageHide(): void {
@@ -481,6 +602,23 @@ struct Index {
   }
 
   build() {
+    if (!this.disclaimer.accepted) {
+      Stack({ alignContent: Alignment.Center }) {
+        if (this.disclaimerDialogFallback) {
+          Column() {
+            this.DisclaimerDialog()
+          }
+          .width(launchDisclaimerDialogWidth(this.homeViewportWidth))
+          .backgroundColor(AppTheme.CARD)
+          .borderRadius(24)
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(AppTheme.BG)
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
+        [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    } else {
     /** 首页由 HdsNavigation 承载，共享栈通过 PageMap 注册内容页面。 */
     Stack() {
     // 大图浮层放在整个导航容器之外，覆盖标题栏与系统安全区。
@@ -530,12 +668,14 @@ struct Index {
       // 看图时保留材质按钮，由上层 Viewer 覆盖；发帖按钮显隐读偏好，隐藏时必须真正卸载，
       // 才能停掉握姿订阅与待换边定时器。切页滑出期间跟随首页横滑，落定后立即卸载。
       if (this.homeChromeVisible() && this.homeNavVisible && this.smartReachPreferences.homeComposeVisible) {
+        // 不能在 HomeComposeButton 外直接挂 .translate：ArkUI 生成的 __Common__ 包裹层会按 BottomEnd 对齐，
+        // 把内部 .position(x, y) 整体推到视口右下角之外。
         HomeComposeButton({ viewportWidth: this.homeViewportWidth, viewportHeight: this.homeViewportHeight,
           topInset: this.homeStatusBarH + this.homeTopNavRowH,
           active: this.pageVisible && this.viewerUrls.length === 0 &&
             this.currentIndex === 0 && !this.tabTransitioning,
+          externalOffsetX: this.homeTabSlideOffsetX,
           onCompose: (): void => { NavigationService.openCompose(); } })
-          .translate({ x: this.homeTabSlideOffsetX })
       }
       } // Stack
       .onAreaChange((_old: Area, area: Area): void => {
@@ -594,6 +734,7 @@ struct Index {
     .width('100%').height('100%')
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM],
       [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    }
   }
 
   @Builder
@@ -643,7 +784,8 @@ struct Index {
 
       TabContent() {
 
-        MessageView({ active: this.pageVisible && this.homeNavVisible && this.currentIndex === 2 })
+        MessageView({ bottomBarOcclusion: AppTheme.BAR_TOTAL_H,
+          active: this.pageVisible && this.homeNavVisible && this.currentIndex === 2 })
       }
       .tabBar(this.tabBuilder('消息', 2, this.slots[2]))
 

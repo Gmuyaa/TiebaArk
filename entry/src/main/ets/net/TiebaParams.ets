@@ -1048,7 +1048,7 @@ export class ReplyMeParams {
     return `https://${TiebaHost.APP}${ReplyMeParams.PATH}?cmd=${ReplyMeParams.CMD}`;
   }
 
-  /** `root{ data{ pn=1, common=2 } }`；官方还发屏幕尺寸等，这里只发服务端需要的最小集。 */
+  /** `ReplyMeReqIdl.DataReq`：`pn=1`、`ids=2`、`common=3`；不能把 `common` 写进 2，否则服务端按旧版客户端裁剪最新回复。 */
   static build(device: TiebaDevice, session: TiebaSession, page: number): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
     common.writeInt32(1, 2);
@@ -1066,7 +1066,7 @@ export class ReplyMeParams {
 
     const data: ProtoWriter = new ProtoWriter();
     data.writeInt32(1, page);
-    data.writeMessage(2, common.toUint8Array());
+    data.writeMessage(3, common.toUint8Array());
 
     const root: ProtoWriter = new ProtoWriter();
     root.writeMessage(1, data.toUint8Array());
@@ -1100,6 +1100,19 @@ export class MyThreadParams {
   static readonly VISIBILITY_PATH: string = '/c/c/thread/setPrivacy';
   static readonly DELETE_PATH: string = '/c/c/bawu/delthread';
   static readonly DELETE_POST_PATH: string = '/c/c/bawu/delpost';
+  static readonly REPLY_PERMISSION_PATH: string = '/c/c/friend/setprivate';
+
+  /** 官方 PrivacySettingMessage(opt="reply", val=1/5/6/7) + setTid：缺 tid 会改账号全局权限，必须带正整数 tid。 */
+  static replyPermission(device: TiebaDevice, session: TiebaSession, tid: number, writeValue: number): SignParam[] {
+    if (!Number.isSafeInteger(tid) || tid <= 0 ||
+      (writeValue !== 1 && writeValue !== 5 && writeValue !== 6 && writeValue !== 7)) {
+      return [];
+    }
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('opt', 'reply'), new SignParam('val', String(writeValue)),
+      new SignParam('tid', String(tid)));
+    return params;
+  }
 
   /** 官方 SetPrivacyModel：帖子级范围，不使用全局 opt/val。 */
   static visibility(device: TiebaDevice, session: TiebaSession, uid: number, fid: number,

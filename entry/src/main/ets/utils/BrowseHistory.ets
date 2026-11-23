@@ -17,6 +17,13 @@ function enqueueHistory<T>(write: () => Promise<T>): Promise<T> {
 /** 历史上限。超出后从最旧的（尾部）开始淘汰 */
 export const BROWSE_HISTORY_MAX: number = 200;
 
+@ObservedV2
+export class BrowseHistoryChanges {
+  @Trace revision: number = 0;
+}
+
+export const browseHistoryChanges: BrowseHistoryChanges = new BrowseHistoryChanges();
+
 export class BrowseItem {
   tid: number = 0;
   title: string = '';
@@ -24,6 +31,7 @@ export class BrowseItem {
   timeMs: number = 0;
 
   coverUrl: string = '';
+  coverIsGif: boolean = false;
   /** 吧头像完整地址（详情响应 `forum.avatar` 就是完整 URL，见 `model/ThreadDetail.ets`） */
   forumAvatar: string = '';
   /** 记录时服务端就没给标题与吧名 → 帖子已删除/屏蔽。本地记录事后无法再问服务端 */
@@ -36,6 +44,7 @@ interface RawBrowseItem {
   forumName?: string;
   timeMs?: number;
   coverUrl?: string;
+  coverIsGif?: boolean;
   forumAvatar?: string;
   isDeleted?: boolean;
 }
@@ -64,6 +73,7 @@ export async function loadBrowseHistory(context: common.UIAbilityContext): Promi
       out.forumName = item.forumName ?? '';
       out.timeMs = item.timeMs ?? 0;
       out.coverUrl = item.coverUrl ?? '';
+      out.coverIsGif = item.coverIsGif === true;
       out.forumAvatar = item.forumAvatar ?? '';
       out.isDeleted = item.isDeleted ?? false;
       items.push(out);
@@ -82,6 +92,7 @@ export function mergeBrowseEntry(existing: BrowseItem, incoming: BrowseItem): Br
   out.title = incoming.title.length > 0 ? incoming.title : existing.title;
   out.forumName = incoming.forumName.length > 0 ? incoming.forumName : existing.forumName;
   out.coverUrl = incoming.coverUrl.length > 0 ? incoming.coverUrl : existing.coverUrl;
+  out.coverIsGif = incoming.coverUrl.length > 0 ? incoming.coverIsGif : existing.coverIsGif;
   out.forumAvatar = incoming.forumAvatar.length > 0 ? incoming.forumAvatar : existing.forumAvatar;
   out.isDeleted = incoming.title.length > 0 ? false : (incoming.isDeleted || existing.isDeleted);
   return out;
@@ -124,6 +135,7 @@ async function addBrowseHistoryNow(context: common.UIAbilityContext,
     const store: preferences.Preferences = await preferences.getPreferences(context, STORE_NAME);
     await store.put(KEY_HISTORY, JSON.stringify(updated));
     await store.flush();
+    browseHistoryChanges.revision++;
   } catch {
     // 写失败不影响浏览本身：本次会话内界面仍有 updated，下次启动可能少一条
   }
@@ -171,6 +183,7 @@ async function clearBrowseHistoryNow(context: common.UIAbilityContext): Promise<
     const store: preferences.Preferences = await preferences.getPreferences(context, STORE_NAME);
     await store.put(KEY_HISTORY, '');
     await store.flush();
+    browseHistoryChanges.revision++;
   } catch {
     // 同上：存储失败不抛给界面
   }

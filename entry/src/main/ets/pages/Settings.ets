@@ -26,6 +26,7 @@ import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { GlassPillButton } from '../components/GlassPillButton';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
+import { BlacklistVM } from '../viewmodel/BlacklistVM';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { SearchTopMaterial } from '../components/SearchTopMaterial';
 import { materialManager } from '../common/material/MaterialManager';
@@ -38,6 +39,7 @@ import { MessageSettingsPane } from '../components/MessageSettingsPane';
 import { OfficialMessagesPane } from '../components/OfficialMessagesPane';
 import { TailsPane } from '../components/TailsPane';
 import { ForbiddenForumsPane } from '../components/ForbiddenForumsPane';
+import { BlacklistPane } from '../components/BlacklistPane';
 import { BlockManagePane } from '../components/BlockManagePane';
 import { ImageWatermarkPane } from '../components/ImageWatermarkPane';
 import { PrivacyMarksPane } from '../components/PrivacyMarksPane';
@@ -63,6 +65,8 @@ import {
 } from '../model/ImageLoadPolicy';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { ImageLayoutMode, imageLayoutLabel } from '../model/ImageLayout';
+import { voicePlayerStyleStore } from '../common/appearance/VoicePlayerStyleStore';
+import { ALL_VOICE_PLAYER_STYLES, VoicePlayerStyle, voicePlayerStyleLabel } from '../model/VoicePlayerStyle';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
 import { smartReachStore, SmartReachStore, ForumTabsStyle } from '../common/appearance/SmartReachStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
@@ -95,6 +99,7 @@ import {
   SettingsSwitchRow
 } from '../components/SettingsComponents';
 import { AvatarComponent } from '../components/AvatarComponent';
+import { DisclaimerSection, disclaimerSections } from '../model/LaunchDisclaimer';
 import { SETTINGS_ACTION_LOGIN, SETTINGS_ACTION_LOGOUT, SettingsAboutItem, SettingsEntry, SettingsEntryKind, SettingsGroup, SettingsOptionItem, SettingsPane, SettingsPanePresentation, SettingsState, SETTINGS_APP_VERSION, SETTINGS_VERSION_CODE, aboutItems, aboutNotes, buildOptions, buildSettingsCategoryEntries, buildSettingsGroups, settingsEntryRenderKey, settingsGroupRenderKey, settingsPageTitle, settingsPanePresentation, settingsParentPane } from '../model/SettingsModel';
 
 const TOP_NAV_PREVIEW_H: number = 108;
@@ -195,6 +200,7 @@ struct SettingsPage {
     this.avatarVm.dispose();
     this.cacheStats.dispose();
     this.forbiddenVm.dispose();
+    this.blacklistVm.dispose();
   }
 
   onPageHide(): void {
@@ -221,6 +227,12 @@ struct SettingsPage {
     }
     if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting && !this.forbiddenVm.actionBusy) {
       this.forbiddenVm.toggleSelection(); return true;
+    }
+    if (this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.executing) {
+      this.blacklistVm.requestStop(); return true;
+    }
+    if (this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.selecting && !this.blacklistVm.actionBusy) {
+      this.blacklistVm.toggleSelection(); return true;
     }
     if (this.cropOpen) {
       this.cropOpen = false;
@@ -255,6 +267,7 @@ struct SettingsPage {
       imageQualityWifiLabel: imageQualityLabel(imageLoadStore.wifi),
       imageQualityMobileLabel: imageQualityLabel(imageLoadStore.mobile),
       gifAutoPlayLabel: gifAutoPlayLabel(imageLoadStore.gif),
+      voicePlayerStyleLabel: voicePlayerStyleLabel(voicePlayerStyleStore.style),
       superResolution: superResolutionStore.enabled,
       smartReach: this.smartReach.enabled,
       homeComposeSmartReach: this.smartReach.homeComposeEnabled,
@@ -293,6 +306,8 @@ struct SettingsPage {
   @Local paneRefreshSeq: number = 0;
   @Local forbiddenVm: ForbiddenForumsVM = new ForbiddenForumsVM();
   @Local forbiddenUnblockSeq: number = 0;
+  @Local blacklistVm: BlacklistVM = new BlacklistVM();
+  @Local blacklistUnblockSeq: number = 0;
   private scroller: Scroller = new Scroller();
 
   private resetScroll(): void {
@@ -351,6 +366,9 @@ struct SettingsPage {
     if (next === SettingsPane.FORBIDDEN_FORUMS && this.pane !== next) {
       this.forbiddenVm = new ForbiddenForumsVM(); this.forbiddenUnblockSeq = 0;
     }
+    if (next === SettingsPane.BLOCK_MANAGE && this.pane !== next) {
+      this.blacklistVm = new BlacklistVM(); this.blacklistUnblockSeq = 0;
+    }
     const from: SettingsPane = this.pane;
     if (from !== next) {
       this.rememberScroll(from);
@@ -381,6 +399,12 @@ struct SettingsPage {
     }
     if (this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting && !this.forbiddenVm.actionBusy) {
       this.forbiddenVm.toggleSelection(); return;
+    }
+    if (this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.executing) {
+      this.blacklistVm.requestStop(); return;
+    }
+    if (this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.selecting && !this.blacklistVm.actionBusy) {
+      this.blacklistVm.toggleSelection(); return;
     }
     if (this.pane !== SettingsPane.NONE) {
       this.leaveToParent();
@@ -519,6 +543,11 @@ struct SettingsPage {
       return buildOptions(ALL_GIF_AUTO_PLAYS.map((g: GifAutoPlay): string => gifAutoPlayLabel(g)),
         ALL_GIF_AUTO_PLAYS.indexOf(imageLoadStore.gif), 'gif_autoplay');
     }
+    if (pane === SettingsPane.VOICE_PLAYER_STYLE) {
+      return buildOptions(
+        ALL_VOICE_PLAYER_STYLES.map((style: VoicePlayerStyle): string => voicePlayerStyleLabel(style)),
+        ALL_VOICE_PLAYER_STYLES.indexOf(voicePlayerStyleStore.style), 'voice_player_style');
+    }
     if (pane === SettingsPane.MATERIAL) {
       return buildOptions(
         ALL_MODES.map((mode: MaterialMode): string => modeLabel(mode)),
@@ -574,6 +603,12 @@ struct SettingsPage {
     if (pane === SettingsPane.GIF_AUTOPLAY) {
       if (index < 0 || index >= ALL_GIF_AUTO_PLAYS.length) { return; }
       void imageLoadStore.setGif(ALL_GIF_AUTO_PLAYS[index],
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      this.closePopup(); return;
+    }
+    if (pane === SettingsPane.VOICE_PLAYER_STYLE) {
+      if (index < 0 || index >= ALL_VOICE_PLAYER_STYLES.length) { return; }
+      void voicePlayerStyleStore.setStyle(ALL_VOICE_PLAYER_STYLES[index],
         this.getUIContext().getHostContext() as common.UIAbilityContext);
       this.closePopup(); return;
     }
@@ -837,7 +872,6 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.CacheCardRows() }
     })
-    SettingsNote({ text: '仅清理缓存，不会退出登录或删除设置、浏览历史和已保存的图片。占用可能稍后更新。' })
     this.CacheResultNotes()
   }
 
@@ -845,7 +879,6 @@ struct SettingsPage {
   CacheCardRows() {
     SettingsInfoRow({
       label: '应用缓存总量',
-      sub: '由系统统计，包含图片导出缓存及其他应用缓存',
       value: this.cacheStats.label(),
       showDivider: true
     })
@@ -859,7 +892,6 @@ struct SettingsPage {
     }
     SettingsInfoRow({
       label: '可清理的缓存文件',
-      sub: '图片、导出临时文件及其他应用文件缓存',
       value: cachePhaseAmountLabel(this.cacheStats.phase, this.cacheStats.measure),
       showDivider: this.cacheStats.phase !== CachePhase.READ_FAIL && this.cacheStats.phase !== CachePhase.EMPTY
         && this.cacheStats.phase !== CachePhase.STATTING
@@ -912,6 +944,12 @@ struct SettingsPage {
           onScrolled: (): void => { this.updateNavGlass(); } })
           .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
           .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
+      } else if (this.pane === SettingsPane.BLOCK_MANAGE) {
+        BlacklistPane({ vm: this.blacklistVm, scroller: this.scroller, topInset: this.titleBarH(),
+          unblockSeq: this.blacklistUnblockSeq,
+          onScrolled: (): void => { this.updateNavGlass(); } })
+          .translate({ x: motionStore.isOn(MotionEffect.MOVE) ? this.paneOffset : 0 })
+          .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       } else {
       Scroll(this.scroller) {
         Column() {
@@ -958,6 +996,10 @@ struct SettingsPage {
           GlassCircleButton({ symbol: $r('sys.symbol.xmark'), iconWeight: FontWeight.Regular,
             accessibilityLabel: this.forbiddenVm.executing ? '停止取消屏蔽' : '退出多选',
             onTap: (): void => { this.goBack(); } }).enabled(!this.forbiddenVm.actionBusy || this.forbiddenVm.executing)
+        } else if (this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.selecting) {
+          GlassCircleButton({ symbol: $r('sys.symbol.xmark'), iconWeight: FontWeight.Regular,
+            accessibilityLabel: this.blacklistVm.executing ? '停止解除拉黑' : '退出多选',
+            onTap: (): void => { this.goBack(); } }).enabled(!this.blacklistVm.actionBusy || this.blacklistVm.executing)
         } else {
           GlassBackButton({ onTap: (): void => { this.goBack(); } })
         }
@@ -986,6 +1028,31 @@ struct SettingsPage {
               onTap: (): void => { this.forbiddenUnblockSeq++; } })
               .enabled(this.forbiddenVm.selectedIds.length > 0 && !this.forbiddenVm.actionBusy && !this.forbiddenVm.loading && !this.forbiddenVm.loadingMore)
               .opacity(this.forbiddenVm.selectedIds.length > 0 && !this.forbiddenVm.actionBusy ? 1 : 0.4)
+          }.width('100%').justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.Transparent)
+            .position({ x: 0, y: '100%' }).translate({ y: -84 })
+        }
+      } else if (this.pane === SettingsPane.BLOCK_MANAGE) {
+        Row({ space: 10 }) {
+          if (this.blacklistVm.selecting) {
+            GlassPillButton({ label: this.blacklistVm.allSelected() ? '取消全选' : '全选',
+              pillWidth: this.blacklistVm.allSelected() ? 88 : 64,
+              active: !this.blacklistVm.actionBusy && !this.blacklistVm.loading,
+              onTap: (): void => { this.blacklistVm.toggleAll(); } })
+          } else {
+            GlassPillButton({ label: '多选', pillWidth: 64,
+              active: !this.blacklistVm.actionBusy && !this.blacklistVm.loading && this.blacklistVm.items.length > 0,
+              onTap: (): void => { this.blacklistVm.toggleSelection(); } })
+          }
+        }.width('100%').justifyContent(FlexAlign.End).padding({ right: 14 })
+          .hitTestBehavior(HitTestMode.Transparent)
+          .margin({ top: this.statusBarH + 8 })
+        if (this.blacklistVm.selecting) {
+          Row() {
+            GlassCircleButton({ symbol: $r('sys.symbol.trash'), iconWeight: FontWeight.Regular,
+              accessibilityLabel: '解除所选拉黑', diameter: 56, iconSize: 24, slot: MaterialSlot.BOTTOM_BAR,
+              onTap: (): void => { this.blacklistUnblockSeq++; } })
+              .enabled(this.blacklistVm.selectedIds.length > 0 && !this.blacklistVm.actionBusy && !this.blacklistVm.loading)
+              .opacity(this.blacklistVm.selectedIds.length > 0 && !this.blacklistVm.actionBusy ? 1 : 0.4)
           }.width('100%').justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.Transparent)
             .position({ x: 0, y: '100%' }).translate({ y: -84 })
         }
@@ -1195,6 +1262,8 @@ struct SettingsPage {
   PaneBody() {
     if (this.pane === SettingsPane.ABOUT) {
       this.AboutPane()
+    } else if (this.pane === SettingsPane.DISCLAIMER) {
+      this.DisclaimerPane()
     } else if (this.pane === SettingsPane.VERSION) {
       this.VersionPane()
     } else if (this.pane === SettingsPane.ACCOUNT) {
@@ -1244,6 +1313,10 @@ struct SettingsPage {
         (context: common.UIAbilityContext): void => { void imageLayoutStore.retrySave(context); });
       this.SaveErrorLine(imageLoadStore.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void imageLoadStore.retrySave(context); });
+      this.SaveErrorLine(voicePlayerStyleStore.loadError, '重新读取',
+        (context: common.UIAbilityContext): void => { void voicePlayerStyleStore.load(context); });
+      this.SaveErrorLine(voicePlayerStyleStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void voicePlayerStyleStore.retrySave(context); });
       this.SaveErrorLine(superResolutionStore.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void superResolutionStore.retrySave(context); });
     } else if (this.pane === SettingsPane.MATERIAL_EFFECTS) {
@@ -1276,8 +1349,6 @@ struct SettingsPage {
       OfficialMessagesPane()
     } else if (this.pane === SettingsPane.TAILS) {
       TailsPane()
-    } else if (this.pane === SettingsPane.BLOCK_MANAGE) {
-      BlockManagePane()
     } else if (this.pane === SettingsPane.HIDDEN_THREADS) {
       BlockManagePane({ hiddenThreads: true })
     } else if (this.pane === SettingsPane.PRIVACY_MARKS) {
@@ -1301,11 +1372,6 @@ struct SettingsPage {
     SettingsCard({
       content: (): void => { this.SignSettingsRows() }
     })
-    if (signStrategyStore.strategy === 1) {
-      SettingsNote({ text: '官方签到有等级限制，不符合条件的吧可改用逐个签到。' })
-    } else if (signStrategyStore.strategy === 2) {
-      SettingsNote({ text: '7级及以上使用官方批量签到，低于7级逐个签到；等级或官方条件未确认的吧会跳过并提示。' })
-    }
   }
 
   @Builder
@@ -1612,7 +1678,7 @@ struct SettingsPage {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)
-      .margin({ top: 20, bottom: 24 })
+      .margin({ top: 8, bottom: 16 })
 
       SettingsCard({
         content: (): void => { this.AboutRows() }
@@ -1626,12 +1692,50 @@ struct SettingsPage {
     SettingsInfoRow({ label: '版本', value: SETTINGS_APP_VERSION })
     SettingsInfoRow({ label: 'VersionCode', value: SETTINGS_VERSION_CODE })
     SettingsEntryRow({
+      label: '免责声明',
+      onTap: (): void => {
+        this.navigateTo(SettingsPane.DISCLAIMER);
+      }
+    })
+    SettingsEntryRow({
       label: 'GitHub',
       showDivider: false,
       onTap: (): void => {
         this.confirmOpenGitHub();
       }
     })
+  }
+
+  @Builder
+  DisclaimerPane() {
+    SettingsCard({
+      content: (): void => { this.DisclaimerRows() }
+    })
+  }
+
+  @Builder
+  DisclaimerRows() {
+    Column({ space: 16 }) {
+      ForEach(disclaimerSections(), (section: DisclaimerSection, secIndex: number) => {
+        Column({ space: 8 }) {
+          Text(section.title)
+            .fontSize(SettingsLayout.VALUE_SIZE)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppTheme.TEXT_MAIN)
+            .width('100%')
+          ForEach(section.paragraphs, (paragraph: string, pIndex: number) => {
+            Text(paragraph)
+              .fontSize(SettingsLayout.SUB_SIZE)
+              .fontColor(AppTheme.NOTE_TEXT)
+              .lineHeight(20)
+              .width('100%')
+          }, (_p: string, pIndex: number) => `disclaimer_${secIndex}_${pIndex}`)
+        }
+        .width('100%')
+      }, (section: DisclaimerSection, secIndex: number) => `disclaimer_sec_${secIndex}`)
+    }
+    .width('100%')
+    .padding(SettingsLayout.ROW_PAD_L)
   }
 
   /** 用户确认后才离开应用打开项目主页；取消或弹窗失败时保持在本页。 */
@@ -1701,15 +1805,15 @@ struct SettingsPage {
 
   @Builder
   BrowsingPane() {
-    SettingsGroupTitle({ title: '内容浏览' })
+    SettingsGroupTitle({ title: '内容浏览', first: true })
     SettingsCard({
       content: (): void => {
         this.CategoryRows(SettingsPane.BROWSING, [
-          'forum_default_tab', 'image_layout', 'image_quality_wifi', 'image_quality_mobile', 'gif_autoplay'
+          'forum_default_tab', 'image_layout', 'image_quality_wifi', 'image_quality_mobile', 'gif_autoplay',
+          'voice_player_style'
         ])
       }
     })
-    SettingsNote({ text: '切换网络后新加载的图片按新档位生效；热点 Wi-Fi 也按 Wi-Fi 计。' })
     SettingsGroupTitle({ title: '看图' })
     SettingsCard({
       content: (): void => {
@@ -1725,14 +1829,11 @@ struct SettingsPage {
         this.CategoryRows(SettingsPane.MATERIAL_EFFECTS, ['material_mode', 'hds_material_level'])
       }
     })
-    SettingsNote({ text: materialManager.useArkUI
-      ? '兼容材质效果仅在不支持沉浸材质的设备上生效。'
-      : '当前设备使用兼容材质效果。' })
   }
 
   @Builder
   NavigationLayoutPane() {
-    SettingsGroupTitle({ title: '导航样式' })
+    SettingsGroupTitle({ title: '导航样式', first: true })
     SettingsCard({
       content: (): void => {
         this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['home_top_nav_style'])
@@ -1745,9 +1846,6 @@ struct SettingsPage {
         this.CategoryRows(SettingsPane.NAVIGATION_LAYOUT, ['action_bar_style'])
       }
     })
-    if (visualThemeStore.isPaper) {
-      SettingsNote({ text: '切换到经典鸿蒙可自定义顶栏和底栏样式。' })
-    }
     SettingsGroupTitle({ title: '分类显示' })
     SettingsCard({
       content: (): void => {
@@ -1761,7 +1859,6 @@ struct SettingsPage {
           ['hide_status_bar', 'hide_top_navigation', 'hide_bottom_navigation'])
       }
     })
-    SettingsNote({ text: '上滑隐藏，下滑恢复。' })
     SettingsGroupTitle({ title: '悬浮按钮' })
     SettingsCard({
       content: (): void => {
@@ -1772,7 +1869,7 @@ struct SettingsPage {
 
   @Builder
   InteractionPane() {
-    SettingsGroupTitle({ title: '单手操作' })
+    SettingsGroupTitle({ title: '单手操作', first: true })
     SettingsCard({
       content: (): void => {
         this.CategoryRows(SettingsPane.INTERACTION,
@@ -1787,7 +1884,7 @@ struct SettingsPage {
 
   @Builder
   PostingPane() {
-    SettingsGroupTitle({ title: '发布与身份' })
+    SettingsGroupTitle({ title: '发布与身份', first: true })
     SettingsCard({
       content: (): void => {
         this.CategoryRows(SettingsPane.POSTING, ['image_watermark', 'tails', 'privacy_marks'])
@@ -1801,7 +1898,7 @@ struct SettingsPage {
 
   @Builder
   PrivacyPane() {
-    SettingsGroupTitle({ title: '内容屏蔽' })
+    SettingsGroupTitle({ title: '内容屏蔽', first: true })
     SettingsCard({
       content: (): void => {
         this.CategoryRows(SettingsPane.PRIVACY_SETTINGS, ['forbidden_forums', 'block_manage', 'hidden_threads'])
@@ -1934,7 +2031,12 @@ struct SettingsPage {
         Text(this.pane === SettingsPane.FORBIDDEN_FORUMS && this.forbiddenVm.selecting ?
           (this.forbiddenVm.executing ? (this.forbiddenVm.actionMessage === '正在停止…' ? '正在停止…' :
           `正在取消 ${this.forbiddenVm.processed}/${this.forbiddenVm.preparedCount}`) :
-          (this.forbiddenVm.selectedIds.length > 0 ? `已选择 ${this.forbiddenVm.selectedIds.length} 项` : '未选择')) : settingsPageTitle(this.pane))
+          (this.forbiddenVm.selectedIds.length > 0 ? `已选择 ${this.forbiddenVm.selectedIds.length} 项` : '未选择')) :
+          this.pane === SettingsPane.BLOCK_MANAGE && this.blacklistVm.selecting ?
+          (this.blacklistVm.executing ? (this.blacklistVm.actionMessage === '正在停止…' ? '正在停止…' :
+          `正在解除 ${this.blacklistVm.processed}/${this.blacklistVm.preparedCount}`) :
+          (this.blacklistVm.selectedIds.length > 0 ? `已选择 ${this.blacklistVm.selectedIds.length} 项` : '未选择')) :
+          settingsPageTitle(this.pane))
           .fontSize(SettingsLayout.TITLE_SIZE)
           .id('settings-title')
           .fontWeight(FontWeight.Medium)
@@ -1955,7 +2057,9 @@ struct SettingsPage {
        * 这里只负责给标题让出按钮原来的位置。
        */
       .padding({ left: 64, right: this.pane === SettingsPane.FORBIDDEN_FORUMS ?
-        (this.forbiddenVm.selecting && this.forbiddenVm.allSelected() ? 102 : 78) : 16, top: this.statusBarH })
+        (this.forbiddenVm.selecting && this.forbiddenVm.allSelected() ? 102 : 78) :
+        this.pane === SettingsPane.BLOCK_MANAGE ?
+        (this.blacklistVm.selecting && this.blacklistVm.allSelected() ? 102 : 78) : 16, top: this.statusBarH })
     }
     .width('100%')
     .height(this.titleBarH())

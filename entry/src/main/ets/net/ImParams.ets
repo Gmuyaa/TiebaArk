@@ -10,6 +10,10 @@ import { ProtoWriter } from '../proto/ProtoWire';
 export class ImCmd {
   /** UpdateClientInfo：登录/上报会话密钥（握手）。 */
   static readonly UPDATE_CLIENT_INFO: number = 1001;
+  /** UpdateMaskInfo：增删黑名单等屏蔽关系。 */
+  static readonly UPDATE_MASK_INFO: number = 104102;
+  /** GetMaskInfo：读取黑名单等屏蔽列表。 */
+  static readonly GET_MASK_INFO: number = 104103;
   /** GetGroupMsg：会话增量同步。 */
   static readonly GET_GROUP_MSG: number = 202003;
   /** CommitPersonalMsg：发送私信。 */
@@ -24,6 +28,8 @@ export class ImCmd {
 
 /** 私信通道使用的客户端版本：官方 `TiebaIMConfig` 未给出该值，此处取 aiotieba 的 CHAT_VERSION（服务端接受过的已知值），被拒时只改这一处。 */
 export const IM_CLIENT_VERSION: string = '22.13.1.0';
+/** 用户黑名单对应的 maskType（APK `BlackListModel.MASK_TYPE = 10`）。 */
+export const IM_MASK_TYPE_BLACKLIST: number = 10;
 
 /** 会话游标：每条会话已读到的最后一条 msgId。 */
 export class ImGroupCursor {
@@ -198,6 +204,41 @@ export class ImReadParams {
     root.writeMessage(1, data.toUint8Array());
     const req: ImRequest = new ImRequest();
     req.cmd = ImCmd.COMMIT_RECEIVED_PMSG;
+    req.body = root.toUint8Array();
+    return req;
+  }
+}
+
+/** `GetMaskInfoReqIdl{data(1): {type(1)}}`（104103）。 */
+export class ImGetMaskInfoParams {
+  static build(maskType: number = IM_MASK_TYPE_BLACKLIST): ImRequest {
+    const data: ProtoWriter = new ProtoWriter();
+    data.writeInt32(1, maskType);
+    const root: ProtoWriter = new ProtoWriter();
+    root.writeMessage(1, data.toUint8Array());
+    const req: ImRequest = new ImRequest();
+    req.cmd = ImCmd.GET_MASK_INFO;
+    req.body = root.toUint8Array();
+    return req;
+  }
+}
+
+/** `UpdateMaskInfoReqIdl{data(1): {type(1), isMask(2), list(3), g_id(4), call_from(5)}}`（104102）。 */
+export class ImUpdateMaskInfoParams {
+  static readonly CALL_FROM_DEFAULT: number = 1;
+
+  static build(uid: bigint, masked: boolean, maskType: number = IM_MASK_TYPE_BLACKLIST,
+    callFrom: number = ImUpdateMaskInfoParams.CALL_FROM_DEFAULT): ImRequest {
+    const data: ProtoWriter = new ProtoWriter();
+    data.writeInt32(1, maskType);
+    data.writeInt32(2, masked ? 1 : 0);
+    data.writeString(3, uid.toString());
+    data.writeInt64(4, BigInt(0));
+    data.writeInt32(5, callFrom);
+    const root: ProtoWriter = new ProtoWriter();
+    root.writeMessage(1, data.toUint8Array());
+    const req: ImRequest = new ImRequest();
+    req.cmd = ImCmd.UPDATE_MASK_INFO;
     req.body = root.toUint8Array();
     return req;
   }

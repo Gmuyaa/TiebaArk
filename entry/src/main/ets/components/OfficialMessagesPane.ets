@@ -23,7 +23,6 @@ export struct OfficialMessagesPane {
 
   build() {
     PreferencePaneScaffold({
-      note: '仅查看，暂不支持系统通知。',
       message: this.vm.error,
       onRetry: (): void => { void this.vm.load(this.context()); }
     }) {

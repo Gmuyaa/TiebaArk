@@ -348,11 +348,16 @@ function readThreadInfo(bytes: Uint8Array): PersonalizedThread {
     const isLong: boolean = img.isLong || (matched?.isLong ?? false);
     const thumb: string = matched?.bigPic || matched?.dynamicPic || img.normal || img.active || img.key;
     const high: string = img.big || matched?.srcPic || img.active || img.normal || img.key;
+    const staticUrl: string = img.normal || matched?.bigPic || matched?.dynamicPic || '';
+    const isGif: boolean = img.big.length > 0 && img.active.length > 0 &&
+      img.big === img.active && img.big !== img.normal;
     const origin: string = img.origin || matched?.originPic || img.big || matched?.srcPic || img.key;
     const originBytes: number = img.originBytes > 0 ? img.originBytes : (matched?.originSize ?? 0);
     rememberFeedImage(img.key, width, height, isLong, origin, {
       thumb: thumb,
       high: high,
+      staticUrl: staticUrl,
+      gif: isGif,
       originBytes: originBytes
     });
   }

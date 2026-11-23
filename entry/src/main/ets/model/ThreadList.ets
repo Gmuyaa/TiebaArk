@@ -347,7 +347,7 @@ export class ThreadListResult {
         if (url.length === 0) { continue; }
         t.images.push(url);
         rememberFeedImage(url, num(pic.width), num(pic.height), flag(pic.is_long_pic),
-          origin || high, { thumb: thumb, high: high, originBytes: num(pic.origin_size) });
+          origin || high, { thumb: thumb, high: high, staticUrl: thumb, gif: flag(pic.is_gif), originBytes: num(pic.origin_size) });
       }
       t.coverImage = t.images.length > 0 ? t.images[0] : '';
     }
@@ -528,7 +528,7 @@ export class ThreadListResult {
             const origin: string = wireString(pic.origin_pic_url);
             t.images.push(imageUrl);
             rememberFeedImage(imageUrl, num(pic.width), num(pic.height), pic.is_long_pic === 1,
-              origin || high, { thumb: imageUrl, high: high, originBytes: num(pic.origin_size) });
+              origin || high, { thumb: imageUrl, high: high, staticUrl: imageUrl, gif: flag(pic.is_gif), originBytes: num(pic.origin_size) });
           }
         }
         if (t.images.length > 0) {

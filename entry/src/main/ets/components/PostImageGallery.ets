@@ -1,14 +1,18 @@
 /** 正文图片按连续区段组成横向图集。单图按实际宽高比展示，多图共享图集状态。 */
 
 import { display } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { AppTheme } from '../theme/Theme';
 import { ContentImage, galleryAspectRatio } from '../model/ThreadDetail';
 import {
   BODY_RADIUS, FeedImageBox, FeedImageInfo, bodySingleImageBox, feedImageInfo, rememberMeasuredImage
 } from '../model/HomeFeedPresentation';
 import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
-import { ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey } from '../model/ImageLoadPolicy';
+import {
+  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, isGifBodyImage
+} from '../model/ImageLoadPolicy';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
+import { loadStaticGifFrame, releaseStaticGifFrame } from '../utils/StaticGifFrame';
 
 /** 详情页内容区左右各留 16vp */
 const PAGE_SIDE_PADDING: number = 32;
@@ -90,6 +94,10 @@ export struct PostImageGallery {
   @Local states: number[] = [];
   /** `states` 对应的 URL；对不上按"未加载"处理，旧图的迟到回调不会把新图标成已加载 */
   @Local stateUrls: string[] = [];
+  @Local private staticFrameTick: number = 0;
+  private staticFrames: Map<number, image.PixelMap> = new Map<number, image.PixelMap>();
+  private staticFrameUrls: Map<number, string> = new Map<number, string>();
+  private staticFrameLoading: Set<string> = new Set<string>();
 
   /** 小图放大限制要按屏幕密度换算原像素 → vp */
   private density: number = 1;
@@ -108,9 +116,69 @@ export struct PostImageGallery {
       // 拿不到密度就用 1：小图限制放宽，但不会让容器算不出来
     }
     this.registerReturnSources();
+    this.ensureStaticFrames();
   }
 
   private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private needsStaticGifFrame(index: number): boolean {
+    if (this.isOff() || this.policy.gifPlays || index < 0 || index >= this.images.length) { return false; }
+    return isGifBodyImage(this.images[index]);
+  }
+
+  private releaseStaticFrames(): void {
+    this.staticFrames.forEach((frame: image.PixelMap): void => { releaseStaticGifFrame(frame); });
+    this.staticFrames.clear();
+    this.staticFrameUrls.clear();
+    this.staticFrameLoading.clear();
+    ++this.staticFrameTick;
+  }
+
+  private staticFrameAt(index: number): image.PixelMap | undefined {
+    const _tick: number = this.staticFrameTick;
+    if (_tick < 0) { return undefined; }
+    const url: string = this.urlOf(index);
+    if (url.length === 0 || this.staticFrameUrls.get(index) !== url) { return undefined; }
+    return this.staticFrames.get(index);
+  }
+
+  private ensureStaticFrames(): void {
+    if (!this.alive || this.isOff() || this.policy.gifPlays) { return; }
+    for (let i: number = 0; i < this.images.length; i++) {
+      if (!this.needsStaticGifFrame(i)) { continue; }
+      const url: string = this.urlOf(i);
+      if (url.length === 0) { continue; }
+      if (this.staticFrameUrls.get(i) === url && this.staticFrames.has(i)) { continue; }
+      const loadKey: string = `${i}:${url}`;
+      if (this.staticFrameLoading.has(loadKey)) { continue; }
+      const epoch: number = this.requestEpoch;
+      this.staticFrameLoading.add(loadKey);
+      void loadStaticGifFrame(url).then((frame: image.PixelMap | undefined): void => {
+        if (!this.alive || this.isOff() || this.policy.gifPlays || epoch !== this.requestEpoch ||
+          this.urlOf(i) !== url) {
+          releaseStaticGifFrame(frame);
+          return;
+        }
+        this.getUIContext().runScopedTask((): void => {
+          if (!this.alive || this.isOff() || this.policy.gifPlays || epoch !== this.requestEpoch ||
+            this.urlOf(i) !== url) {
+            releaseStaticGifFrame(frame);
+            return;
+          }
+          this.staticFrameLoading.delete(loadKey);
+          if (frame === undefined) {
+            this.markState(i, IMAGE_FAILED);
+            return;
+          }
+          const prev: image.PixelMap | undefined = this.staticFrames.get(i);
+          this.staticFrames.set(i, frame);
+          this.staticFrameUrls.set(i, url);
+          releaseStaticGifFrame(prev);
+          ++this.staticFrameTick;
+        });
+      });
+    }
+  }
 
   aboutToDisappear(): void {
     this.clearReturnSources();
@@ -122,6 +190,7 @@ export struct PostImageGallery {
 
   private invalidateRequest(): void {
     ++this.requestEpoch;
+    this.releaseStaticFrames();
     this.states = [];
     this.stateUrls = [];
     this.imageTransition.invalidate();
@@ -130,12 +199,13 @@ export struct PostImageGallery {
   @Monitor('imageLoad.revision')
   onPolicyChanged(): void {
     const prevOff: boolean = this.isOff();
+    const prevGif: boolean = this.policy.gifPlays;
     const prevUrls: string[] = [];
     for (let i: number = 0; i < this.images.length; i++) {
       prevUrls.push(this.urlOf(i));
     }
     this.policy = this.imageLoad.currentPolicy();
-    let changed: boolean = prevOff !== this.isOff();
+    let changed: boolean = prevOff !== this.isOff() || prevGif !== this.policy.gifPlays;
     if (!changed) {
       for (let i: number = 0; i < this.images.length; i++) {
         if (prevUrls[i] !== this.urlOf(i)) {
@@ -147,6 +217,7 @@ export struct PostImageGallery {
     if (changed) {
       this.invalidateRequest();
       this.registerReturnSources();
+      this.ensureStaticFrames();
     }
   }
 
@@ -161,8 +232,10 @@ export struct PostImageGallery {
     const identity: string = this.currentTransitionIdentity();
     if (identity === this.transitionIdentity) { return; }
     this.transitionIdentity = identity;
+    this.releaseStaticFrames();
     this.imageTransition.invalidate();
     this.registerReturnSources();
+    this.ensureStaticFrames();
   }
 
   @Monitor('transitionGallery')
@@ -317,16 +390,37 @@ export struct PostImageGallery {
             .width('100%').height('100%').textAlign(TextAlign.Center)
         }
         if (this.urlOf(0).length > 0) {
-          ForEach([this.urlOf(0)], (src: string) => {
-            Image(src)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Contain)
-              .objectRepeat(ImageRepeat.NoRepeat)
-              .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
-              .onComplete(this.completeHandler(0, src))
-              .onError(this.errorHandler(0, src))
-          }, (src: string) => src)
+          if (this.needsStaticGifFrame(0)) {
+            if (this.staticFrameAt(0) !== undefined) {
+              Image(this.staticFrameAt(0))
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Contain)
+                .objectRepeat(ImageRepeat.NoRepeat)
+                .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
+                .onComplete(this.completeHandler(0, this.urlOf(0)))
+                .onError(this.errorHandler(0, this.urlOf(0)))
+            }
+          } else {
+            ForEach([this.urlOf(0)], (src: string) => {
+              Image(src)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Contain)
+                .objectRepeat(ImageRepeat.NoRepeat)
+                .opacity(this.stateOf(0) === IMAGE_LOADED ? 1 : 0)
+                .onComplete(this.completeHandler(0, src))
+                .onError(this.errorHandler(0, src))
+            }, (src: string) => src)
+          }
+        }
+        if (isGifBodyImage(img)) {
+          Row() {
+            Text('GIF').fontSize(11).fontColor(Color.White)
+              .backgroundColor('#88000000').borderRadius(5)
+              .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+          }.width('100%').height('100%').justifyContent(FlexAlign.End)
+            .alignItems(VerticalAlign.Bottom).padding(8).hitTestBehavior(HitTestMode.None)
         }
       }
     }
@@ -362,23 +456,42 @@ export struct PostImageGallery {
           .width('100%').height('100%').textAlign(TextAlign.Center)
       } else {
         if (this.urlOf(index).length > 0) {
-          ForEach([this.urlOf(index)], (src: string) => {
-            Stack() {
-              // 只是补满比例差的背景，不影响前景原图的完整展示。
-              Image(src)
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Cover)
-                .blur(24)
-                .opacity(0.72)
-              Image(src)
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Contain)
-                .onComplete(this.completeHandler(index, src))
-                .onError(this.errorHandler(index, src))
-            }.width('100%').height('100%')
-          }, (src: string) => src)
+          if (this.needsStaticGifFrame(index)) {
+            if (this.staticFrameAt(index) !== undefined) {
+              Stack() {
+                Image(this.staticFrameAt(index))
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Cover)
+                  .blur(24)
+                  .opacity(0.72)
+                Image(this.staticFrameAt(index))
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Contain)
+                  .onComplete(this.completeHandler(index, this.urlOf(index)))
+                  .onError(this.errorHandler(index, this.urlOf(index)))
+              }.width('100%').height('100%')
+            }
+          } else {
+            ForEach([this.urlOf(index)], (src: string) => {
+              Stack() {
+                // 只是补满比例差的背景，不影响前景原图的完整展示。
+                Image(src)
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Cover)
+                  .blur(24)
+                  .opacity(0.72)
+                Image(src)
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(ImageFit.Contain)
+                  .onComplete(this.completeHandler(index, src))
+                  .onError(this.errorHandler(index, src))
+              }.width('100%').height('100%')
+            }, (src: string) => src)
+          }
         }
         if (this.stateOf(index) === IMAGE_FAILED) {
           Text('图片加载失败')
@@ -409,13 +522,25 @@ export struct PostImageGallery {
   @Builder
   PageBadge() {
     if (this.images.length > 1) {
-      Text(`${this.page + 1} / ${this.images.length}`)
-        .fontSize(12)
-        .fontColor(Color.White)
-        .backgroundColor('#66000000')
-        .borderRadius(9)
-        .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-        .margin({ right: 10, bottom: 10 })
+      Row({ space: 6 }) {
+        if (!this.isOff() && this.page >= 0 && this.page < this.images.length &&
+          isGifBodyImage(this.images[this.page])) {
+          Text('GIF')
+            .fontSize(11)
+            .fontColor(Color.White)
+            .backgroundColor('#88000000')
+            .borderRadius(5)
+            .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+        }
+        Text(`${this.page + 1} / ${this.images.length}`)
+          .fontSize(12)
+          .fontColor(Color.White)
+          .backgroundColor('#66000000')
+          .borderRadius(9)
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+      }
+      .margin({ right: 10, bottom: 10 })
+      .hitTestBehavior(HitTestMode.None)
     }
   }
 

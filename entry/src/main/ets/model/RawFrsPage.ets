@@ -94,6 +94,7 @@ export interface RawThreadMedia {
   width?: number | string;
   height?: number | string;
   is_long_pic?: number | string;
+  is_gif?: number | string;
 }
 
 /** 摘要里的富文本片段（`abstract` / `rich_abstract` 的元素） */
@@ -249,6 +250,7 @@ export interface RawFeedPic {
   width?: number;
   height?: number;
   is_long_pic?: number;
+  is_gif?: number | string;
 }
 
 /** `feed_pic` 的组件体 */

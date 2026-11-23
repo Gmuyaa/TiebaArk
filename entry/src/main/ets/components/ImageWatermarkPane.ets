@@ -23,9 +23,6 @@ export struct ImageWatermarkPane {
 
   build() {
     PreferencePaneScaffold({
-      note: '仅查看，暂不支持修改。',
-      noteAfter: true,
-
       message: this.vm.error,
       onRetry: (): void => { void this.vm.load(this.context()); }
     }) {

@@ -19,6 +19,7 @@ export const BLOCKED_USER_MAX: number = 200;
 export class BlockedUser {
   uid: number = 0;
   name: string = '';
+  portrait: string = '';
   timeMs: number = 0;
 }
 
@@ -204,6 +205,7 @@ export function mergeRules(serverForums: string[], localForums: string[],
 interface RawBlockedUser {
   uid?: number;
   name?: string;
+  portrait?: string;
   timeMs?: number;
 }
 
@@ -225,6 +227,7 @@ export function parseBlockedUsers(raw: string): BlockedUser[] {
     const out: BlockedUser = new BlockedUser();
     out.uid = uid;
     out.name = item.name ?? '';
+    out.portrait = item.portrait ?? '';
     out.timeMs = item.timeMs ?? 0;
     items.push(out);
   }

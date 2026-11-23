@@ -43,3 +43,42 @@ export function voicePayloadError(bytes: Uint8Array): string {
   if (pos >= bytes.length || bytes[pos] === 123 || bytes[pos] === 91 || bytes[pos] === 60) { return '服务器未返回音频数据'; }
   return '';
 }
+
+const AMR_NB_MAGIC: number[] = [0x23, 0x21, 0x41, 0x4d, 0x52, 0x0a];
+const AMR_WB_MAGIC: number[] = [0x23, 0x21, 0x41, 0x4d, 0x52, 0x2d, 0x57, 0x42, 0x0a];
+// RFC 4867 每帧净荷字节数（不含 1 字节帧头）；每帧固定 20ms，-1 为保留/无效模式。
+const AMR_NB_PAYLOAD_BYTES: number[] = [12, 13, 15, 17, 19, 20, 26, 31, 5, -1, -1, -1, -1, -1, -1, 0];
+const AMR_WB_PAYLOAD_BYTES: number[] = [17, 23, 32, 36, 40, 46, 50, 58, 60, 5, -1, -1, -1, -1, 0, 0];
+
+function startsWithBytes(bytes: Uint8Array, prefix: number[]): boolean {
+  if (bytes.length < prefix.length) { return false; }
+  for (let i = 0; i < prefix.length; i++) {
+    if (bytes[i] !== prefix[i]) { return false; }
+  }
+  return true;
+}
+
+/** 精确按帧计算 AMR-NB / AMR-WB 毫秒时长，避免 AVPlayer dataSrc 变码率估算偏差；非 AMR 或损坏返回 -1。 */
+export function measureAmrDurationMs(bytes: Uint8Array): number {
+  let offset: number = 0;
+  let table: number[] = AMR_NB_PAYLOAD_BYTES;
+  if (startsWithBytes(bytes, AMR_NB_MAGIC)) {
+    offset = AMR_NB_MAGIC.length;
+    table = AMR_NB_PAYLOAD_BYTES;
+  } else if (startsWithBytes(bytes, AMR_WB_MAGIC)) {
+    offset = AMR_WB_MAGIC.length;
+    table = AMR_WB_PAYLOAD_BYTES;
+  } else {
+    return -1;
+  }
+  let frames: number = 0;
+  while (offset < bytes.length) {
+    const mode: number = (bytes[offset] >> 3) & 0x0f;
+    const payload: number = table[mode];
+    if (payload < 0) { return -1; }
+    offset += 1 + payload;
+    if (offset > bytes.length) { return -1; }
+    frames++;
+  }
+  return frames > 0 ? frames * 20 : -1;
+}

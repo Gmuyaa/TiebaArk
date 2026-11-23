@@ -9,6 +9,7 @@ import { ImageUploadInput } from '../model/ImageUpload';
 import { ImageTransitionSeed, ImageTransitionTarget, bindImageTransitionReturn, takeImageTransition,
   closeImageTransition, imageFadeTransition, imageSharedDuration, imageLayerRetentionTransition } from './ImageTransition';
 import { ImageTransitionCrop } from '../model/ImageTransitionCrop';
+import { DismissDragFrame, evaluateDismissDrag, shouldDismissDrag } from '../model/ImageDismissGesture';
 /** 全屏图片查看器，支持缩放、滑动切换、导出与当前图片超分。 */
 
 import { display, promptAction, UIUtils, window } from '@kit.ArkUI';
@@ -100,10 +101,22 @@ struct ZoomableImagePage {
 
   onLongPressImage: () => void = (): void => {};
   onTapImage: () => void = (): void => {};
+  @Prop dismissBlocked: boolean = false;
+  onDismissDragChange: (active: boolean, backdropOpacity: number, chromeOpacity: number) => void =
+    (_active: boolean, _backdropOpacity: number, _chromeOpacity: number): void => {};
+  onDismissCommit: (resetForShared: () => void) => void = (_resetForShared: () => void): void => {};
 
   @State private zoomScale: number = MIN_SCALE;
   @State private panX: number = 0;
   @State private panY: number = 0;
+  @State private dismissDragActive: boolean = false;
+  @State private dismissDragX: number = 0;
+  @State private dismissDragY: number = 0;
+  @State private dismissDragScale: number = 1;
+  @State private dismissChromeOpacity: number = 1;
+  private dismissAnimationEpoch: number = 0;
+  /** 本次单指拖动的归属：0 未激活｜1 放大平移或长图滚动｜2 上下拖动返回 */
+  private activePanMode: number = 0;
   @State private containerWidth: number = 0;
   @State private containerHeight: number = 0;
   @State private sourceWidth: number = 0;
@@ -153,6 +166,7 @@ struct ZoomableImagePage {
     this.stopReturnState();
     ++this.imageLoadEpoch;
     ++this.zoomAnimationEpoch;
+    ++this.dismissAnimationEpoch;
   }
 
   private canUpdatePage(): boolean {
@@ -186,6 +200,7 @@ struct ZoomableImagePage {
     this.zoomScale = MIN_SCALE;
     this.panX = 0;
     this.panY = 0;
+    this.resetDismissDragImmediate();
     this.panTouched = false;
     this.loadState = ImageLoadState.LOADING;
     this.retryCount = 0;
@@ -439,6 +454,7 @@ struct ZoomableImagePage {
     .width(SR_BUTTON_TOUCH)
     .height(SR_BUTTON_TOUCH)
     .position({ x: this.srButtonBox().x, y: this.srButtonBox().y })
+    .opacity(this.dismissChromeOpacity)
     .accessibilityText(this.srAccessibilityText())
     .accessibilityLevel('yes')
     .onTouch((event: TouchEvent) => {
@@ -504,6 +520,54 @@ struct ZoomableImagePage {
   /** 允许单指拖动：已放大，或者长图在 1× 下本来就比屏幕高。 */
   private panAllowed(): boolean {
     return this.zoomScale > MIN_SCALE || this.verticalOverflow();
+  }
+
+  /** 允许上下拖动返回：1× 非溢出且无其他阻塞手势或菜单。 */
+  private dismissDragAllowed(): boolean {
+    return this.canUpdatePage() && !this.holdTransitionPreview && !this.zoomAnimating &&
+      !this.dismissBlocked && !this.srBlocked() &&
+      this.zoomScale === MIN_SCALE && !this.verticalOverflow();
+  }
+
+  private resetDismissDragImmediate(): void {
+    ++this.dismissAnimationEpoch;
+    this.activePanMode = 0;
+    this.dismissDragActive = false;
+    this.dismissDragX = 0;
+    this.dismissDragY = 0;
+    this.dismissDragScale = 1;
+    this.dismissChromeOpacity = 1;
+  }
+
+  private reboundDismissDrag(): void {
+    if (!this.canUpdatePage()) { return; }
+    const epoch: number = ++this.dismissAnimationEpoch;
+    const duration: number = Math.max(
+      motionDuration(ANIMATION_DURATION, MotionEffect.MOVE),
+      motionDuration(ANIMATION_DURATION, MotionEffect.SCALE)
+    );
+    this.onDismissDragChange(false, 1, 1);
+    if (duration === 0) {
+      this.dismissDragActive = false;
+      this.dismissDragX = 0;
+      this.dismissDragY = 0;
+      this.dismissDragScale = 1;
+      this.dismissChromeOpacity = 1;
+      return;
+    }
+    this.getUIContext().animateTo({
+      duration: duration,
+      curve: Curve.EaseOut,
+      onFinish: (): void => {
+        if (!this.canUpdatePage() || epoch !== this.dismissAnimationEpoch) { return; }
+        this.dismissDragActive = false;
+      }
+    }, (): void => {
+      this.dismissDragX = 0;
+      this.dismissDragY = 0;
+      this.dismissDragScale = 1;
+      this.dismissChromeOpacity = 1;
+    });
   }
 
   /** 1× 下的静息位置：长图停在顶部（图片顶对齐屏幕顶），普通图居中。 */
@@ -760,6 +824,8 @@ struct ZoomableImagePage {
           }
           .width(this.imageFrameWidth())
           .height(this.imageFrameHeight())
+          .translate({ x: this.dismissDragX, y: this.dismissDragY })
+          .scale({ x: this.dismissDragScale, y: this.dismissDragScale })
           .geometryTransition(this.sharedGeometryId())
           // 保持比例、贴左上：共享框在转场里宽高各自插值，RESIZE_FILL 会把画面拉伸，
           // 侧边空白处就会出现"被裁过的图"，动画结束后才消失。
@@ -768,30 +834,66 @@ struct ZoomableImagePage {
           .transition(this.imageContentTransition())
         }
         .width('100%').height('100%')
-        // 保留原来的子层 Pan 与父层 Pinch/Tap 仲裁，触摸区不随窄图片缩小。
+        // 保留原来的子层单 Pan 与父层 Pinch/LongPress/Tap 仲裁，触摸区不随窄图片缩小。
         .gesture(
           PanGesture({ fingers: 1, distance: 5,
-            // 1× 长图只吃纵向拖动，横向留给 Swiper 翻页；放大后两个方向都归图片。
+            // 1× 下只吃纵向拖动（长图滚动或上下拖动返回），横向留给 Swiper 翻页；放大后两个方向都归图片。
             direction: this.zoomScale > MIN_SCALE ? PanDirection.All : PanDirection.Vertical })
             .tag('image-zoom-pan')
             .onActionStart(() => {
-              if (!this.canUpdatePage()) { return; }
-              this.panTouched = true;
-              this.panBaseX = this.panX;
-              this.panBaseY = this.panY;
+              if (!this.canUpdatePage()) {
+                this.activePanMode = 0;
+                return;
+              }
+              if (this.panAllowed()) {
+                this.activePanMode = 1;
+                this.panTouched = true;
+                this.panBaseX = this.panX;
+                this.panBaseY = this.panY;
+              } else if (this.dismissDragAllowed()) {
+                this.activePanMode = 2;
+                ++this.dismissAnimationEpoch;
+                this.dismissDragActive = true;
+              } else {
+                this.activePanMode = 0;
+              }
             })
             .onActionUpdate((event: GestureEvent) => {
-              if (!this.canUpdatePage() || !this.panAllowed()) { return; }
-              this.panX = this.panBaseX + event.offsetX;
-              this.panY = this.panBaseY + event.offsetY;
-              this.clampOffsets();
+              if (!this.canUpdatePage()) { return; }
+              if (this.activePanMode === 1 && this.panAllowed()) {
+                this.panX = this.panBaseX + event.offsetX;
+                this.panY = this.panBaseY + event.offsetY;
+                this.clampOffsets();
+              } else if (this.activePanMode === 2 && this.dismissDragActive) {
+                const frame: DismissDragFrame = evaluateDismissDrag(event.offsetX, event.offsetY, this.containerHeight);
+                this.dismissDragX = frame.translateX;
+                this.dismissDragY = frame.translateY;
+                this.dismissDragScale = frame.scale;
+                this.dismissChromeOpacity = frame.chromeOpacity;
+                this.onDismissDragChange(true, frame.backdropOpacity, frame.chromeOpacity);
+              }
             })
-            .onActionEnd(() => { if (this.canUpdatePage()) { this.clampOffsets(); } })
+            .onActionEnd((event: GestureEvent) => {
+              const mode: number = this.activePanMode;
+              this.activePanMode = 0;
+              if (mode === 1) {
+                if (this.canUpdatePage()) { this.clampOffsets(); }
+              } else if (mode === 2 && this.dismissDragActive) {
+                if (this.canUpdatePage() && shouldDismissDrag(event.offsetY, event.velocityY, this.containerHeight)) {
+                  this.onDismissCommit((): void => { this.resetDismissDragImmediate(); });
+                } else {
+                  this.reboundDismissDrag();
+                }
+              }
+            })
+            .onActionCancel(() => {
+              const mode: number = this.activePanMode;
+              this.activePanMode = 0;
+              if (mode === 2 && this.dismissDragActive) { this.reboundDismissDrag(); }
+            })
         )
-        .parallelGesture(LongPressGesture({ duration: 450 })
-          .onAction((): void => { if (!this.srBlocked()) { this.onLongPressImage(); } }))
         .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
-          return info.tag === 'image-zoom-pan' && !this.panAllowed()
+          return info.tag === 'image-zoom-pan' && !this.panAllowed() && !this.dismissDragAllowed()
             ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
         })
         this.LoadOverlay()
@@ -821,13 +923,17 @@ struct ZoomableImagePage {
             .onActionEnd(() => {
               if (!this.holdTransitionPreview) { this.settleScale(); }
             }),
+          LongPressGesture({ duration: 450 })
+            .onAction((): void => {
+              if (!this.srBlocked() && !this.dismissDragActive) { this.onLongPressImage(); }
+            }),
           TapGesture({ count: 2 })
             .onAction(() => {
-              if (!this.holdTransitionPreview && !this.srBlocked()) { this.toggleDoubleTapZoom(); }
+              if (!this.holdTransitionPreview && !this.srBlocked() && !this.dismissDragActive) { this.toggleDoubleTapZoom(); }
             }),
           TapGesture({ count: 1 })
             .onAction(() => {
-              if (!this.srBlocked()) { this.closeWithTopReset(); }
+              if (!this.srBlocked() && !this.dismissDragActive) { this.closeWithTopReset(); }
             })
         )
       )
@@ -874,6 +980,11 @@ export struct ImageViewer {
   @State private settledIndex: number = 0;
   private swiperController: SwiperController = new SwiperController();
   private swipeDragging: boolean = false;
+  @State private dismissDragging: boolean = false;
+  @State private backdropOpacity: number = 1;
+  @State private chromeOpacity: number = 1;
+  private pendingDismissReset: (() => void) | null = null;
+  private lastPreparedShared: boolean = false;
   /** 底部安全区（系统手势条高度，vp）：页码贴底时用它把文字顶到手势条之上 */
   @State private bottomSafeVp: number = 0;
   @State private menuHidden: boolean = false;
@@ -1058,6 +1169,7 @@ export struct ImageViewer {
     if (!this.swipeDragging && this.transitionAvailable && this.currentIndex === this.initialIndex && this.cropReturnEligible &&
       !opening.isReturnDetached() && !opening.hasFinished() && state !== undefined && state.atRest) {
       // 未切图沿用原始配对；原图仍在加载时，已显示的开场预览也能正常缩回。
+      this.lastPreparedShared = opening.id.length > 0;
       return opening;
     }
     const prepared: ImageTransitionSeed[] = [];
@@ -1103,7 +1215,52 @@ export struct ImageViewer {
       for (const seed of prepared) { seed.cancel(); }
       throw new Error(String(error));
     }
-    return prepared.length > 0 ? prepared[0] : undefined;
+    const preparedSeed: ImageTransitionSeed | undefined = prepared.length > 0 ? prepared[0] : undefined;
+    this.lastPreparedShared = preparedSeed !== undefined && !preparedSeed.hasFinished() &&
+      preparedSeed.id.length > 0 && !preparedSeed.isReturnDetached();
+    return preparedSeed;
+  }
+
+  private handleDismissDragChange(active: boolean, backdropOpacity: number, chromeOpacity: number): void {
+    if (!this.canUpdateViewer()) { return; }
+    if (active) {
+      this.dismissDragging = true;
+      this.backdropOpacity = backdropOpacity;
+      this.chromeOpacity = chromeOpacity;
+      return;
+    }
+    this.dismissDragging = false;
+    const duration: number = Math.max(
+      motionDuration(ANIMATION_DURATION, MotionEffect.FADE),
+      motionDuration(ANIMATION_DURATION, MotionEffect.MOVE)
+    );
+    if (duration === 0) {
+      this.backdropOpacity = 1;
+      this.chromeOpacity = 1;
+      return;
+    }
+    this.getUIContext().animateTo({ duration: duration, curve: Curve.EaseOut }, (): void => {
+      this.backdropOpacity = 1;
+      this.chromeOpacity = 1;
+    });
+  }
+
+  private handleDismissCommit(resetForShared: () => void): void {
+    if (!this.canUpdateViewer() || this.exportBusy.length > 0) { return; }
+    this.dismissDragging = false;
+    this.pendingDismissReset = resetForShared;
+    this.lastPreparedShared = false;
+    closeImageTransition(this.getUIContext(), (): void => {
+      // 共享返回时在同帧动画事务内归零拖动偏移，让 geometryTransition 从当前位置直接飞回缩略图；
+      // 非共享返回保持当前偏移与缩放原地淡出，不弹回中央。
+      if (this.lastPreparedShared && this.pendingDismissReset !== null) {
+        this.pendingDismissReset();
+      }
+      this.pendingDismissReset = null;
+      this.onClose();
+    }, (): void => {
+      this.onBeforeClose();
+    });
   }
 
   /** 浏览期间解除初始配对；关闭时再按当前页注册信息建立自己的返回配对。 */
@@ -1284,6 +1441,7 @@ export struct ImageViewer {
       }
       .alignItems(HorizontalAlign.Center)
       .margin({ bottom: Math.max(this.bottomSafeVp, 28) + 28 })
+      .opacity(this.chromeOpacity)
       .transition(imageFadeTransition())
     }
   }
@@ -1657,6 +1815,7 @@ export struct ImageViewer {
       Stack() {}
         .width('100%').height('100%')
         .backgroundColor(Color.Black)
+        .opacity(this.backdropOpacity)
         .hitTestBehavior(HitTestMode.None)
         .transition(imageFadeTransition())
       if (this.effectiveViewerImages().length > 0) {
@@ -1707,6 +1866,13 @@ export struct ImageViewer {
                 }
                 closeImageTransition(this.getUIContext(), (): void => { this.onClose(); },
                   (): void => { this.onBeforeClose(); });
+              },
+              dismissBlocked: this.exportBusy.length > 0 || this.menuRevealed,
+              onDismissDragChange: (active: boolean, backdropOpacity: number, chromeOpacity: number): void => {
+                this.handleDismissDragChange(active, backdropOpacity, chromeOpacity);
+              },
+              onDismissCommit: (resetForShared: () => void): void => {
+                this.handleDismissCommit(resetForShared);
               }
             })
           },
@@ -1715,7 +1881,7 @@ export struct ImageViewer {
         }
         .index(this.settledIndex)
         .indicator(false)
-        .disableSwipe(this.exportBusy.length > 0 || this.holdTransitionPreview)
+        .disableSwipe(this.exportBusy.length > 0 || this.holdTransitionPreview || this.dismissDragging)
         .loop(false)
         .duration(motionDuration(400)).curve(motionSwiperCurve())
         .onGestureSwipe((_index: number, _event: SwiperAnimationEvent): void => {
@@ -1749,6 +1915,7 @@ export struct ImageViewer {
         ImageMenuPosition({ viewportWidth: this.viewerWidth, viewportHeight: this.viewerHeight,
           capsuleHeight: superResolutionStore.enabled ? 200 : 162, bottomInset: this.bottomSafeVp,
           busy: this.exportBusy.length > 0, content: (): void => { this.ExportSheet() } })
+          .opacity(this.chromeOpacity)
           .transition(imageFadeTransition())
       }
       if (smartReachStore.imageMenuLongPress && this.menuRevealed) {

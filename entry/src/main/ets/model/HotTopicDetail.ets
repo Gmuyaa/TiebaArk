@@ -208,7 +208,8 @@ function parseThread(raw: RawHotTopicThread): ThreadBrief | undefined {
         item.images.push(image);
         rememberFeedImage(image, 0, 0, false, water || big || small, {
           thumb: small || image,
-          high: big || water || small
+          high: big || water || small,
+          staticUrl: small
         });
       }
     }

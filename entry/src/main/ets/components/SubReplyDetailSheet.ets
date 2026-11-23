@@ -39,6 +39,8 @@ export struct SubReplyDetailSheet {
   @Require @Param anchorAgreeState: AgreeState;
   /** 楼中楼完整列表（已加载部分） */
   @Param subPosts: SubPostItem[] = [];
+  /** 面板展开后自动定位的目标子回复 id */
+  @Param targetSubPid: number = 0;
   /** 服务端回复总数；未知时传 -1 */
   @Param totalReplies: number = -1;
   @Require @Param subAgreeState: (sub: SubPostItem) => AgreeState;
@@ -69,6 +71,23 @@ export struct SubReplyDetailSheet {
    * 84vp，而本胶囊要通栏，只能运行时读屏宽算。
    */
   @Local pillWidthVp: number = 0;
+  private listScroller: Scroller = new Scroller();
+  private scrolledTargetPid: number = 0;
+
+  private scrollToTargetSubPost(): void {
+    if (this.targetSubPid <= 0 || this.scrolledTargetPid === this.targetSubPid) {
+      return;
+    }
+    const idx: number = this.subPosts.findIndex((sub: SubPostItem): boolean => sub.pid === this.targetSubPid);
+    if (idx < 0) {
+      return;
+    }
+    this.scrolledTargetPid = this.targetSubPid;
+    setTimeout(() => {
+      // 列表下标 0 是锚点回复卡、1 是分隔标题，楼中楼条目从下标 2 开始。
+      this.listScroller.scrollToIndex(idx + 2, false, ScrollAlign.START);
+    }, 120);
+  }
 
   aboutToAppear(): void {
     // 与首页底栏同一口径：display 给的是 px，先 px2vp 转 vp 才能参与布局计算（Index.ets 同款）。
@@ -212,7 +231,7 @@ export struct SubReplyDetailSheet {
       this.Header();
 
       Stack({ alignContent: Alignment.Bottom }) {
-        List({ space: 0 }) {
+        List({ space: 0, scroller: this.listScroller }) {
           ListItem() {
             AnchorReplyCard({
               tid: this.tid,
@@ -278,6 +297,9 @@ export struct SubReplyDetailSheet {
         .scrollBar(BarState.Off)
         // 避让空间放在可滚动的 ListFooter，保持内容可经过玻璃后方。
         .id('subreply-list')
+        .onAppear(() => {
+          this.scrollToTargetSubPost();
+        })
         .onReachEnd(() => {
           this.onLoadMore();
         })

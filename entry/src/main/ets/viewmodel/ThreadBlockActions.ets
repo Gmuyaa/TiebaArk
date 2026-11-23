@@ -9,6 +9,7 @@ import { ThreadBrief } from '../model/ThreadList';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
 import { AuthorBlockVM, authorBlockAction } from './AuthorBlockVM';
+import { syncImBlacklistMask } from './BlacklistVM';
 
 export class ThreadBlockActions {
   private api: TiebaApi = new TiebaApi();
@@ -81,8 +82,11 @@ export class ThreadBlockActions {
         // VM 没报错但状态也没变成"已拉黑" → 不宣称成功
         return '拉黑状态未确认，请稍后重试';
       }
-      await threadBlockStore.rememberBlockedUser(context, thread.authorId, thread.authorName);
+      const imErr: string = await syncImBlacklistMask(context, String(thread.authorId), true);
       if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      await threadBlockStore.rememberBlockedUser(context, thread.authorId, thread.authorName, thread.authorAvatar);
+      if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      if (imErr.length > 0) { return `已屏蔽该用户，但黑名单列表同步失败：${imErr}`; }
       return threadBlockStore.usersSaveError.length > 0 ? `贴吧账号已拉黑该用户；${threadBlockStore.usersSaveError}` : '';
     } catch (err) {
       return `屏蔽用户失败：${(err as Error).message}`;
@@ -123,6 +127,9 @@ export class ThreadBlockActions {
       if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
       if (message.length > 0) { return message; }
       if (!vm.known || vm.blocked) { return '拉黑状态未确认，请稍后重试'; }
+      const imErr: string = await syncImBlacklistMask(context, String(uid), false);
+      if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      if (imErr.length > 0) { return imErr; }
       await threadBlockStore.forgetBlockedUser(context, uid);
       if (owner !== authSession.sessionKey()) { return '账号已变化，请在原账号确认结果'; }
       return threadBlockStore.usersSaveError.length > 0 ? `贴吧账号已解除拉黑；${threadBlockStore.usersSaveError}` : '';

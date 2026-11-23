@@ -1,4 +1,5 @@
 import { display, FrameCallback } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { ContentImage } from '../model/ThreadDetail';
 import { BODY_RADIUS, FeedImageBox, FeedImageInfo, feedImageInfo,
   rememberMeasuredImage } from '../model/HomeFeedPresentation';
@@ -9,10 +10,12 @@ import { FeedImageTransform } from '../model/FeedImageLayout';
 import { ImageTransitionCrop, imageTransitionCrop } from '../model/ImageTransitionCrop';
 import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
 import {
-  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, shouldPromoteLongToOrigin
+  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, isGifBodyImage,
+  shouldPromoteLongToOrigin
 } from '../model/ImageLoadPolicy';
 import { AppTheme } from '../theme/Theme';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
+import { loadStaticGifFrame, releaseStaticGifFrame } from '../utils/StaticGifFrame';
 
 interface ReadingImageComplete {
   width: number;
@@ -48,6 +51,9 @@ struct PostFlowImage {
   @Local private originalPreferred: boolean = false;
   @Local private transitionRetained: boolean = false;
   @Local private sharedBindingEnabled: boolean = true;
+  @Local private staticFrame: image.PixelMap | undefined = undefined;
+  @Local private staticFrameUrl: string = '';
+  private staticFrameLoadingUrl: string = '';
   private imageTransition: ImageTransitionSource = new ImageTransitionSource((enabled: boolean): void => {
     this.sharedBindingEnabled = enabled;
   });
@@ -74,6 +80,51 @@ struct PostFlowImage {
 
   private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
 
+  private needsStaticGifFrame(): boolean {
+    return !this.isOff() && !this.policy.gifPlays && isGifBodyImage(this.image);
+  }
+
+  private releaseStaticFrame(): void {
+    const prev: image.PixelMap | undefined = this.staticFrame;
+    this.staticFrame = undefined;
+    this.staticFrameUrl = '';
+    this.staticFrameLoadingUrl = '';
+    releaseStaticGifFrame(prev);
+  }
+
+  private ensureStaticFrame(): void {
+    if (!this.alive || !this.needsStaticGifFrame() || !(this.visible || this.transitionRetained)) { return; }
+    const url: string = this.sourceUrl();
+    if (url.length === 0) { return; }
+    if (this.staticFrameUrl === url && this.staticFrame !== undefined) { return; }
+    if (this.staticFrameLoadingUrl === url) { return; }
+    const epoch: number = this.requestEpoch;
+    this.staticFrameLoadingUrl = url;
+    void loadStaticGifFrame(url).then((frame: image.PixelMap | undefined): void => {
+      if (!this.acceptsRequest(url, epoch) || !this.needsStaticGifFrame()) {
+        releaseStaticGifFrame(frame);
+        return;
+      }
+      this.getUIContext().runScopedTask((): void => {
+        if (!this.acceptsRequest(url, epoch) || !this.needsStaticGifFrame()) {
+          releaseStaticGifFrame(frame);
+          return;
+        }
+        this.staticFrameLoadingUrl = '';
+        if (frame === undefined) {
+          this.invalidateTransition();
+          this.failedUrl = url;
+          this.loadedUrl = '';
+          return;
+        }
+        const old: image.PixelMap | undefined = this.staticFrame;
+        this.staticFrame = frame;
+        this.staticFrameUrl = url;
+        releaseStaticGifFrame(old);
+      });
+    });
+  }
+
   private currentImageKey(): string {
     return `${this.image.imageUrl}\n${this.image.originImageUrl}`;
   }
@@ -86,6 +137,7 @@ struct PostFlowImage {
 
   private invalidateRequest(): void {
     this.invalidateTransition();
+    this.releaseStaticFrame();
     ++this.requestEpoch;
     this.loadedUrl = '';
     this.failedUrl = '';
@@ -120,6 +172,7 @@ struct PostFlowImage {
       this.promoteOriginalIfLong();
     }
     this.registerReturnSource();
+    this.ensureStaticFrame();
   }
 
   @Monitor('viewerIndex', 'transitionGallery')
@@ -159,14 +212,17 @@ struct PostFlowImage {
   onPolicyChanged(): void {
     const prevOff: boolean = this.isOff();
     const prevSource: string = this.sourceUrl();
+    const prevStatic: boolean = this.needsStaticGifFrame();
     this.policy = this.imageLoad.currentPolicy();
     this.originalPreferred = shouldPromoteLongToOrigin(this.policy) && this.knownLongImage();
     const nextOff: boolean = this.isOff();
     const nextSource: string = this.sourceUrl();
+    const nextStatic: boolean = this.needsStaticGifFrame();
     this.sourceIdentity = nextSource;
-    if (prevOff !== nextOff || prevSource !== nextSource) {
+    if (prevOff !== nextOff || prevSource !== nextSource || prevStatic !== nextStatic) {
       this.invalidateRequest();
       this.registerReturnSource();
+      this.ensureStaticFrame();
     }
   }
 
@@ -376,6 +432,7 @@ struct PostFlowImage {
     this.visible = visible;
     // 原生共享几何期间的短暂不可见不能删掉源图，也不能提前解除查看器的预览交接。
     if (!visible && !this.transitionRetained) { this.invalidateRequest(); }
+    else if (visible) { this.ensureStaticFrame(); }
   }
 
   @Builder
@@ -394,20 +451,36 @@ struct PostFlowImage {
         }
         // 首次只加载可见图；共享会话期间保留同一节点，连续多图不会一次下载全部原图。
         if ((this.visible || this.transitionRetained) && this.sourceUrl().length > 0) {
-          ForEach([this.sourceUrl()], (src: string) => {
-            Image(src)
-              .width('100%').height('100%')
-              .position({ x: 0, y: 0 })
-              .objectFit(ImageFit.Contain)
-              .objectRepeat(ImageRepeat.NoRepeat)
-              .autoResize(true)
-              // 裁切态：以顶部中心放大绘制，宽度贴满外框，下方由父层 clip 掉。
-              .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
-              .sourceSize(this.decodeSize())
-              .opacity(this.isLoaded() ? 1 : 0)
-              .onComplete(this.completeHandler(src, this.requestEpoch))
-              .onError(this.errorHandler(src, this.requestEpoch))
-          }, (src: string) => src)
+          if (this.needsStaticGifFrame()) {
+            if (this.staticFrame !== undefined && this.staticFrameUrl === this.sourceUrl()) {
+              Image(this.staticFrame)
+                .width('100%').height('100%')
+                .position({ x: 0, y: 0 })
+                .objectFit(ImageFit.Contain)
+                .objectRepeat(ImageRepeat.NoRepeat)
+                .autoResize(true)
+                .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
+                .sourceSize(this.decodeSize())
+                .opacity(this.isLoaded() ? 1 : 0)
+                .onComplete(this.completeHandler(this.sourceUrl(), this.requestEpoch))
+                .onError(this.errorHandler(this.sourceUrl(), this.requestEpoch))
+            }
+          } else {
+            ForEach([this.sourceUrl()], (src: string) => {
+              Image(src)
+                .width('100%').height('100%')
+                .position({ x: 0, y: 0 })
+                .objectFit(ImageFit.Contain)
+                .objectRepeat(ImageRepeat.NoRepeat)
+                .autoResize(true)
+                // 裁切态：以顶部中心放大绘制，宽度贴满外框，下方由父层 clip 掉。
+                .scale({ x: this.drawScale(), y: this.drawScale(), centerX: '50%', centerY: 0 })
+                .sourceSize(this.decodeSize())
+                .opacity(this.isLoaded() ? 1 : 0)
+                .onComplete(this.completeHandler(src, this.requestEpoch))
+                .onError(this.errorHandler(src, this.requestEpoch))
+            }, (src: string) => src)
+          }
         }
       }
       if (this.clipped() && !this.isOff()) {
@@ -420,6 +493,18 @@ struct PostFlowImage {
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Start)
         .alignItems(VerticalAlign.Top)
+        .padding(8)
+        .hitTestBehavior(HitTestMode.None)
+      }
+      if (!this.isOff() && isGifBodyImage(this.image)) {
+        Row() {
+          Text('GIF').fontSize(11).fontColor(Color.White)
+            .backgroundColor('#88000000').borderRadius(5)
+            .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.End)
+        .alignItems(VerticalAlign.Bottom)
         .padding(8)
         .hitTestBehavior(HitTestMode.None)
       }

@@ -27,7 +27,6 @@ export struct ForumLevelBadge {
   @Param onHero: boolean = false;
   @Param forceOfficial: boolean = false;
   private preference = forumLevelStore;
-  @Local titleStretchWidth: number = 0;
   @Local badgeWidth: number = 86 / 3;
 
   /** 官方 xl7.c() 对应 CAM_X0309 / 0306 / 0305 / 0319。 */
@@ -35,6 +34,10 @@ export struct ForumLevelBadge {
     if (this.level <= 3) { return '#24D45C'; }
     if (this.level <= 9) { return '#2B87FF'; }
     return this.level <= 15 ? '#FFA32B' : '#FF792B';
+  }
+
+  private titleStretchWidth(): number {
+    return Math.max(0, this.badgeWidth - 20);
   }
 
   /** 原图 x=0..50 / 50..76 / 76..86；固定高13vp，仅中段横向拉伸。 */
@@ -45,12 +48,9 @@ export struct ForumLevelBadge {
         Image(LEVEL_ICONS[this.level - 1]).width(86 / 3).height(13).objectFit(ImageFit.Fill)
       }.width(50 / 3).height(13).clip(true).flexShrink(0)
       Stack({ alignContent: Alignment.TopStart }) {
-        Image(LEVEL_ICONS[this.level - 1]).width(this.titleStretchWidth * 86 / 26).height(13)
-          .objectFit(ImageFit.Fill).translate({ x: -this.titleStretchWidth * 50 / 26 })
+        Image(LEVEL_ICONS[this.level - 1]).width(this.titleStretchWidth() * 86 / 26).height(13)
+          .objectFit(ImageFit.Fill).translate({ x: -this.titleStretchWidth() * 50 / 26 })
       }.height(13).layoutWeight(1).clip(true)
-        .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions): void => {
-          this.titleStretchWidth = Number(newValue.width);
-        })
       Stack({ alignContent: Alignment.TopStart }) {
         Image(LEVEL_ICONS[this.level - 1]).width(86 / 3).height(13).objectFit(ImageFit.Fill)
           .translate({ x: -76 / 3 })

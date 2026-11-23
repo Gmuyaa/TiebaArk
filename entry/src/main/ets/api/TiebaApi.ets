@@ -44,7 +44,9 @@ import { parseSignStats } from '../model/SignStats';
 import { parseOfficialSign, parseOfficialSignCapability } from '../model/OfficialSign';
 import { OfficialSignResponse, OfficialSignCapabilityResponse } from './ApiResponses';
 import { TailChange, TailList, parseTailWrite, parseTails, tailChangeError } from '../model/Tails';
-import { ReplySortType, SubPostPage, ThreadDetail } from '../model/ThreadDetail';
+import {
+  ReplySortType, SubPostPage, ThreadDetail, ThreadReplyPermission, replyPermissionWriteValue
+} from '../model/ThreadDetail';
 import { ForumBrief, ForumTab, ThreadListResult } from '../model/ThreadList';
 import { UserProfileInfo, parseProtoErrorno, parseSelfProfileProto, parseUserInfo } from '../model/UserProfile';
 import { parseUserSearch, UserSearchParseResult } from '../model/UserSearch';
@@ -1546,6 +1548,27 @@ export class TiebaApi {
     return response;
   }
 
+  async setMyThreadReplyPermission(device: TiebaDevice, session: TiebaSession, tid: number,
+    permission: ThreadReplyPermission): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    const writeValue: number = replyPermissionWriteValue(permission);
+    if (!Number.isSafeInteger(tid) || tid <= 0 || writeValue <= 0) {
+      response.failLocal('帖子身份或评论权限参数无效'); return response;
+    }
+    if (!session.hasBduss()) {
+      response.failLocal('登录凭据未就绪，请重新登录后操作'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, MyThreadParams.REPLY_PERMISSION_PATH,
+      MyThreadParams.replyPermission(device, session, tid, writeValue), response);
+    if (text === undefined) { return response; }
+    response.ok = privacyWriteConfirmed(text);
+    if (!response.ok) { response.failLocal('评论权限设置结果未确认，请刷新核对'); }
+    return response;
+  }
+
   /** 他人主页的公开帖子；登录会话可选，服务端隐私/权限拒绝仍按业务失败处理。 */
   async fetchPublicUserPosts(device: TiebaDevice, session: TiebaSession, uid: number,
     isThread: number, page: number, pageSize: number): Promise<UserPostsResponse> {
@@ -1843,6 +1866,42 @@ export class TiebaApi {
     params.push(new SignParam('kz', String(tid)));
     params.push(new SignParam('pid', String(pid)));
     params.push(new SignParam('pn', String(page)));
+    params.push(new SignParam('rn', String(pageSize)));
+
+    const text: string | undefined = await this.postJsonText(client, '/c/f/pb/floor', params, response);
+    if (text === undefined) {
+      return response;
+    }
+
+    response.ok = true;
+    response.data = SubPostPage.fromRaw(JSON.parse(text) as RawSubPostPageResponse,
+      threadAuthorId, Date.now());
+    return response;
+  }
+
+  /** 按楼中楼子回复 id（`spid`）反查所属父楼层（`post.id`）及所在子回复页。 */
+  async fetchSubPostsBySpid(device: TiebaDevice, session: TiebaSession, tid: number, spid: number,
+    threadAuthorId: number, pageSize: number): Promise<SubPostResponse> {
+    const response: SubPostResponse = new SubPostResponse();
+
+    if (tid <= 0 || spid <= 0) {
+      response.failLocal('帖子 id 或子回复 id 无效');
+      return response;
+    }
+    const deviceError: string = TiebaApi.checkDevice(device);
+    if (deviceError.length > 0) {
+      response.failLocal(deviceError);
+      return response;
+    }
+
+    device.clientVersion = TiebaVersion.SUB_POST;
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${TiebaVersion.SUB_POST}`);
+
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('kz', String(tid)));
+    params.push(new SignParam('spid', String(spid)));
+    // spid 定位与 pb/page 一致，传 pn=0 由服务端定位子回复所在页
+    params.push(new SignParam('pn', '0'));
     params.push(new SignParam('rn', String(pageSize)));
 
     const text: string | undefined = await this.postJsonText(client, '/c/f/pb/floor', params, response);

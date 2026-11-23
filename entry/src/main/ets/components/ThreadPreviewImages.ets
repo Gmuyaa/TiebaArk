@@ -1,4 +1,5 @@
 import { display } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { AppTheme } from '../theme/Theme';
 import {
   FeedImageBox, FeedImageInfo, feedImageBox, feedImageInfo, feedPreviewInfo, previewRowHeight,
@@ -6,7 +7,8 @@ import {
 } from '../model/HomeFeedPresentation';
 import { ImageLoadStore, imageLoadStore } from '../common/appearance/ImageLoadStore';
 import {
-  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, feedPreviewSource
+  ImageLoadPolicy, ImageQuality, bodyImageSource, bodyTransitionKey, feedPreviewSource,
+  isGifBodyImage, isGifFeedImage
 } from '../model/ImageLoadPolicy';
 import { ContentImage } from '../model/ThreadDetail';
 import { ImageTransitionGallery, ImageTransitionSource, ImageTransitionTarget } from './ImageTransition';
@@ -18,6 +20,7 @@ import {
   FeedImageTransform, modernFeedDecodeSize, modernFeedImageBox, modernFeedImageBoxForColumns,
   modernFeedImageGap, modernFeedImageTransform, modernFeedPreviewIndices, modernFeedTotalLabel
 } from '../model/FeedImageLayout';
+import { loadStaticGifFrame, releaseStaticGifFrame } from '../utils/StaticGifFrame';
 
 /** 首页与吧内列表共享的帖子图片预览；按图片数量选择单图或多图布局。 */
 
@@ -50,6 +53,9 @@ struct ThreadPreviewImage {
   @Local failed: boolean = false;
   /** 本次加载确认到的实际源尺寸；空 = 还没加载出来，用缓存/占位框 */
   @Local actual: FeedImageInfo = new FeedImageInfo();
+  @Local private staticFrame: image.PixelMap | undefined = undefined;
+  @Local private staticFrameUrl: string = '';
+  private staticFrameLoadingUrl: string = '';
   private alive: boolean = false;
   private visible: boolean = false;
   private requestEpoch: number = 0;
@@ -60,14 +66,66 @@ struct ThreadPreviewImage {
     this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.registerReturnSource();
+    this.ensureStaticFrame();
   }
 
   private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private isGif(): boolean { return isGifFeedImage(feedImageInfo(this.url), this.url); }
+
+  private needsStaticGifFrame(): boolean {
+    return !this.isOff() && !this.policy.gifPlays && this.isGif();
+  }
+
+  private releaseStaticFrame(): void {
+    const prev: image.PixelMap | undefined = this.staticFrame;
+    this.staticFrame = undefined;
+    this.staticFrameUrl = '';
+    this.staticFrameLoadingUrl = '';
+    releaseStaticGifFrame(prev);
+  }
+
+  private ensureStaticFrame(): void {
+    if (!this.alive || !this.needsStaticGifFrame()) { return; }
+    const src: string = this.resolvedSource();
+    if (src.length === 0) { return; }
+    if (this.staticFrameUrl === src && this.staticFrame !== undefined) { return; }
+    if (this.staticFrameLoadingUrl === src) { return; }
+    const url: string = this.url;
+    const epoch: number = this.requestEpoch;
+    this.staticFrameLoadingUrl = src;
+    void loadStaticGifFrame(src).then((frame: image.PixelMap | undefined): void => {
+      if (!this.alive || this.isOff() || !this.needsStaticGifFrame() ||
+        epoch !== this.requestEpoch || url !== this.url || this.resolvedSource() !== src) {
+        releaseStaticGifFrame(frame);
+        return;
+      }
+      this.getUIContext().runScopedTask((): void => {
+        if (!this.alive || this.isOff() || !this.needsStaticGifFrame() ||
+          epoch !== this.requestEpoch || url !== this.url || this.resolvedSource() !== src) {
+          releaseStaticGifFrame(frame);
+          return;
+        }
+        this.staticFrameLoadingUrl = '';
+        if (frame === undefined) {
+          this.imageTransition.invalidate();
+          this.failed = true;
+          this.loaded = false;
+          return;
+        }
+        const old: image.PixelMap | undefined = this.staticFrame;
+        this.staticFrame = frame;
+        this.staticFrameUrl = src;
+        releaseStaticGifFrame(old);
+      });
+    });
+  }
 
   private resolvedSource(): string { return feedPreviewSource(feedImageInfo(this.url), this.url, this.policy); }
 
   private invalidateRequest(): void {
     ++this.requestEpoch;
+    this.releaseStaticFrame();
     this.imageTransition.invalidate();
     this.loaded = false;
     this.failed = false;
@@ -101,12 +159,15 @@ struct ThreadPreviewImage {
   onPolicyChanged(): void {
     const prevOff: boolean = this.isOff();
     const prevSource: string = this.resolvedSource();
+    const prevStatic: boolean = this.needsStaticGifFrame();
     this.policy = this.imageLoad.currentPolicy();
     const nextOff: boolean = this.isOff();
     const nextSource: string = this.resolvedSource();
-    if (prevOff !== nextOff || prevSource !== nextSource) {
+    const nextStatic: boolean = this.needsStaticGifFrame();
+    if (prevOff !== nextOff || prevSource !== nextSource || prevStatic !== nextStatic) {
       this.invalidateRequest();
       this.registerReturnSource();
+      this.ensureStaticFrame();
     }
   }
 
@@ -119,6 +180,7 @@ struct ThreadPreviewImage {
     this.invalidateRequest();
     this.actual = new FeedImageInfo();
     this.registerReturnSource();
+    this.ensureStaticFrame();
   }
 
   @Monitor('origin', 'index')
@@ -206,22 +268,43 @@ struct ThreadPreviewImage {
               .width('100%').height('100%').textAlign(TextAlign.Center)
           }
           if (this.resolvedSource().length > 0) {
-            ForEach([this.resolvedSource()], (src: string) => {
-              Image(src)
-                // 共享转场临时改变外框尺寸时，内容必须跟随外框；固定vp会留下向左上角漂移的小图。
-                .width('100%')
-                .height('100%')
-                .objectFit(this.imageFit(this.frame()))
-                .objectRepeat(ImageRepeat.NoRepeat)
-                .opacity(this.loaded ? 1 : 0)
-                .onComplete(this.completeHandler(this.url))
-                .onError(this.errorHandler(this.url))
-            }, (src: string) => src)
+            if (this.needsStaticGifFrame()) {
+              if (this.staticFrame !== undefined && this.staticFrameUrl === this.resolvedSource()) {
+                Image(this.staticFrame)
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(this.imageFit(this.frame()))
+                  .objectRepeat(ImageRepeat.NoRepeat)
+                  .opacity(this.loaded ? 1 : 0)
+                  .onComplete(this.completeHandler(this.url))
+                  .onError(this.errorHandler(this.url))
+              }
+            } else {
+              ForEach([this.resolvedSource()], (src: string) => {
+                Image(src)
+                  // 共享转场临时改变外框尺寸时，内容必须跟随外框；固定vp会留下向左上角漂移的小图。
+                  .width('100%')
+                  .height('100%')
+                  .objectFit(this.imageFit(this.frame()))
+                  .objectRepeat(ImageRepeat.NoRepeat)
+                  .opacity(this.loaded ? 1 : 0)
+                  .onComplete(this.completeHandler(this.url))
+                  .onError(this.errorHandler(this.url))
+              }, (src: string) => src)
+            }
           }
         }
-        if (this.frame().long) {
+        if (this.frame().long && !this.isOff()) {
           Text('长图').fontSize(11).fontColor(Color.White)
             .backgroundColor('#88000000').borderRadius(5).padding(4).margin(8)
+        }
+        if (!this.isOff() && this.isGif()) {
+          Row() {
+            Text('GIF').fontSize(11).fontColor(Color.White)
+              .backgroundColor('#88000000').borderRadius(5)
+              .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+          }.width('100%').height('100%').justifyContent(FlexAlign.End)
+            .alignItems(VerticalAlign.Bottom).padding(8).hitTestBehavior(HitTestMode.None)
         }
       }
       // 外框与内部图片取同一份布局结果：图片多高，占位就多高，不留失效的占位高度
@@ -274,6 +357,9 @@ export struct ModernThreadPreviewImage {
   @Local loaded: boolean = false;
   @Local failed: boolean = false;
   @Local actual: FeedImageInfo = new FeedImageInfo();
+  @Local private staticFrame: image.PixelMap | undefined = undefined;
+  @Local private staticFrameUrl: string = '';
+  private staticFrameLoadingUrl: string = '';
   private alive: boolean = false;
   private visible: boolean = false;
   private unregisterReturn: () => void = (): void => {};
@@ -287,9 +373,61 @@ export struct ModernThreadPreviewImage {
     this.policy = this.imageLoad.currentPolicy();
     this.invalidateRequest();
     this.registerReturnSource();
+    this.ensureStaticFrame();
   }
 
   private isOff(): boolean { return this.policy.quality === ImageQuality.OFF; }
+
+  private isGif(): boolean {
+    if (this.bodyImage !== undefined) { return isGifBodyImage(this.bodyImage); }
+    return isGifFeedImage(feedImageInfo(this.url), this.url);
+  }
+
+  private needsStaticGifFrame(): boolean {
+    return !this.isOff() && !this.policy.gifPlays && this.isGif();
+  }
+
+  private releaseStaticFrame(): void {
+    const prev: image.PixelMap | undefined = this.staticFrame;
+    this.staticFrame = undefined;
+    this.staticFrameUrl = '';
+    this.staticFrameLoadingUrl = '';
+    releaseStaticGifFrame(prev);
+  }
+
+  private ensureStaticFrame(): void {
+    if (!this.alive || !this.needsStaticGifFrame()) { return; }
+    const src: string = this.resolvedSource();
+    if (src.length === 0) { return; }
+    if (this.staticFrameUrl === src && this.staticFrame !== undefined) { return; }
+    if (this.staticFrameLoadingUrl === src) { return; }
+    const url: string = this.url;
+    const epoch: number = this.requestEpoch;
+    this.staticFrameLoadingUrl = src;
+    void loadStaticGifFrame(src).then((frame: image.PixelMap | undefined): void => {
+      if (!this.acceptsRequest(url, epoch) || !this.needsStaticGifFrame() || this.resolvedSource() !== src) {
+        releaseStaticGifFrame(frame);
+        return;
+      }
+      this.getUIContext().runScopedTask((): void => {
+        if (!this.acceptsRequest(url, epoch) || !this.needsStaticGifFrame() || this.resolvedSource() !== src) {
+          releaseStaticGifFrame(frame);
+          return;
+        }
+        this.staticFrameLoadingUrl = '';
+        if (frame === undefined) {
+          this.resetSharedCrop();
+          this.failed = true;
+          this.loaded = false;
+          return;
+        }
+        const old: image.PixelMap | undefined = this.staticFrame;
+        this.staticFrame = frame;
+        this.staticFrameUrl = src;
+        releaseStaticGifFrame(old);
+      });
+    });
+  }
 
   private resolvedSource(): string {
     if (this.bodyImage !== undefined) {
@@ -304,11 +442,13 @@ export struct ModernThreadPreviewImage {
     this.visible = false;
     this.alive = false;
     ++this.requestEpoch;
+    this.releaseStaticFrame();
     this.resetSharedCrop();
   }
 
   private invalidateRequest(): void {
     this.resetSharedCrop();
+    this.releaseStaticFrame();
     ++this.requestEpoch;
     this.loaded = false;
     this.failed = false;
@@ -320,6 +460,7 @@ export struct ModernThreadPreviewImage {
     this.invalidateRequest();
     this.actual = new FeedImageInfo();
     this.registerReturnSource();
+    this.ensureStaticFrame();
   }
 
   @Monitor('origin', 'index')
@@ -376,12 +517,15 @@ export struct ModernThreadPreviewImage {
   onPolicyChanged(): void {
     const prevOff: boolean = this.isOff();
     const prevSource: string = this.resolvedSource();
+    const prevStatic: boolean = this.needsStaticGifFrame();
     this.policy = this.imageLoad.currentPolicy();
     const nextOff: boolean = this.isOff();
     const nextSource: string = this.resolvedSource();
-    if (prevOff !== nextOff || prevSource !== nextSource) {
+    const nextStatic: boolean = this.needsStaticGifFrame();
+    if (prevOff !== nextOff || prevSource !== nextSource || prevStatic !== nextStatic) {
       this.invalidateRequest();
       this.registerReturnSource();
+      this.ensureStaticFrame();
     }
   }
 
@@ -544,19 +688,35 @@ export struct ModernThreadPreviewImage {
               .width('100%').height('100%').textAlign(TextAlign.Center)
           }
           if (this.resolvedSource().length > 0) {
-            ForEach([this.resolvedSource()], (src: string) => {
-              Image(src)
-                .width('100%').height('100%')
-                .objectFit(ImageFit.Contain).objectRepeat(ImageRepeat.NoRepeat)
-                .autoResize(true)
-                .sourceSize(this.decodeSize())
-                .scale(this.imageScale())
-                .translate(this.imageTranslation())
-                .hitTestBehavior(HitTestMode.None)
-                .opacity(this.loaded ? 1 : 0)
-                .onComplete(this.completeHandler(this.url, this.requestEpoch))
-                .onError(this.errorHandler(this.url, this.requestEpoch))
-            }, (src: string) => src)
+            if (this.needsStaticGifFrame()) {
+              if (this.staticFrame !== undefined && this.staticFrameUrl === this.resolvedSource()) {
+                Image(this.staticFrame)
+                  .width('100%').height('100%')
+                  .objectFit(ImageFit.Contain).objectRepeat(ImageRepeat.NoRepeat)
+                  .autoResize(true)
+                  .sourceSize(this.decodeSize())
+                  .scale(this.imageScale())
+                  .translate(this.imageTranslation())
+                  .hitTestBehavior(HitTestMode.None)
+                  .opacity(this.loaded ? 1 : 0)
+                  .onComplete(this.completeHandler(this.url, this.requestEpoch))
+                  .onError(this.errorHandler(this.url, this.requestEpoch))
+              }
+            } else {
+              ForEach([this.resolvedSource()], (src: string) => {
+                Image(src)
+                  .width('100%').height('100%')
+                  .objectFit(ImageFit.Contain).objectRepeat(ImageRepeat.NoRepeat)
+                  .autoResize(true)
+                  .sourceSize(this.decodeSize())
+                  .scale(this.imageScale())
+                  .translate(this.imageTranslation())
+                  .hitTestBehavior(HitTestMode.None)
+                  .opacity(this.loaded ? 1 : 0)
+                  .onComplete(this.completeHandler(this.url, this.requestEpoch))
+                  .onError(this.errorHandler(this.url, this.requestEpoch))
+              }, (src: string) => src)
+            }
           }
         }
         // 极长单图完整缩小后可能很窄，角标放不下时省略，避免被裁成半个字。
@@ -564,12 +724,20 @@ export struct ModernThreadPreviewImage {
           Text('长图').fontSize(11).fontColor(Color.White)
             .backgroundColor('#88000000').borderRadius(5).padding(4).margin(8)
         }
-        if (this.showTotalLabel && modernFeedTotalLabel(this.total, this.index).length > 0) {
-          Row() {
-            Text(modernFeedTotalLabel(this.total, this.index)).fontSize(11).fontColor(Color.White)
-              .backgroundColor('#88000000').borderRadius(5).padding(4)
+        if ((!this.isOff() && this.isGif() && (this.total > 1 || this.frame().width >= 56)) ||
+          (this.showTotalLabel && modernFeedTotalLabel(this.total, this.index).length > 0)) {
+          Row({ space: 4 }) {
+            if (!this.isOff() && this.isGif() && (this.total > 1 || this.frame().width >= 56)) {
+              Text('GIF').fontSize(11).fontColor(Color.White)
+                .backgroundColor('#88000000').borderRadius(5)
+                .padding({ left: 5, right: 5, top: 3, bottom: 3 })
+            }
+            if (this.showTotalLabel && modernFeedTotalLabel(this.total, this.index).length > 0) {
+              Text(modernFeedTotalLabel(this.total, this.index)).fontSize(11).fontColor(Color.White)
+                .backgroundColor('#88000000').borderRadius(5).padding(4)
+            }
           }.width('100%').height('100%').justifyContent(FlexAlign.End)
-            .alignItems(VerticalAlign.Bottom).padding(8)
+            .alignItems(VerticalAlign.Bottom).padding(8).hitTestBehavior(HitTestMode.None)
         }
       }
       .width(this.frame().width).height(this.frame().height)

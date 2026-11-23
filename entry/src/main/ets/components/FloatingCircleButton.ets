@@ -44,6 +44,8 @@ export struct FloatingCircleButton {
   @Param viewportHeight: number = 0;
   @Param topInset: number = 0;
   @Param active: boolean = true;
+  /** 外部叠加的横向位移（如首页切页跟手横滑）；透传进内部 translate，避免在自定义组件外挂通用属性触发 __Common__ 包裹。 */
+  @Param externalOffsetX: number = 0;
   /** 刷新中的锁：不响应点击、不参与换边。发帖按钮保持默认 false。 */
   @Param busy: boolean = false;
   @Param symbol: Resource = $r('sys.symbol.plus');
@@ -312,8 +314,8 @@ export struct FloatingCircleButton {
       .responseRegion(floatingButtonHitRegion(this.diameter))
       .id(this.nodeId())
       .position({ x: this.x, y: this.y })
-      // 握姿换边的"出屏 → 跳位 → 入屏"位移；静止与拖拽期间恒为 0。
-      .translate({ x: this.slideOffset, y: 0 })
+      // 握姿换边的"出屏 → 跳位 → 入屏"位移与外部横滑位移叠加；静止与拖拽期间恒为 0。
+      .translate({ x: this.slideOffset + this.externalOffsetX, y: 0 })
       // 入场从停靠侧边缘平移进来。不能改回 `.animation()` 隐式动画：它会把初始 (16,16)
       // 到记忆位置的跳变也做成动画，表现为"按钮从屏幕左上角飞过来"。
       .transition(motionTransition(TransitionEffect.translate({ x: this.left ? -SLIDE_OUT_DISTANCE : SLIDE_OUT_DISTANCE }),

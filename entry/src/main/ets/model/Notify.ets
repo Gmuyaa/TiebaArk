@@ -187,6 +187,8 @@ function readReplyItem(reader: ProtoReader): NotifyItem {
       item.threadAuthor = readAuthor(reader.readMessageView());
     } else if (tag === 19 && reader.wireType === WireType.VARINT) {
       hideForum = reader.readInt32() === 1;
+    } else if (tag === 32 && reader.wireType === WireType.VARINT) {
+      item.deleted = reader.readInt32() === 1;
     } else {
       reader.skipField();
     }

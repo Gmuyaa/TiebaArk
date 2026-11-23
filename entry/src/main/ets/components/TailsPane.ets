@@ -23,7 +23,6 @@ export struct TailsPane {
 
   build() {
     PreferencePaneScaffold({
-      note: '仅查看，回复暂不附加小尾巴。',
       message: this.vm.error,
       onRetry: (): void => { void this.vm.load(this.context()); }
     }) {

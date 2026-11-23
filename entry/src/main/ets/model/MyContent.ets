@@ -20,7 +20,9 @@ export interface RawStoredAuthor {
 /** 收藏条目的媒体段（只要图，尺寸/类型一概不读） */
 export interface RawStoredMedia {
   small_pic?: string;
+  big_pic?: string;
   water_pic?: string;
+  is_gif?: number | string;
 }
 
 export interface RawStoredThreadResponse {
@@ -55,6 +57,7 @@ export class StoredThread {
   authorName: string = '';
   /** 封面图（media[0].small_pic），没有则空串 */
   coverUrl: string = '';
+  coverIsGif: boolean = false;
   /** 已被删除/屏蔽（服务端 `is_deleted="1"`）→ 列表灰显并标"该帖子已被删除" */
   isDeleted: boolean = false;
 }
@@ -98,7 +101,21 @@ export class StoredThreadList {
     item.isDeleted = toDeleted(raw.is_deleted);
     const media = raw.media;
     if (media !== undefined && media.length > 0) {
-      item.coverUrl = media[0].small_pic ?? media[0].water_pic ?? '';
+      const small: string = media[0].small_pic ?? '';
+      const big: string = media[0].big_pic ?? '';
+      const water: string = media[0].water_pic ?? '';
+      item.coverUrl = small || water || big;
+      item.coverIsGif = media[0].is_gif === 1 || media[0].is_gif === '1' ||
+        /\.gif(?:[?#]|$)/i.test(item.coverUrl) || /\.gif(?:[?#]|$)/i.test(water) ||
+        /\/forum\/[^/]*(?:w%3D1920|w=1920)(?:%3B|;|\/|$)/i.test(big);
+      if (item.coverUrl.length > 0) {
+        rememberFeedImage(item.coverUrl, 0, 0, false, water || big || small, {
+          thumb: small || item.coverUrl,
+          high: big || water || item.coverUrl,
+          staticUrl: small,
+          gif: item.coverIsGif
+        });
+      }
     }
     return item;
   }
@@ -438,6 +455,7 @@ function readPostMedia(bytes: Uint8Array, item: UserPostItem): void {
     rememberFeedImage(preview, width, height, isLong, resolvedOrigin, {
       thumb: big || active || preview,
       high: source || big || preview,
+      staticUrl: big || active,
       originBytes: originSize
     });
   }

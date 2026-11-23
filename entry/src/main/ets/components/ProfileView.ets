@@ -247,6 +247,10 @@ export struct ProfileView {
         }
 
         Column({ space: SettingsLayout.ROW_GAP }) {
+          SettingsEntryRow({ label: '发帖', icon: $r('sys.symbol.pencil_line'), showDivider: false,
+            onTap: (): void => { NavigationService.openCompose(); } })
+            .backgroundColor(AppTheme.CARD).borderRadius(SettingsLayout.CARD_RADIUS)
+            .clip(true)
           this.FeatureRow(this.rows[0])
           this.FeatureRow(this.rows[1])
           this.FeatureRow(this.rows[2])

@@ -29,6 +29,7 @@ export interface RawContentItem {
   origin_size?: number | string;
   pic_id?: number;
   is_long_pic?: number;
+  is_gif?: number | string;
   /** 是否展示"查看原图" */
   show_original_btn?: number;
   is_native_app?: number;
@@ -205,6 +206,11 @@ export interface RawDetailForum {
   first_class?: string;
 }
 
+export interface RawThreadAnti {
+  /** 1=所有人、2=我的粉丝、3=我关注的人、4=仅自己且隐藏已有评论。 */
+  reply_private_flag?: number | string;
+}
+
 /** `/c/f/pb/page` 响应 */
 export interface RawThreadPage {
   error_code?: number;
@@ -214,6 +220,7 @@ export interface RawThreadPage {
   user_list?: RawUser[];
   page?: RawDetailPage;
   forum?: RawDetailForum;
+  anti?: RawThreadAnti;
   /** 内容被折叠时的提示文案；与 `thread.is_partial_visible` 配套 */
   partial_visible_toast?: string;
 }

@@ -115,6 +115,10 @@ export class AppTheme {
   static get DANGER_TEXT(): Resource {
     return themeResource($r('app.color.app_danger_text'), $r('app.color.paper_app_danger_text'), ThemeColorRole.ERROR);
   }
+  /** 左滑删除按钮底色（鸿蒙标准删除红 `#E84026`） */
+  static get SWIPE_DELETE_BG(): Resource {
+    return $r('app.color.swipe_delete_bg');
+  }
   /** 设置弹层选项分隔线 */
   static get POPUP_LINE(): Resource {
     return themeResource($r('app.color.app_popup_line'), $r('app.color.paper_app_popup_line'), ThemeColorRole.DIVIDER);
@@ -258,6 +262,12 @@ export class AppTheme {
    *  ⚠️ 圆面已不透明，圆内图标不能再跟 `TEXT_MAIN`：`HomeComposeButton` 固定传白色。 */
   static get COMPOSE_TINT(): Resource {
     return themeResource($r('app.color.theme_classic_compose_tint'), $r('app.color.theme_paper_compose_tint'), ThemeColorRole.COMPOSE_TINT);
+  }
+  static get FOLLOW_LEVEL_SIGNED_BG(): Resource {
+    return themeResource($r('app.color.follow_level_signed_bg'), $r('app.color.paper_follow_level_signed_bg'), ThemeColorRole.FOLLOW_LEVEL_SIGNED_BG);
+  }
+  static get FOLLOW_LEVEL_UNSIGNED_BG(): Resource {
+    return themeResource($r('app.color.follow_level_unsigned_bg'), $r('app.color.paper_follow_level_unsigned_bg'), ThemeColorRole.FOLLOW_LEVEL_UNSIGNED_BG);
   }
 
   static readonly PAGE_GUTTER: number = 12;

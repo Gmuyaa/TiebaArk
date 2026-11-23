@@ -8,6 +8,8 @@ import { popupMotion } from '../common/appearance/MotionPolicy';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { AppTheme, DetailTheme } from '../theme/Theme';
 import { AuthorBlockVM, authorBlockAction } from '../viewmodel/AuthorBlockVM';
+import { syncImBlacklistMask } from '../viewmodel/BlacklistVM';
+import { threadBlockStore } from '../utils/ThreadBlockStore';
 import { shareWebPage } from '../utils/SystemShare';
 
 /** 评论长按工具条；本人删除与其他作者屏蔽共用最后一项。 */
@@ -120,7 +122,12 @@ export struct CommentActionHost {
         if (confirm.index === 1 && vm === this.blockVM) {
           const message: string = await vm.set(this.context(), true);
           if (message.length > 0) { this.toast(message); }
-          else if (vm.known && vm.blocked) { this.toast('已拉黑该作者'); }
+          else if (vm.known && vm.blocked) {
+            const imErr: string = await syncImBlacklistMask(this.context(), String(this.target.author.id), true);
+            void threadBlockStore.rememberBlockedUser(this.context(), this.target.author.id,
+              this.target.author.displayName || this.target.author.userName, this.target.author.portraitUrl);
+            this.toast(imErr.length > 0 ? `已拉黑该作者，但黑名单列表同步失败：${imErr}` : '已拉黑该作者');
+          }
         }
       }
     } catch (err) {
@@ -136,6 +143,10 @@ export struct CommentActionHost {
     try {
       const message: string = await this.blockVM.set(this.context(), false);
       if (message.length > 0) { this.toast(message); }
+      else if (this.blockVM.known && !this.blockVM.blocked) {
+        void syncImBlacklistMask(this.context(), String(this.target.author.id), false);
+        void threadBlockStore.forgetBlockedUser(this.context(), this.target.author.id);
+      }
     }
     catch (err) { this.toast('取消拉黑失败，请重试'); }
     finally { this.busy = false; }

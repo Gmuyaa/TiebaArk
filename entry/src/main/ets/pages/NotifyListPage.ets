@@ -56,8 +56,9 @@ export struct NotifyListPage {
 
   /** 点一条通知进帖子：带 targetPid（回复我=被回的那楼；赞我=被赞的楼，主题帖被赞则不带） */
   private openTarget(item: NotifyItem, original: boolean = false): void {
-    if (item.deleted && !original) {
-      this.getUIContext().getPromptAction().showToast({ message: '原内容已删除' }); return;
+    if (item.deleted && (item.kind === 'reply' || !original)) {
+      this.getUIContext().getPromptAction().showToast({ message: item.kind === 'reply' ? '原帖已删除' : '原内容已删除' });
+      return;
     }
     if ((item.threadIdText.length > 0 && item.threadId === 0) ||
       (!original && item.postIdText.length > 0 && item.postIdText !== '0' && item.postId === 0)) {
@@ -70,6 +71,7 @@ export struct NotifyListPage {
     NavigationService.openThreadDetail({
       tid: item.threadId,
       targetPid: !original && item.postId > 0 ? item.postId : undefined,
+      targetIsSubPost: !original && item.postId > 0 && item.isFloor === 1 ? true : undefined,
       forumName: item.forumName
     });
   }
@@ -192,7 +194,7 @@ export struct NotifyListPage {
           .onClick(() => { this.openTarget(item); })
       }
       if (item.deleted) {
-        Text('原内容已删除').fontSize(12).fontColor(AppTheme.TEXT_MUTED)
+        Text(item.kind === 'reply' ? '原帖已删除' : '原内容已删除').fontSize(12).fontColor(AppTheme.TEXT_MUTED)
       }
       this.ThreadContext(item)
     }.width('100%').alignItems(HorizontalAlign.Start).padding(16)
@@ -213,7 +215,8 @@ export struct NotifyListPage {
         }.width('100%').onClick(() => { this.openAuthor(item.threadAuthor); })
       }
       Text(item.title || '查看原帖')
-        .fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppTheme.TEXT_MAIN).lineHeight(22)
+        .fontSize(14).fontWeight(FontWeight.Medium)
+        .fontColor(item.kind === 'reply' && item.deleted ? AppTheme.TEXT_MUTED : AppTheme.TEXT_MAIN).lineHeight(22)
         .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
       if (item.forumName.length > 0) {
         Text(item.forumName.endsWith('吧') ? item.forumName : `${item.forumName}吧`)

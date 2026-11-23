@@ -4,11 +4,14 @@ export class FeedImageInfo {
   width: number = 0;
   height: number = 0;
   long: boolean = false;
+  gif: boolean = false;
   origin: string = '';
   /** 列表小缩略图（media.big_pic / feed_pic.small_pic_url） */
   thumb: string = '';
   /** 列表高清图（media.src_pic / feed_pic.big_pic_url） */
   high: string = '';
+  /** 带 `g=0` 的静态首帧通道（首页 `cdn_src` / 列表 `big_pic` 等） */
+  staticUrl: string = '';
   /** 原图字节数 */
   originBytes: number = 0;
 }
@@ -16,6 +19,8 @@ export class FeedImageInfo {
 export interface FeedImageVariants {
   thumb?: string;
   high?: string;
+  staticUrl?: string;
+  gif?: boolean;
   originBytes?: number;
 }
 
@@ -33,6 +38,8 @@ export function rememberFeedImage(url: string, width: number, height: number,
   if (variants !== undefined) {
     info.thumb = variants.thumb ?? '';
     info.high = variants.high ?? '';
+    info.staticUrl = variants.staticUrl ?? '';
+    info.gif = variants.gif === true;
     const bytes: number = variants.originBytes ?? 0;
     info.originBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
   }
@@ -53,6 +60,8 @@ export function rememberMeasuredImage(url: string, width: number, height: number
   if (declared !== undefined) {
     info.thumb = declared.thumb;
     info.high = declared.high;
+    info.staticUrl = declared.staticUrl;
+    info.gif = declared.gif;
     info.originBytes = declared.originBytes;
   }
   if (measuredInfo.size >= 1200 && !measuredInfo.has(url)) { measuredInfo.clear(); }

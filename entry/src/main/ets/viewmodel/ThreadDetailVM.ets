@@ -8,7 +8,8 @@ import {
 } from '../api/TiebaApi';
 import {
   copyPostItem, PostItem, ReplySortType,
-  resolveForumName, SubPostItem, SubPostPage, SubPostThreadState, ThreadDetail, syncSubPostThreadStates
+  resolveForumName, SubPostItem, SubPostPage, SubPostThreadState, ThreadDetail, ThreadReplyPermission,
+  replyPermissionWriteValue, syncSubPostThreadStates
 } from '../model/ThreadDetail';
 import { MemePicItem } from '../model/MemeEmoji';
 import { FloorDataSource } from '../model/FloorDataSource';
@@ -24,6 +25,32 @@ import { noteContentDeleted } from './ContentDeletionRevision';
 const REQUEST_PAGE_SIZE: number = 10;
 const SUB_POST_PAGE_SIZE: number = 30;
 const SUB_POST_SLOW_MS: number = 1500;
+const DEFAULT_FLOOR_PAGE_SIZE: number = 30;
+const MAX_JUMP_SEARCH_STEPS: number = 16;
+
+export enum FloorJumpStatus {
+  FOUND = 0,
+  NOT_FOUND = 1,
+  FAILED = 2,
+  BUSY = 3,
+  CANCELLED = 4
+}
+
+export class FloorJumpResult {
+  readonly status: FloorJumpStatus;
+  /** 目标楼层在 visiblePosts 中的下标；仅 status === FOUND 时有效。 */
+  readonly index: number;
+  /** true 表示本次跳转替换了回复页，UI 需等列表同步后再滚。 */
+  readonly loadedNewPage: boolean;
+  readonly message: string;
+
+  constructor(status: FloorJumpStatus, index: number = -1, loadedNewPage: boolean = false, message: string = '') {
+    this.status = status;
+    this.index = index;
+    this.loadedNewPage = loadedNewPage;
+    this.message = message;
+  }
+}
 
 const FLOW_TAG: string = 'AgreeFlow';
 const FLOW_DOMAIN: number = 0x0000;
@@ -46,6 +73,8 @@ export class ThreadDetailVM {
   @Trace hasMore: boolean = false;
   /** 定位模式只展示主帖和目标回复；通过明确入口回到完整回复列表。 */
   @Trace focusedReplyPid: number = 0;
+  /** 定位到楼中楼子回复时记录其 spid，页面据此自动展开所属父楼的楼中楼面板。 */
+  @Trace focusedSubPostPid: number = 0;
 /** 按 pid 区分；数组整体替换才触发 @Trace。 */
   @Trace subStates: SubPostThreadState[] = [];
   @Trace sortType: ReplySortType = ReplySortType.ASC;
@@ -63,6 +92,8 @@ export class ThreadDetailVM {
   @Trace replyPending: boolean = false;
   @Trace deletePending: boolean = false;
   @Trace threadDeleted: boolean = false;
+  @Trace replyPermission: ThreadReplyPermission = ThreadReplyPermission.UNKNOWN;
+  @Trace replyPermissionPending: boolean = false;
   /**
    * 最近一次**发表成功**的楼层 pid（0 = 还没有），只用于发表成功后跳到该层；
    * 刷新是整页替换，页面无法自行反推位置，VM 直接递出 pid，找不到就留在原地不猜。
@@ -70,6 +101,7 @@ export class ThreadDetailVM {
   @Trace lastReplyPid: number = 0;
   /** 切换排序时只清空并刷新回复，主帖保持原对象不动。 */
   @Trace isSwitchingSort: boolean = false;
+  @Trace isJumpingFloor: boolean = false;
 
   @Trace emojiPicker: EmojiPickerVM = new EmojiPickerVM();
   get memePics(): MemePicItem[] { return this.emojiPicker.memePics; }
@@ -103,6 +135,11 @@ export class ThreadDetailVM {
   private subPostParents: Map<number, number> = new Map<number, number>();
   /** 正序第一页响应给出的服务端总页数，倒序首屏必须从最后一页开始。 */
   private knownTotalPage: number = 1;
+  /** 当前排序模式下的服务端总页数（只看楼主与正序总页数不同）。 */
+  private currentSortTotalPage: number = 1;
+  /** 当前列表是否从首/末边界页连续加载；跳到中间页后置 false，防止拉到底误判前序页不存在。 */
+  private loadedFromBoundary: boolean = false;
+  private allPagesLoaded: boolean = false;
   /**
    * 每层楼的可观察点赞态。Map 本身不需要 @Trace：界面读的是 `AgreeState` 自己的 `@Trace`
    * 字段，只要对象引用稳定即可。因此这里只做 `set`，从不在同一 pid 上换新实例。
@@ -113,6 +150,7 @@ export class ThreadDetailVM {
   private requestSeq: number = 0;
   private disposed: boolean = false;
   private deleteOperation: number = 0;
+  private replyPermissionOperation: number = 0;
   /** 删除一级评论会让后续页前移，续页先补读当前末页以免跳过移入的评论。 */
   private rereadPageAfterDelete: number = 0;
   /** 最多一个待同步删除目标，直到所属页不再回显才解除；不保存内容、不落盘。 */
@@ -164,7 +202,8 @@ export class ThreadDetailVM {
   }
 
   /** 加载第一页（重复调用重置到第一页）；失败写入 errorText 供界面展示，不抛异常。 */
-  async load(context: common.UIAbilityContext, tid: number, targetPid: number = 0): Promise<void> {
+  async load(context: common.UIAbilityContext, tid: number, targetPid: number = 0,
+    targetIsSubPost: boolean = false): Promise<void> {
     /*
      * 已 dispose 的实例不得复用：页面销毁时调 dispose()，重进帖子是新的页面实例 + 新 VM。
      * 不能把 disposed 复位成 false——迟到的 load 会复活已销毁的 VM 并继续写 @Trace 状态。
@@ -175,13 +214,18 @@ export class ThreadDetailVM {
       return;
     }
     const sameThread: boolean = this.tid === tid;
-    if (!sameThread) { this.deletedPid = 0; this.deletedParentPid = 0; }
+    if (!sameThread) {
+      this.deletedPid = 0;
+      this.deletedParentPid = 0;
+      this.replyPermission = ThreadReplyPermission.UNKNOWN;
+    }
     /*
      * load 是整页重置，必须同时清掉上一轮翻页的在途标记：本方法推进 requestSeq 后，在途
      * loadMore 的 finally 不再复位 isLoadingMore，而 refresh/loadMore/switchReplySort 的入口
      * 守卫都含该标记，漏清会让三处入口永久被挡。
      */
     this.isLoadingMore = false;
+    this.isJumpingFloor = false;
     this.threadDeleted = false;
     this.rereadPageAfterDelete = 0;
     this.tid = tid;
@@ -189,38 +233,84 @@ export class ThreadDetailVM {
     this.errorText = '';
     this.lastErrorCode = 0;
     this.focusedReplyPid = 0;
+    this.focusedSubPostPid = 0;
     this.sortType = ReplySortType.ASC;
     this.requestSeq++;
     const seq: number = this.requestSeq;
 
     try {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      const session: TiebaSession = this.currentSession();
       if (sameThread && this.deletedPid > 0) {
-        await this.confirmPendingDeletion(device, this.currentSession(), (): boolean => seq === this.requestSeq);
+        await this.confirmPendingDeletion(device, session, (): boolean => seq === this.requestSeq);
       }
       let targetPage: number = 0;
-      let response: ThreadDetailResponse = await this.api.fetchThreadDetail(
-        device, this.currentSession(), tid, 1, REQUEST_PAGE_SIZE, this.sortType, targetPid);
-      if (targetPid > 0 && seq === this.requestSeq) {
-        const targetPosts: PostItem[] = response.data.posts;
-        const found: boolean = response.ok && targetPosts.some((post: PostItem) => post.pid === targetPid);
+      let locatedSubPage: SubPostPage | undefined = undefined;
+      let locatedSubPid: number = 0;
+      let response: ThreadDetailResponse;
+      if (targetPid > 0) {
+        let effectivePid: number = targetPid;
+        let fetchedTarget: ThreadDetailResponse | undefined = undefined;
+        if (targetIsSubPost) {
+          const subRes: SubPostResponse = await this.api.fetchSubPostsBySpid(
+            device, session, tid, targetPid, 0, SUB_POST_PAGE_SIZE);
+          if (seq !== this.requestSeq) { return; }
+          if (subRes.ok && subRes.data.parentPid > 0 &&
+            subRes.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === targetPid)) {
+            effectivePid = subRes.data.parentPid;
+            locatedSubPage = subRes.data;
+            locatedSubPid = targetPid;
+            fetchedTarget = await this.api.fetchThreadDetail(
+              device, session, tid, 1, REQUEST_PAGE_SIZE, this.sortType, effectivePid);
+          } else {
+            effectivePid = 0;
+          }
+        } else {
+          fetchedTarget = await this.api.fetchThreadDetail(
+            device, session, tid, 1, REQUEST_PAGE_SIZE, this.sortType, targetPid);
+          if (seq !== this.requestSeq) { return; }
+          const directFound: boolean = fetchedTarget.ok &&
+            fetchedTarget.data.posts.some((post: PostItem): boolean => post.pid === targetPid);
+          if (!directFound) {
+            // 未显式标记楼中楼时兜底按 spid 反查父楼层，避免漏标或旧入口无法定位。
+            const subRes: SubPostResponse = await this.api.fetchSubPostsBySpid(
+              device, session, tid, targetPid, 0, SUB_POST_PAGE_SIZE);
+            if (seq !== this.requestSeq) { return; }
+            if (subRes.ok && subRes.data.parentPid > 0 &&
+              subRes.data.subPosts.some((sub: SubPostItem): boolean => sub.pid === targetPid)) {
+              effectivePid = subRes.data.parentPid;
+              locatedSubPage = subRes.data;
+              locatedSubPid = targetPid;
+              fetchedTarget = await this.api.fetchThreadDetail(
+                device, session, tid, 1, REQUEST_PAGE_SIZE, this.sortType, effectivePid);
+            }
+          }
+        }
+        if (seq !== this.requestSeq) { return; }
+        const targetPosts: PostItem[] = fetchedTarget !== undefined ? fetchedTarget.data.posts : [];
+        const found: boolean = effectivePid > 0 && fetchedTarget !== undefined && fetchedTarget.ok &&
+          targetPosts.some((post: PostItem): boolean => post.pid === effectivePid);
         const original: ThreadDetailResponse = await this.api.fetchThreadDetail(
-          device, this.currentSession(), tid, 1, REQUEST_PAGE_SIZE, this.sortType);
+          device, session, tid, 1, REQUEST_PAGE_SIZE, this.sortType);
         if (seq !== this.requestSeq) {
           return;
         }
         if (found && original.ok) {
           const main: PostItem | undefined = ThreadDetail.locateMainPost(original.data);
           if (main !== undefined) {
-            original.data.posts = [main].concat(targetPosts.filter((post: PostItem) => post.pid !== main.pid));
-            this.focusedReplyPid = targetPid;
-            targetPage = response.data.page.currentPage;
+            original.data.posts = [main].concat(targetPosts.filter((post: PostItem): boolean => post.pid !== main.pid));
+            this.focusedReplyPid = effectivePid;
+            this.focusedSubPostPid = locatedSubPid;
+            targetPage = fetchedTarget!.data.page.currentPage;
           } else {
             original.failLocal('暂时无法读取原帖内容，请稍后重试');
           }
         }
         // 未命中、已删除或暂不可见时，保留原帖阅读入口，不伪造目标楼层。
         response = original;
+      } else {
+        response = await this.api.fetchThreadDetail(
+          device, session, tid, 1, REQUEST_PAGE_SIZE, this.sortType, 0);
       }
       if (seq !== this.requestSeq) {
         return;
@@ -245,6 +335,7 @@ export class ThreadDetailVM {
       this.detail = this.absorbDetail(response.data);
       // 收藏态跟详情一起从服务端重置（本地乐观值随权威值落地）
       this.collected = response.data.isStored;
+      this.replyPermission = response.data.replyPermission;
       this.posts = response.data.posts;
       if (this.focusedReplyPid > 0) {
         this.rememberPostPages([this.posts[0]], 1, true);
@@ -256,10 +347,16 @@ export class ThreadDetailVM {
       this.hasMore = this.focusedReplyPid === 0 && response.data.page.hasMore;
       this.loadedPage = response.data.page.currentPage;
       this.knownTotalPage = Math.max(1, response.data.page.totalPage);
+      this.currentSortTotalPage = this.knownTotalPage;
+      this.loadedFromBoundary = this.focusedReplyPid === 0;
+      this.allPagesLoaded = this.loadedFromBoundary && !this.hasMore;
       this.loadedOnce = true;
       this.syncVisiblePosts();
       this.rebuildAgreeStates('reload');
       this.syncSubStates(this.posts, true);
+      if (locatedSubPage !== undefined && this.focusedReplyPid > 0 && this.focusedSubPostPid > 0) {
+        this.applyLocatedSubPage(this.focusedReplyPid, locatedSubPage);
+      }
       this.agreeFlowSnapshot('load-done');
     } catch (err) {
       const e: Error = err as Error;
@@ -274,7 +371,7 @@ export class ThreadDetailVM {
    */
   async refresh(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || this.tid <= 0 || this.loading || this.isRefreshing || this.isLoadingMore ||
-      this.isSwitchingSort) {
+      this.isSwitchingSort || this.isJumpingFloor) {
       return;
     }
     if (this.focusedReplyPid > 0) {
@@ -315,6 +412,10 @@ export class ThreadDetailVM {
       this.rememberPostPages(response.data.posts, response.data.page.currentPage, true);
       // 刷新同样用服务端收藏态重置（两个分支都要走）
       this.collected = response.data.isStored;
+      if (this.sortType === ReplySortType.ASC || response.data.replyPermission !== ThreadReplyPermission.UNKNOWN) {
+        this.replyPermission = response.data.replyPermission;
+      }
+      this.loadedFromBoundary = true;
       this.updatePaging(response.data.page.currentPage, response.data.page.totalPage,
         response.data.page.hasMore);
       this.loadedOnce = true;
@@ -336,7 +437,7 @@ export class ThreadDetailVM {
    */
   async loadMore(context: common.UIAbilityContext): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || this.loading || this.isRefreshing || this.isLoadingMore || this.isSwitchingSort ||
-      !this.hasMore || this.loadedPage <= 0) {
+      this.isJumpingFloor || !this.hasMore || this.loadedPage <= 0) {
       return;
     }
     this.isLoadingMore = true;
@@ -458,7 +559,7 @@ export class ThreadDetailVM {
    */
   async switchReplySort(context: common.UIAbilityContext, newType: ReplySortType): Promise<void> {
     if (this.disposed || this.deletePending || this.threadDeleted || newType === this.sortType || this.tid <= 0 || this.loading || this.isRefreshing ||
-      this.isLoadingMore || this.isSwitchingSort || this.posts.length === 0) {
+      this.isLoadingMore || this.isSwitchingSort || this.isJumpingFloor || this.posts.length === 0) {
       return;
     }
 
@@ -501,7 +602,9 @@ export class ThreadDetailVM {
 
       this.replaceRepliesKeepingMain(response.data.posts);
       this.focusedReplyPid = 0;
+      this.focusedSubPostPid = 0;
       this.rememberPostPages(response.data.posts, response.data.page.currentPage, true);
+      this.loadedFromBoundary = true;
       this.updatePaging(response.data.page.currentPage, response.data.page.totalPage,
         response.data.page.hasMore);
       this.syncVisiblePosts();
@@ -545,11 +648,201 @@ export class ThreadDetailVM {
   /** 服务端倒序的 has_more 含义不稳定，以当前页是否大于 1 判断是否还能向前翻。 */
   private updatePaging(currentPage: number, totalPage: number, serverHasMore: boolean): void {
     this.loadedPage = currentPage;
-    if (totalPage > 0 && (this.sortType === ReplySortType.ASC ||
-      this.sortType === ReplySortType.DESC)) {
-      this.knownTotalPage = totalPage;
+    if (totalPage > 0) {
+      this.currentSortTotalPage = totalPage;
+      if (this.sortType === ReplySortType.ASC || this.sortType === ReplySortType.DESC) {
+        this.knownTotalPage = totalPage;
+      }
     }
     this.hasMore = this.sortType === ReplySortType.DESC ? currentPage > 1 : serverHasMore;
+    this.allPagesLoaded = this.loadedFromBoundary && !this.hasMore;
+  }
+
+  cancelJumpToFloor(): void {
+    if (!this.isJumpingFloor) { return; }
+    this.requestSeq++;
+    this.isJumpingFloor = false;
+  }
+
+  /**
+   * 跳转到指定楼层号：先查已加载列表，未命中时在当前排序分页内做估算 + 二分查页。
+   * 仅命中时替换回复列表，未找到或请求失败不改动现有阅读状态。
+   */
+  async jumpToFloor(context: common.UIAbilityContext, targetFloor: number): Promise<FloorJumpResult> {
+    if (this.disposed || this.threadDeleted || this.tid <= 0 || this.posts.length === 0) {
+      return new FloorJumpResult(FloorJumpStatus.CANCELLED);
+    }
+    if (!Number.isSafeInteger(targetFloor) || targetFloor < 1) {
+      return new FloorJumpResult(FloorJumpStatus.NOT_FOUND, -1, false, '请输入有效的楼层号');
+    }
+    if (this.loading || this.isRefreshing || this.isLoadingMore || this.isSwitchingSort ||
+      this.deletePending || this.isJumpingFloor) {
+      return new FloorJumpResult(FloorJumpStatus.BUSY, -1, false, '内容正在更新，请稍后再试');
+    }
+
+    const localIndex: number = this.findVisibleFloorIndex(targetFloor);
+    if (localIndex >= 0) {
+      return new FloorJumpResult(FloorJumpStatus.FOUND, localIndex, false);
+    }
+
+    const expectedSort: ReplySortType = this.sortType;
+    const requestSort: ReplySortType = expectedSort === ReplySortType.HOT ? ReplySortType.ASC : expectedSort;
+    if (this.allPagesLoaded && this.focusedReplyPid === 0) {
+      const highestLoaded: number = this.maxFloorInPosts(this.visiblePosts, 0, true);
+      return new FloorJumpResult(FloorJumpStatus.NOT_FOUND, -1, false,
+        this.describeMissingFloor(targetFloor, highestLoaded, requestSort));
+    }
+
+    this.isJumpingFloor = true;
+    const seq: number = ++this.requestSeq;
+    const mainPid: number = this.posts[0].pid;
+
+    try {
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (this.disposed || this.threadDeleted || seq !== this.requestSeq || expectedSort !== this.sortType) {
+        return new FloorJumpResult(FloorJumpStatus.CANCELLED);
+      }
+
+      let lo: number = 1;
+      let hi: number = Math.max(1, this.currentSortTotalPage);
+      let highestKnownFloor: number = 0;
+      const visited: Set<number> = new Set<number>();
+      let steps: number = 0;
+
+      while (lo <= hi && steps < MAX_JUMP_SEARCH_STEPS) {
+        let probePage: number;
+        if (steps === 0 && requestSort !== ReplySortType.ONLY_AUTHOR) {
+          const estPageSize: number = this.detail.page.pageSize > 0 ? this.detail.page.pageSize : DEFAULT_FLOOR_PAGE_SIZE;
+          probePage = Math.min(hi, Math.max(lo, Math.ceil(targetFloor / estPageSize)));
+        } else {
+          probePage = Math.floor((lo + hi) / 2);
+        }
+        if (visited.has(probePage)) {
+          probePage = Math.floor((lo + hi) / 2);
+          if (visited.has(probePage)) { break; }
+        }
+        visited.add(probePage);
+        steps++;
+
+        const response: ThreadDetailResponse = await this.api.fetchThreadDetail(
+          device, this.currentSession(), this.tid, probePage, REQUEST_PAGE_SIZE, requestSort);
+        if (this.disposed || this.threadDeleted || seq !== this.requestSeq || expectedSort !== this.sortType) {
+          return new FloorJumpResult(FloorJumpStatus.CANCELLED);
+        }
+        if (!response.ok) {
+          return new FloorJumpResult(FloorJumpStatus.FAILED, -1, false, response.describeFailure());
+        }
+
+        const pagePosts: PostItem[] = this.filterDeletedPosts(response.data.posts);
+        const serverPage: number = response.data.page.currentPage > 0 ? response.data.page.currentPage : probePage;
+        const serverTotalPage: number = response.data.page.totalPage > 0 ? response.data.page.totalPage : hi;
+        if (steps === 1 && serverTotalPage > hi) {
+          hi = serverTotalPage;
+        } else if (serverTotalPage > 0 && serverTotalPage < hi) {
+          hi = serverTotalPage;
+        }
+        visited.add(serverPage);
+
+        const hitInPage: boolean = pagePosts.some((post: PostItem): boolean => post.floor === targetFloor);
+        if (hitInPage) {
+          this.replaceRepliesKeepingMain(response.data.posts);
+          this.focusedReplyPid = 0;
+          this.focusedSubPostPid = 0;
+          this.rereadPageAfterDelete = 0;
+          if (this.posts.length > 0) {
+            this.rememberPostPages([this.posts[0]], 1, true);
+            this.rememberPostPages(this.posts.slice(1), serverPage, false);
+          } else {
+            this.rememberPostPages(response.data.posts, serverPage, true);
+          }
+          this.loadedFromBoundary = requestSort === ReplySortType.DESC
+            ? serverPage >= serverTotalPage : serverPage <= 1;
+          this.updatePaging(serverPage, serverTotalPage, response.data.page.hasMore);
+          this.syncVisiblePosts();
+          this.rebuildAgreeStates('jumpToFloor');
+          this.syncSubStates(this.posts, true);
+          const targetIndex: number = this.findVisibleFloorIndex(targetFloor);
+          if (targetIndex >= 0) {
+            return new FloorJumpResult(FloorJumpStatus.FOUND, targetIndex, true);
+          }
+          return new FloorJumpResult(FloorJumpStatus.NOT_FOUND, -1, false,
+            this.describeMissingFloor(targetFloor, highestKnownFloor, requestSort));
+        }
+
+        // 服务端请求超界时会把 currentPage 夹回末页；记录其最高楼层并收缩上界。
+        let minFloor: number = 0;
+        let maxFloor: number = 0;
+        for (let i = 0; i < pagePosts.length; i++) {
+          const post: PostItem = pagePosts[i];
+          if (post.floor <= 0) { continue; }
+          if (serverPage > 1 && (post.floor === 1 || (mainPid > 0 && post.pid === mainPid))) {
+            continue;
+          }
+          if (minFloor === 0 || post.floor < minFloor) { minFloor = post.floor; }
+          if (post.floor > maxFloor) { maxFloor = post.floor; }
+        }
+        if (serverPage >= serverTotalPage && maxFloor > highestKnownFloor) {
+          highestKnownFloor = maxFloor;
+        }
+        if (minFloor === 0) {
+          hi = Math.min(hi, serverPage - 1);
+          continue;
+        }
+        if (minFloor <= targetFloor && targetFloor <= maxFloor) {
+          // 目标楼层落在本页区间内但页内不存在，说明已被删除或非当前筛选可见。
+          break;
+        }
+        if (targetFloor < minFloor) {
+          hi = Math.min(hi, serverPage - 1);
+        } else {
+          if (serverPage < probePage) {
+            // 已被服务端夹到末页仍小于目标楼层，无需继续向右找。
+            break;
+          }
+          lo = Math.max(lo, serverPage + 1);
+        }
+      }
+
+      return new FloorJumpResult(FloorJumpStatus.NOT_FOUND, -1, false,
+        this.describeMissingFloor(targetFloor, highestKnownFloor, requestSort));
+    } catch (err) {
+      if (this.disposed || seq !== this.requestSeq) {
+        return new FloorJumpResult(FloorJumpStatus.CANCELLED);
+      }
+      const e: Error = err as Error;
+      return new FloorJumpResult(FloorJumpStatus.FAILED, -1, false, `跳转失败：${e.message}`);
+    } finally {
+      if (seq === this.requestSeq) {
+        this.isJumpingFloor = false;
+      }
+    }
+  }
+
+  private findVisibleFloorIndex(floor: number): number {
+    for (let i = 0; i < this.visiblePosts.length; i++) {
+      if (this.visiblePosts[i].floor === floor) { return i; }
+    }
+    return -1;
+  }
+
+  private maxFloorInPosts(posts: PostItem[], mainPid: number, includeMain: boolean): number {
+    let maxFloor: number = 0;
+    for (let i = 0; i < posts.length; i++) {
+      const post: PostItem = posts[i];
+      if (!includeMain && mainPid > 0 && post.pid === mainPid) { continue; }
+      if (post.floor > maxFloor) { maxFloor = post.floor; }
+    }
+    return maxFloor;
+  }
+
+  private describeMissingFloor(targetFloor: number, highestFloor: number, sort: ReplySortType): string {
+    if (sort === ReplySortType.ONLY_AUTHOR) {
+      return `只看楼主模式下未找到第 ${targetFloor} 楼`;
+    }
+    if (highestFloor > 0 && targetFloor > highestFloor) {
+      return `第 ${targetFloor} 楼不存在（当前最高 ${highestFloor} 楼）`;
+    }
+    return `第 ${targetFloor} 楼不存在或已被删除`;
   }
 
   /** 读取某楼状态。状态尚未建立时返回临时空状态，保证渲染层不必先判空 */
@@ -779,6 +1072,56 @@ export class ThreadDetailVM {
       main !== undefined && main.pid > 0 && this.postIndex.get(main.pid) !== undefined;
   }
 
+  canManageReplyPermission(): boolean {
+    return this.ownsContent(this.detail.author.id) && Number.isSafeInteger(this.tid) && this.tid > 0 &&
+      this.posts.length > 0;
+  }
+
+  async setReplyPermission(context: common.UIAbilityContext, target: ThreadReplyPermission,
+    confirmedOwner: string): Promise<string> {
+    if (this.replyPermissionPending) { return '评论权限设置中，请稍候'; }
+    if (this.deletePending || this.threadDeleted) { return '帖子状态正在变更，请稍后再试'; }
+    if (confirmedOwner.length === 0 || confirmedOwner !== this.deletionOwner()) {
+      return '账号或页面已变化，请重新打开评论权限';
+    }
+    if (!this.canManageReplyPermission()) { return '只能修改本人帖子的评论权限'; }
+    if (replyPermissionWriteValue(target) <= 0) { return '评论权限选项无效'; }
+    if (this.replyPermission === target) { return ''; }
+    const previous: ThreadReplyPermission = this.replyPermission;
+    const tid: number = this.tid;
+    const owner: string = authSession.sessionKey();
+    const session: TiebaSession = this.currentSession();
+    const seq: number = this.requestSeq;
+    const operation: number = ++this.replyPermissionOperation;
+    const current: () => boolean = (): boolean => !this.disposed && !this.threadDeleted && this.tid === tid &&
+      this.requestSeq === seq && authSession.matchesSession(session, owner);
+    this.replyPermissionPending = true;
+    try {
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current() || !this.canManageReplyPermission()) { return '账号或页面已变化，未修改评论权限'; }
+      if (this.currentSession().tbs.length === 0) {
+        await authSession.refreshTbs(context).catch((): void => {});
+        if (!current()) { return '账号或页面已变化，未修改评论权限'; }
+      }
+      const writeSession: TiebaSession = this.currentSession();
+      const result: ApiResult = await this.api.setMyThreadReplyPermission(device, writeSession, tid, target);
+      if (!current()) { return '账号或页面已变化，请刷新核对评论权限'; }
+      if (!result.ok) { return result.describeFailure(); }
+      this.replyPermission = target;
+      this.detail.replyPermission = target;
+      if (operation === this.replyPermissionOperation) { this.replyPermissionPending = false; }
+      // 切换进出「仅自己，同时隐藏已有评论」会隐藏或恢复他人评论，须重拉列表同步（官方 PbFragment.N6）。
+      if (previous === ThreadReplyPermission.SELF_ONLY || target === ThreadReplyPermission.SELF_ONLY) {
+        await this.refresh(context);
+      }
+      return '';
+    } catch (_) {
+      return '评论权限设置结果未确认，请刷新核对';
+    } finally {
+      if (operation === this.replyPermissionOperation) { this.replyPermissionPending = false; }
+    }
+  }
+
   canDeletePost(item: PostItem): boolean {
     const main: PostItem | undefined = this.mainPost();
     return this.ownsContent(item.author.id) && Number.isSafeInteger(item.pid) && item.pid > 0 &&
@@ -814,7 +1157,7 @@ export class ThreadDetailVM {
     if (confirmedOwner.length === 0 || confirmedOwner !== this.deletionOwner()) {
       return '账号或页面已变化，请重新确认删除';
     }
-    if (this.loading || this.isRefreshing || this.isSwitchingSort || this.replyPending) {
+    if (this.loading || this.isRefreshing || this.isSwitchingSort || this.isJumpingFloor || this.replyPending) {
       return '内容正在更新，请稍后再删除';
     }
     const validTarget: () => boolean = (): boolean => sub !== undefined ? this.canDeleteSubPost(parentPid, sub) :
@@ -900,7 +1243,10 @@ export class ThreadDetailVM {
     this.setSubStates(this.subStates.filter((item: SubPostThreadState): boolean => item.pid !== pid));
     this.postPages.delete(pid);
     this.agreeStates.delete(pid);
-    if (this.focusedReplyPid === pid) { this.focusedReplyPid = 0; }
+    if (this.focusedReplyPid === pid) {
+      this.focusedReplyPid = 0;
+      this.focusedSubPostPid = 0;
+    }
     if (this.hasMore && this.sortType !== ReplySortType.DESC) { this.rereadPageAfterDelete = this.loadedPage; }
     this.syncVisiblePosts();
   }
@@ -920,6 +1266,7 @@ export class ThreadDetailVM {
     this.subPostPages.delete(pid);
     this.subPostParents.delete(pid);
     this.agreeStates.delete(pid);
+    if (this.focusedSubPostPid === pid) { this.focusedSubPostPid = 0; }
     this.posts = this.posts.map((post: PostItem): PostItem => {
       if (post.pid !== parentPid) { return post; }
       const updated: PostItem = copyPostItem(post);
@@ -1008,8 +1355,11 @@ export class ThreadDetailVM {
   dispose(): void {
     this.disposed = true;
     this.requestSeq++;
+    this.isJumpingFloor = false;
     this.deleteOperation++;
     this.deletePending = false;
+    this.replyPermissionOperation++;
+    this.replyPermissionPending = false;
     this.deletedPid = 0;
     this.deletedParentPid = 0;
   }
@@ -1515,6 +1865,37 @@ export class ThreadDetailVM {
           state === undefined ? 'nostate' : state.errorText);
       }
     }
+  }
+
+  /** 将 spid 定位阶段已拉回的楼中楼页写入父楼状态，避免展开面板时再拉第一页覆盖目标页。 */
+  private applyLocatedSubPage(parentPid: number, page: SubPostPage): void {
+    let state: SubPostThreadState | undefined = this.findSubState(parentPid);
+    if (state === undefined) {
+      state = new SubPostThreadState();
+      state.pid = parentPid;
+      this.setSubStates(this.subStates.concat([state]));
+    }
+    state.subPosts = page.subPosts;
+    state.page = page;
+    state.hasMore = page.hasMore;
+    state.loadedOnce = true;
+    state.previewOnly = false;
+    state.errorText = '';
+    const authorId: number = this.detail.author.id;
+    for (let i = 0; i < page.subPosts.length; i++) {
+      const sub: SubPostItem = page.subPosts[i];
+      if (authorId > 0) {
+        sub.isThreadAuthor = sub.author.id === authorId;
+      }
+      this.subPostPages.set(sub.pid, page.currentPage);
+      this.subPostParents.set(sub.pid, parentPid);
+      const observed: AgreeState = this.subAgreeState(sub);
+      if (!observed.pending && !observed.toggled) {
+        observed.isAgreed = sub.isAgreed;
+        observed.count = sub.agreeCount;
+      }
+    }
+    this.touchSubStates();
   }
 
   /** 按 pid 查状态（走索引）；没有返回 undefined */

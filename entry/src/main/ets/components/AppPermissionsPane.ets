@@ -4,7 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { AppPermission, permissionStateLabel } from '../model/AppPermissions';
 import { AppPermissionsVM } from '../viewmodel/AppPermissionsVM';
 import {
-  SettingsActionRow, SettingsCard, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine
+  SettingsActionRow, SettingsCard, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine
 } from './SettingsComponents';
 
 @ComponentV2
@@ -35,7 +35,6 @@ export struct AppPermissionsPane {
 
   build() {
     Column() {
-      SettingsNote({ text: '权限可在系统设置中管理。' })
       SettingsCard({
         content: (): void => { this.PermissionRows() }
       })

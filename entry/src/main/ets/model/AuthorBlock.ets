@@ -53,3 +53,143 @@ export function parseAuthorBlock(bytes: Uint8Array, read: boolean): AuthorBlockR
   } catch (err) { return new AuthorBlockResult(); }
   return out;
 }
+
+export class ImBlacklistUser {
+  uid: number = 0;
+  uidText: string = '';
+  name: string = '';
+  nameShow: string = '';
+  portrait: string = '';
+
+  displayName(): string {
+    if (this.nameShow.length > 0) { return this.nameShow; }
+    if (this.name.length > 0) { return this.name; }
+    return this.uidText.length > 0 ? `用户 ${this.uidText}` : `用户 ${this.uid}`;
+  }
+}
+
+export class ImBlacklistResult {
+  code: number = -1;
+  message: string = '';
+  isMask: number = 0;
+  listRaw: string = '';
+  users: ImBlacklistUser[] = [];
+}
+
+export class ImMaskUpdateResult {
+  code: number = -1;
+  message: string = '';
+}
+
+/** 读取 IM `protobuf.Error`（tag 1=errorno、tag 2=usermsg）；只有 errorno!=0 才算错。 */
+function readImMaskError(reader: ProtoReader): ImMaskUpdateResult {
+  const out: ImMaskUpdateResult = new ImMaskUpdateResult();
+  out.code = 0;
+  while (reader.hasMore()) {
+    const tag: number = reader.readTag();
+    if (tag === 1 && reader.wireType === WireType.VARINT) {
+      out.code = reader.readInt32();
+    } else if (tag === 2 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      out.message = reader.readString();
+    } else {
+      reader.skipField();
+    }
+  }
+  return out;
+}
+
+function readImBlacklistUser(reader: ProtoReader): ImBlacklistUser {
+  const user: ImBlacklistUser = new ImBlacklistUser();
+  while (reader.hasMore()) {
+    const tag: number = reader.readTag();
+    if (tag === 1 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      user.name = reader.readString();
+    } else if (tag === 2 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      user.portrait = reader.readString();
+    } else if (tag === 3 && reader.wireType === WireType.VARINT) {
+      const id: bigint = reader.readInt64();
+      if (id > BigInt(0)) {
+        user.uidText = id.toString();
+        const num: number = Number(id);
+        if (Number.isSafeInteger(num)) { user.uid = num; }
+      }
+    } else if (tag === 4 && reader.wireType === WireType.LENGTH_DELIMITED) {
+      user.nameShow = reader.readString();
+    } else {
+      reader.skipField();
+    }
+  }
+  return user;
+}
+
+/** 解析 IM `GetMaskInfoResIdl`（104103）：1=Error、2=DataRes{isMask(1), list(2), users(3)}。 */
+export function parseImBlacklist(bytes: Uint8Array): ImBlacklistResult {
+  const out: ImBlacklistResult = new ImBlacklistResult();
+  if (bytes.length === 0) { return out; }
+  let hasError: boolean = false;
+  let hasData: boolean = false;
+  const seen: Set<string> = new Set<string>();
+  try {
+    const root: ProtoReader = new ProtoReader(bytes);
+    while (root.hasMore()) {
+      const field: number = root.readTag();
+      if (field === 1 && root.wireType === WireType.LENGTH_DELIMITED) {
+        const err: ImMaskUpdateResult = readImMaskError(root.readMessageView());
+        hasError = true;
+        out.code = err.code;
+        out.message = err.message;
+      } else if (field === 2 && root.wireType === WireType.LENGTH_DELIMITED) {
+        hasData = true;
+        const data: ProtoReader = root.readMessageView();
+        while (data.hasMore()) {
+          const tag: number = data.readTag();
+          if (tag === 1 && data.wireType === WireType.VARINT) {
+            out.isMask = data.readInt32();
+          } else if (tag === 2 && data.wireType === WireType.LENGTH_DELIMITED) {
+            out.listRaw = data.readString();
+          } else if (tag === 3 && data.wireType === WireType.LENGTH_DELIMITED) {
+            const user: ImBlacklistUser = readImBlacklistUser(data.readMessageView());
+            if (user.uidText.length > 0 && !seen.has(user.uidText)) {
+              seen.add(user.uidText);
+              out.users.push(user);
+            }
+          } else {
+            data.skipField();
+          }
+        }
+      } else {
+        root.skipField();
+      }
+    }
+    if (!hasError && !hasData) { return new ImBlacklistResult(); }
+    if (!hasError && hasData) { out.code = 0; }
+  } catch (err) {
+    return new ImBlacklistResult();
+  }
+  return out;
+}
+
+/** 解析 IM `UpdateMaskInfoResIdl`（104102）：1=Error。 */
+export function parseImMaskUpdate(bytes: Uint8Array): ImMaskUpdateResult {
+  const out: ImMaskUpdateResult = new ImMaskUpdateResult();
+  if (bytes.length === 0) { return out; }
+  let hasError: boolean = false;
+  try {
+    const root: ProtoReader = new ProtoReader(bytes);
+    while (root.hasMore()) {
+      const field: number = root.readTag();
+      if (field === 1 && root.wireType === WireType.LENGTH_DELIMITED) {
+        const err: ImMaskUpdateResult = readImMaskError(root.readMessageView());
+        hasError = true;
+        out.code = err.code;
+        out.message = err.message;
+      } else {
+        root.skipField();
+      }
+    }
+    if (!hasError) { return new ImMaskUpdateResult(); }
+  } catch (err) {
+    return new ImMaskUpdateResult();
+  }
+  return out;
+}

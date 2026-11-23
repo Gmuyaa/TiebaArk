@@ -30,25 +30,26 @@ function displayCount(value: string | number | undefined): string {
   return value;
 }
 
+@ObservedV2
 export class FollowForumItem {
   fid: number = 0;
   /** 吧名（kw，签到与进吧都用它） */
   fname: string = '';
-  level: number = 0;
-  isSigned: boolean = false;
+  @Trace level: number = 0;
+  @Trace isSigned: boolean = false;
   /** 缺 is_sign 时不能据默认 false 向吧头宣称未签到。 */
-  signKnown: boolean = false;
+  @Trace signKnown: boolean = false;
   /** 原始体确认前可能拿不到，界面退占位图 */
-  avatar: string = '';
+  @Trace avatar: string = '';
   concernNum: string = '';
   postNum: string = '';
 
-  levelName: string = '';
-  currentScore: number = -1;
-  nextScore: number = -1;
-  experienceError: string = '';
-  continuousCount: number = -1;
-  totalCount: number = -1;
+  @Trace levelName: string = '';
+  @Trace currentScore: number = -1;
+  @Trace nextScore: number = -1;
+  @Trace experienceError: string = '';
+  @Trace continuousCount: number = -1;
+  @Trace totalCount: number = -1;
 
   static copy(source: FollowForumItem): FollowForumItem {
     const item: FollowForumItem = new FollowForumItem();
@@ -59,6 +60,24 @@ export class FollowForumItem {
     item.nextScore = source.nextScore; item.experienceError = source.experienceError;
     item.continuousCount = source.continuousCount; item.totalCount = source.totalCount;
     return item;
+  }
+
+  /** 仅写入发生变化的字段，配合 @ObservedV2 实现行内局部刷新而不重建 ListItem。 */
+  applyFrom(source: FollowForumItem): boolean {
+    let changed: boolean = false;
+    if (this.level !== source.level) { this.level = source.level; changed = true; }
+    if (this.isSigned !== source.isSigned) { this.isSigned = source.isSigned; changed = true; }
+    if (this.signKnown !== source.signKnown) { this.signKnown = source.signKnown; changed = true; }
+    if (this.avatar !== source.avatar) { this.avatar = source.avatar; changed = true; }
+    if (this.concernNum !== source.concernNum) { this.concernNum = source.concernNum; }
+    if (this.postNum !== source.postNum) { this.postNum = source.postNum; }
+    if (this.levelName !== source.levelName) { this.levelName = source.levelName; changed = true; }
+    if (this.currentScore !== source.currentScore) { this.currentScore = source.currentScore; changed = true; }
+    if (this.nextScore !== source.nextScore) { this.nextScore = source.nextScore; changed = true; }
+    if (this.experienceError !== source.experienceError) { this.experienceError = source.experienceError; changed = true; }
+    if (this.continuousCount !== source.continuousCount) { this.continuousCount = source.continuousCount; changed = true; }
+    if (this.totalCount !== source.totalCount) { this.totalCount = source.totalCount; changed = true; }
+    return changed;
   }
 
   usable(): boolean {

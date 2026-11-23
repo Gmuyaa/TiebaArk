@@ -64,6 +64,7 @@ export class MyListItem {
   forumAvatar: string = '';
   /** 封面图（收藏有、浏览历史新记录有，其余为空 → 界面显示占位） */
   coverUrl: string = '';
+  coverIsGif: boolean = false;
   /** 副信息：回复数 / 浏览时间，由 VM 拼好 */
   meta: string = '';
   /**
@@ -494,6 +495,7 @@ export class MyListVM {
         row.forumName = item.forumName;
         row.forumAvatar = item.forumAvatar;
         row.coverUrl = item.coverUrl;
+        row.coverIsGif = item.coverIsGif;
         row.meta = item.timeMs > 0 ? formatRelativeTime(item.timeMs) : '';
         /*
          * 旧记录（加 `isDeleted` 字段之前存的）没有这个标记，但当时若帖子已不在，标题也是空的
@@ -527,7 +529,7 @@ export class MyListVM {
    */
   static async record(context: common.UIAbilityContext, tid: number, title: string,
     forumName: string, coverUrl: string, forumAvatar: string,
-    isDeleted: boolean = false, forumId: number = 0): Promise<void> {
+    isDeleted: boolean = false, forumId: number = 0, coverIsGif: boolean = false): Promise<void> {
     if (tid <= 0) {
       return;
     }
@@ -536,6 +538,7 @@ export class MyListVM {
     item.title = title;
     item.forumName = forumName;
     item.coverUrl = coverUrl;
+    item.coverIsGif = coverIsGif;
     item.forumAvatar = forumAvatar;
     item.isDeleted = isDeleted;
     item.timeMs = Date.now();
@@ -725,6 +728,7 @@ export class MyListVM {
       row.title = it.title.length > 0 ? it.title : `帖子 ${it.tid}`;
       row.forumName = it.forumName;
       row.coverUrl = it.coverUrl;
+      row.coverIsGif = it.coverIsGif;
       row.isDeleted = it.isDeleted;
       row.meta = it.authorName.length > 0 ? `${it.authorName} · ${it.replyNum} 回复`
         : `${it.replyNum} 回复`;

@@ -109,6 +109,34 @@ export interface BodyImageSource {
   originImageUrl: string;
   /** 原图字节数 */
   originBytes: number;
+  isGif?: boolean;
+}
+
+/** 依据扩展名与贴吧列表 CDN 实测形态（`frs` `src_pic` GIF 为 `w=1920`）识别动图。 */
+export function isGifImageUrl(url: string, highUrl: string = ''): boolean {
+  if (/\.gif(?:[?#]|$)/i.test(url) || /\.gif(?:[?#]|$)/i.test(highUrl)) {
+    return true;
+  }
+  const candidate: string = highUrl.length > 0 ? highUrl : url;
+  return /\/forum\/[^/]*(?:w%3D1920|w=1920)(?:%3B|;|\/|$)/i.test(candidate);
+}
+
+/** 正文/评论 GIF 判定：实测 `pb/page` 真 GIF 的 `big_cdn_src` 与 `cdn_src_active` 一致（静态图为 `w=960`/`w=1920`）。 */
+export function isGifBodyImage(image: BodyImageSource): boolean {
+  if (image.isGif === true) {
+    return true;
+  }
+  if (/\.gif(?:[?#]|$)/i.test(image.originImageUrl) ||
+    /\.gif(?:[?#]|$)/i.test(image.imageUrl) ||
+    /\.gif(?:[?#]|$)/i.test(image.bigImageUrl)) {
+    return true;
+  }
+  return image.bigImageUrl.length > 0 && image.imageUrl.length > 0 &&
+    image.bigImageUrl === image.imageUrl && image.bigImageUrl !== image.staticUrl;
+}
+
+export function isGifFeedImage(info: FeedImageInfo, key: string = ''): boolean {
+  return info.gif || isGifImageUrl(info.origin || key, info.high);
 }
 
 export class ViewerImage {
@@ -137,24 +165,30 @@ export function shouldPromoteLongToOrigin(policy: ImageLoadPolicy): boolean {
   return policy.quality === ImageQuality.ORIGINAL || policy.quality === ImageQuality.HIGH;
 }
 
-/** 列表预览图实际请求地址；`OFF` 返回空串表示仅渲染占位。 */
+/** 列表预览图实际请求地址；`OFF` 返回空串表示仅渲染占位，关闭动图自动播放时优先走静态首帧通道。 */
 export function feedPreviewSource(info: FeedImageInfo, key: string, policy: ImageLoadPolicy): string {
   if (policy.quality === ImageQuality.OFF) {
     return '';
   }
+  if (!policy.gifPlays) {
+    return info.staticUrl || info.thumb || key || info.high || info.origin;
+  }
   if (policy.quality === ImageQuality.ORIGINAL) {
-    return info.origin || info.high || key || info.thumb;
+    return info.origin || info.high || key || info.staticUrl || info.thumb;
   }
   if (policy.quality === ImageQuality.THUMB) {
-    return info.thumb || key || info.high || info.origin;
+    return info.thumb || key || info.staticUrl || info.high || info.origin;
   }
-  return info.high || key || info.thumb || info.origin;
+  return info.high || key || info.staticUrl || info.thumb || info.origin;
 }
 
-/** 正文/评论图实际请求地址；原图档优先原图，其余档位在关闭动图自动播放时走带 `g=0` 的静态通道。 */
+/** 正文/评论图实际请求地址；关闭动图自动播放时优先走带 `g=0` 的静态首帧通道，开启时按清晰度档位选择。 */
 export function bodyImageSource(image: BodyImageSource, isLong: boolean, policy: ImageLoadPolicy): string {
   if (policy.quality === ImageQuality.OFF) {
     return '';
+  }
+  if (!policy.gifPlays && image.staticUrl.length > 0) {
+    return image.staticUrl;
   }
   if (policy.quality === ImageQuality.ORIGINAL) {
     return image.originImageUrl || image.bigImageUrl || image.imageUrl || image.staticUrl;
@@ -162,13 +196,10 @@ export function bodyImageSource(image: BodyImageSource, isLong: boolean, policy:
   if (isLong && shouldPromoteLongToOrigin(policy) && image.originImageUrl.length > 0) {
     return image.originImageUrl;
   }
-  if (!policy.gifPlays && image.staticUrl.length > 0) {
-    return image.staticUrl;
-  }
   if (policy.quality === ImageQuality.HIGH) {
     return image.bigImageUrl || image.imageUrl || image.staticUrl || image.originImageUrl;
   }
-  return image.staticUrl || image.imageUrl || image.bigImageUrl || image.originImageUrl;
+  return image.imageUrl || image.staticUrl || image.bigImageUrl || image.originImageUrl;
 }
 
 /** 全屏查看器实际加载地址；`ORIGINAL` 或已点击「查看原图」取原图，`THUMB` 先取缩略图，其余先取高清大图。 */

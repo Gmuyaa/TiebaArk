@@ -23,9 +23,6 @@ export struct PrivacyMarksPane {
 
   build() {
     PreferencePaneScaffold({
-      note: '仅查看标记显示状态，不代表吧务权限。',
-      noteAfter: true,
-
       message: this.vm.error,
       onRetry: (): void => { void this.vm.load(this.context()); }
     }) {

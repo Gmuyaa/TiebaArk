@@ -5,7 +5,7 @@ import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { AvatarComponent } from './AvatarComponent';
 import { TaggedThreadText } from './TaggedThreadText';
 import { imageLoadStore } from '../common/appearance/ImageLoadStore';
-import { feedPreviewSource } from '../model/ImageLoadPolicy';
+import { feedPreviewSource, isGifFeedImage } from '../model/ImageLoadPolicy';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { feedImageInfo } from '../model/HomeFeedPresentation';
 import { ImageTransitionSource } from './ImageTransition';
@@ -69,15 +69,23 @@ export struct HelpThreadCard {
           if (height >= 80 && Math.abs(height - this.textHeight) > 0.5) { this.textHeight = height; }
         })
       if (this.item.coverImage.length > 0) {
-        Column() {
+        Stack({ alignContent: Alignment.BottomEnd }) {
           if (imageLoadStore.isAutoLoadOff()) {
             Text('查看图片').fontSize(12).fontColor(AppTheme.ACCENT)
+              .width('100%').height('100%').textAlign(TextAlign.Center)
           } else if (this.coverPreviewUrl().length > 0) {
             ForEach([this.coverPreviewUrl()], (src: string) => {
               Image(src).width('100%').height('100%').objectFit(ImageFit.Contain).borderRadius(9)
             }, (src: string) => src)
+            if (isGifFeedImage(feedImageInfo(this.item.coverImage), this.item.coverImage)) {
+              Text('GIF').fontSize(10).fontColor(Color.White)
+                .backgroundColor('#88000000').borderRadius(4)
+                .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+                .margin({ right: 4, bottom: 4 })
+                .hitTestBehavior(HitTestMode.None)
+            }
           }
-        }.width(80).height(this.textHeight).justifyContent(FlexAlign.Center)
+        }.width(80).height(this.textHeight)
           .geometryTransition(this.coverPreviewUrl().length > 0
             ? this.imageTransition.id(this.coverPreviewUrl()) : '', { follow: true })
           .renderFit(RenderFit.RESIZE_FILL)

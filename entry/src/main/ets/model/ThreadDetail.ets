@@ -305,7 +305,7 @@ export enum ContentKind {
 }
 
 /** 富文本的一个片段。字段按 kind 取用，未用到的保持默认值 */
-export class ContentPiece {
+export class ContentPiece implements BodyImageSource {
   voice: VoiceClip | undefined = undefined;
   kind: ContentKind = ContentKind.TEXT;
   text: string = '';
@@ -322,6 +322,7 @@ export class ContentPiece {
   originImageUrl: string = '';
   /** 原图字节数 */
   originBytes: number = 0;
+  isGif: boolean = false;
   /** 解析失败为 0，由 UI 兜底比例 */
   width: number = 0;
   height: number = 0;
@@ -538,6 +539,7 @@ export class ContentPiece {
       c.bigImageUrl = toStr(raw.big_cdn_src);
       c.originImageUrl = toStr(raw.origin_src);
       c.originBytes = toBytes(raw.origin_size);
+      c.isGif = raw.is_gif === 1 || raw.is_gif === '1';
       const size: number[] = ContentPiece.parseSize(toStr(raw.bsize));
       c.width = size[0];
       c.height = size[1];
@@ -597,6 +599,7 @@ export class ContentImage implements BodyImageSource {
   originImageUrl: string = '';
   /** 原图字节数 */
   originBytes: number = 0;
+  isGif: boolean = false;
   /** 原始宽高；0 表示服务端没给，由 UI 用默认比例兜底 */
   width: number = 0;
   height: number = 0;
@@ -662,6 +665,7 @@ export function groupContentBlocks(pieces: ContentPiece[]): ContentBlock[] {
     img.bigImageUrl = piece.bigImageUrl;
     img.originImageUrl = piece.originImageUrl;
     img.originBytes = piece.originBytes;
+    img.isGif = piece.isGif;
     img.width = piece.width;
     img.height = piece.height;
     block.images.push(img);
@@ -933,6 +937,60 @@ export function unsupportedSortTip(type: ReplySortType): string {
     : '该排序暂不支持';
 }
 
+/** 单帖评论权限读取值（`anti.reply_private_flag`）；写入 `c/c/friend/setprivate` 时需经 `replyPermissionWriteValue` 映射。 */
+export enum ThreadReplyPermission {
+  UNKNOWN = 0,
+  ALL = 1,
+  FANS = 2,
+  FOLLOWING = 3,
+  SELF_ONLY = 4
+}
+
+export class ThreadReplyPermissionOption {
+  readonly permission: ThreadReplyPermission;
+  readonly label: string;
+  readonly writeValue: number;
+
+  constructor(permission: ThreadReplyPermission, label: string, writeValue: number) {
+    this.permission = permission;
+    this.label = label;
+    this.writeValue = writeValue;
+  }
+}
+
+export const THREAD_REPLY_PERMISSION_OPTIONS: ThreadReplyPermissionOption[] = [
+  new ThreadReplyPermissionOption(ThreadReplyPermission.ALL, '所有人', 1),
+  new ThreadReplyPermissionOption(ThreadReplyPermission.FANS, '我的粉丝', 5),
+  new ThreadReplyPermissionOption(ThreadReplyPermission.FOLLOWING, '我关注的人', 6),
+  new ThreadReplyPermissionOption(ThreadReplyPermission.SELF_ONLY, '仅自己，同时隐藏已有评论', 7)
+];
+
+export function parseThreadReplyPermission(value: number | string | undefined): ThreadReplyPermission {
+  let num: number = 0;
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value)) { return ThreadReplyPermission.UNKNOWN; }
+    num = value;
+  } else if (typeof value === 'string' && /^[1-4]$/.test(value)) {
+    num = Number(value);
+  } else {
+    return ThreadReplyPermission.UNKNOWN;
+  }
+  if (num === 1) { return ThreadReplyPermission.ALL; }
+  if (num === 2) { return ThreadReplyPermission.FANS; }
+  if (num === 3) { return ThreadReplyPermission.FOLLOWING; }
+  if (num === 4) { return ThreadReplyPermission.SELF_ONLY; }
+  return ThreadReplyPermission.UNKNOWN;
+}
+
+/** 读回值 1/2/3/4 映射到写接口 `val` 的 1/5/6/7（`k48.q` / `PbFragment.N6`）；不能原样上送。 */
+export function replyPermissionWriteValue(permission: ThreadReplyPermission): number {
+  if (permission === ThreadReplyPermission.ALL) { return 1; }
+  if (permission === ThreadReplyPermission.FANS) { return 5; }
+  if (permission === ThreadReplyPermission.FOLLOWING) { return 6; }
+  if (permission === ThreadReplyPermission.SELF_ONLY) { return 7; }
+  return 0;
+}
+
 /** 点赞目标有效性判断，区分主题、楼层与楼中楼的标识；缺失必要标识时不发送请求。 */
 
 /** 主帖点赞的 `obj_type`。与 `net/TiebaParams` 的 `AgreeObjType.THREAD` 同值（3） */
@@ -1166,6 +1224,7 @@ export class ThreadDetail {
   contentStatement: string = '';
 
   isStored: boolean = false;
+  replyPermission: ThreadReplyPermission = ThreadReplyPermission.UNKNOWN;
   author: UserBrief = new UserBrief();
   posts: PostItem[] = [];
 
@@ -1224,6 +1283,8 @@ export class ThreadDetail {
         Math.floor(thread.collect_num) : -1;
       d.author = UserBrief.fromRaw(thread.author);
     }
+
+    d.replyPermission = parseThreadReplyPermission(raw.anti?.reply_private_flag);
 
     const forum: RawDetailForum | undefined = raw.forum;
     if (forum !== undefined) {
@@ -1372,6 +1433,8 @@ export function filterPostsByOp(posts: PostItem[], authorId: number): PostItem[]
 
 /** `/c/f/pb/floor` 的结果：某楼的楼中楼 */
 export class SubPostPage {
+  /** 父楼层 id（`/c/f/pb/floor` 响应中的 `post.id`，按 `spid` 反查所属楼层时使用） */
+  parentPid: number = 0;
   subPosts: SubPostItem[] = [];
   /** 楼中楼总数（服务端给的，可能大于本页条数） */
   totalCount: number = 0;
@@ -1380,17 +1443,21 @@ export class SubPostPage {
   hasMore: boolean = false;
 
   /**
-   * `threadAuthorId` 用于标记"楼主"，取自详情页的主题作者。
+   * `threadAuthorId` 用于标记"楼主"，取自详情页的主题作者；传 0 时回退读取响应内 `thread.author.id`。
    * 楼主昵称从本响应的 `thread.author` 取（实测 floor 端点会带 thread），
    * 因为被回复人只有昵称、没有 uid，判断"被回复的是不是楼主"只能按名字比对。
    */
   static fromRaw(raw: RawSubPostPageResponse, threadAuthorId: number, nowMs: number): SubPostPage {
     const p: SubPostPage = new SubPostPage();
+    p.parentPid = raw.post === undefined ? 0 : toNum(raw.post.id);
+    const resolvedAuthorId: number = threadAuthorId !== 0
+      ? threadAuthorId
+      : (raw.thread?.author === undefined ? 0 : toNum(raw.thread.author.id));
     const authorName: string = SubPostPage.threadAuthorName(raw);
     const list: RawSubPost[] | undefined = raw.subpost_list;
     if (list !== undefined) {
       for (let i = 0; i < list.length; i++) {
-        p.subPosts.push(SubPostPage.subFromRaw(list[i], threadAuthorId, authorName, nowMs));
+        p.subPosts.push(SubPostPage.subFromRaw(list[i], resolvedAuthorId, authorName, nowMs));
       }
     }
     p.totalCount = toNum(raw.subpost_num);

@@ -13,7 +13,7 @@ import {
 const STORE: string = 'tieba_thread_block';
 const KEY_HIDDEN: string = 'hidden_threads';
 const KEY_FORUMS: string = 'blocked_forums';
-/** 拉黑用户名单（uid + 昵称）的账号级键：本机记录，服务端无全量列表可读 */
+/** 拉黑用户名单（uid + 昵称 + 头像）的账号级镜像，与官方黑名单同步并用于帖子流过滤。 */
 const KEY_USERS: string = 'blocked_users';
 
 interface RawStringList {
@@ -49,11 +49,7 @@ export class ThreadBlockStore {
   @Trace hidden: HiddenThread[] = [];
   /** 已屏蔽的吧名（归一化后的纯吧名，不含「吧」后缀） */
   @Trace blockedForums: string[] = [];
-  /**
-   * 本机记录"拉黑过的用户"（uid + 昵称）。
-   * ⚠️ 服务端没有全量黑名单 HTTP 接口，这份名单只是**本应用内的部分视图**，
-   * 界面必须如实说明（见 `model/ThreadBlock.ets` 的 `BlockedUser`）。
-   */
+  /** 账号级拉黑用户镜像（与官方黑名单同步，并用于帖子列表过滤）。 */
   @Trace blockedUsers: BlockedUser[] = [];
   @Trace reading: boolean = false;
   @Trace loaded: boolean = false;
@@ -258,11 +254,13 @@ export class ThreadBlockStore {
     });
   }
 
-  async rememberBlockedUser(context: common.UIAbilityContext, uid: number, name: string): Promise<void> {
+  async rememberBlockedUser(context: common.UIAbilityContext, uid: number, name: string,
+    portrait: string = ''): Promise<void> {
     if (!Number.isSafeInteger(uid) || uid <= 0) { return; }
     const user: BlockedUser = new BlockedUser();
     user.uid = uid;
     user.name = name;
+    user.portrait = portrait;
     user.timeMs = Date.now();
     await this.change(context, KEY_USERS, async (current: string, _session: string): Promise<boolean> => {
       this.blockedUsers = mergeBlockedUser(this.blockedUsers, user);
@@ -277,12 +275,22 @@ export class ThreadBlockStore {
     });
   }
 
-  /**
-   * 服务端完整屏蔽吧列表覆盖镜像；部分分页只合并，保留尚未读到的吧。
-   *
-   * ⚠️ 只有吧这一份能这么做：拉黑用户**没有**服务端全量列表可读（见 `BlockedUser`），
-   * 所以本机的拉黑名单永远只是部分视图，不会被这里覆盖。
-   */
+  /** 用服务端官方黑名单全量覆盖当前账号的本机过滤镜像。 */
+  async replaceBlockedUsers(context: common.UIAbilityContext, users: BlockedUser[]): Promise<void> {
+    await this.change(context, KEY_USERS, async (current: string, _session: string): Promise<boolean> => {
+      const seen: Set<number> = new Set<number>();
+      const next: BlockedUser[] = [];
+      for (const item of users) {
+        if (!Number.isSafeInteger(item.uid) || item.uid <= 0 || seen.has(item.uid)) { continue; }
+        seen.add(item.uid);
+        next.push(item);
+      }
+      this.blockedUsers = next;
+      return this.persist(context, scoped(KEY_USERS, current), serializeBlockedUsers(this.blockedUsers));
+    });
+  }
+
+  /** 服务端完整屏蔽吧列表覆盖镜像；部分分页只合并，保留尚未读到的吧。 */
   async replaceBlockedForums(context: common.UIAbilityContext, forums: string[], complete: boolean = true): Promise<void> {
     await this.change(context, KEY_FORUMS, async (current: string, _session: string): Promise<boolean> => {
       const incoming: string[] = normalizeForumNames(forums);

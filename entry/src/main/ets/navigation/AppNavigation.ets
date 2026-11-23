@@ -31,6 +31,8 @@ export interface ThreadDetailParams {
   videoMode?: boolean;
   /** 我的回复入口携带真实回复 id；缺省仍按普通首页加载。 */
   targetPid?: number;
+  /** 目标回复为楼中楼子回复（`targetPid` 为 `spid`）；置 true 时先经 `/c/f/pb/floor` 反查父楼层。 */
+  targetIsSubPost?: boolean;
   /** 列表页已归一化的回复数，先显示；加载完成后以详情响应为准。没有就缺省 */
   replyCount?: number;
   /** 来源吧名兜底；不知道就别传，空串等同缺省 */

@@ -62,7 +62,9 @@ export enum SettingsPane {
   IMAGE_LAYOUT = 40,
   IMAGE_QUALITY_WIFI = 41,
   IMAGE_QUALITY_MOBILE = 42,
-  GIF_AUTOPLAY = 43
+  GIF_AUTOPLAY = 43,
+  DISCLAIMER = 44,
+  VOICE_PLAYER_STYLE = 45
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -134,6 +136,7 @@ export interface SettingsState {
   imageQualityWifiLabel?: string;
   imageQualityMobileLabel?: string;
   gifAutoPlayLabel?: string;
+  voicePlayerStyleLabel?: string;
 
   superResolution: boolean;
   /** 全应用统一智感握姿偏好，默认开。 */
@@ -157,8 +160,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.272';
-export const SETTINGS_VERSION_CODE: string = '2611124';
+export const SETTINGS_APP_VERSION: string = '1.0.273';
+export const SETTINGS_VERSION_CODE: string = '2611125';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -242,6 +245,8 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
         paneEntry('image_quality_mobile', '图片质量（移动数据）', state.imageQualityMobileLabel ?? '高清',
           SettingsPane.IMAGE_QUALITY_MOBILE),
         paneEntry('gif_autoplay', '动图自动播放', state.gifAutoPlayLabel ?? '仅 Wi-Fi', SettingsPane.GIF_AUTOPLAY),
+        paneEntry('voice_player_style', '语音样式', state.voicePlayerStyleLabel ?? '滑块条',
+          SettingsPane.VOICE_PLAYER_STYLE),
         paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
         switchEntry('super_resolution', '显示超分按钮', state.superResolution)
       ];
@@ -281,7 +286,7 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
       return [
         paneEntry('forbidden_forums', '屏蔽吧', '', SettingsPane.FORBIDDEN_FORUMS),
 
-        paneEntry('block_manage', '拉黑的用户', '', SettingsPane.BLOCK_MANAGE),
+        paneEntry('block_manage', '黑名单', '', SettingsPane.BLOCK_MANAGE),
         paneEntry('hidden_threads', '隐藏的帖子', '', SettingsPane.HIDDEN_THREADS),
         paneEntry('app_permissions', '系统权限', '', SettingsPane.APP_PERMISSIONS),
         paneEntry('data_use', '数据使用说明', '', SettingsPane.DATA_USE)
@@ -360,12 +365,16 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '图片质量（移动数据）';
     case SettingsPane.GIF_AUTOPLAY:
       return '动图自动播放';
+    case SettingsPane.VOICE_PLAYER_STYLE:
+      return '语音样式';
     case SettingsPane.FORUM_DEFAULT_TAB:
       return '进吧默认分区';
     case SettingsPane.DARK_MODE:
       return '深色模式';
     case SettingsPane.ABOUT:
       return '关于贴吧Ark';
+    case SettingsPane.DISCLAIMER:
+      return '免责声明';
     case SettingsPane.ACCOUNT:
       return '账号与资料';
     case SettingsPane.APPEARANCE:
@@ -399,7 +408,7 @@ export function settingsPaneTitle(pane: SettingsPane): string {
     case SettingsPane.FORBIDDEN_FORUMS:
       return '屏蔽吧';
     case SettingsPane.BLOCK_MANAGE:
-      return '拉黑的用户';
+      return '黑名单';
     case SettingsPane.HIDDEN_THREADS:
       return '隐藏的帖子';
     case SettingsPane.PRIVACY_MARKS:
@@ -444,6 +453,7 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
     case SettingsPane.IMAGE_QUALITY_WIFI:
     case SettingsPane.IMAGE_QUALITY_MOBILE:
     case SettingsPane.GIF_AUTOPLAY:
+    case SettingsPane.VOICE_PLAYER_STYLE:
       return SettingsPane.BROWSING;
     case SettingsPane.MOTION:
       return SettingsPane.INTERACTION;
@@ -461,6 +471,7 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
     case SettingsPane.DATA_USE:
       return SettingsPane.PRIVACY_SETTINGS;
     case SettingsPane.VERSION:
+    case SettingsPane.DISCLAIMER:
       return SettingsPane.ABOUT;
     default:
       return SettingsPane.NONE;
@@ -502,6 +513,7 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.IMAGE_QUALITY_WIFI:
     case SettingsPane.IMAGE_QUALITY_MOBILE:
     case SettingsPane.GIF_AUTOPLAY:
+    case SettingsPane.VOICE_PLAYER_STYLE:
       return SettingsPanePresentation.POPUP;
     case SettingsPane.ABOUT:
     case SettingsPane.NONE:

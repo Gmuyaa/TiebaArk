@@ -3,7 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { messageMaskLabel, messagePushLabel } from '../model/MessageSettings';
 import { MessageSettingsVM } from '../viewmodel/MessageSettingsVM';
 import {
-  SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsNote, SettingsStatusKind, SettingsStatusLine
+  SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine
 } from './SettingsComponents';
 
 @ComponentV2
@@ -28,7 +28,6 @@ export struct MessageSettingsPane {
       SettingsCard({
         content: (): void => { this.MessageRows() }
       })
-      SettingsNote({ text: '仅查看贴吧账号设置，暂不支持系统通知。' })
       if (this.vm.error.length > 0) {
         SettingsStatusLine({
           kind: SettingsStatusKind.ERROR,
@@ -55,7 +54,6 @@ export struct MessageSettingsPane {
     })
     SettingsEntryRow({
       label: '官方账号消息提醒',
-      summary: '仅查看',
       showDivider: false,
       onTap: this.onOpenOfficial
     })

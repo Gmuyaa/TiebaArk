@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.Gmuyaa.TiebaArk",
     "vendor": "example",
-    "versionCode": 2611124,
-    "versionName": "1.0.272",
+    "versionCode": 2611125,
+    "versionName": "1.0.273",
     "buildVersion": "1",
     "icon": "$media:layered_image",
     "label": "$string:app_name",

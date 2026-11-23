@@ -79,6 +79,7 @@ export struct MessageView {
   /** 顶部页签：0 = 通知，1 = 聊天（⚠️ 不能叫 tabIndex，与 ArkUI 内置属性 .tabIndex() 冲突） */
   @Local msgTabIndex: number = 0;
   @Param active: boolean = true;
+  @Param bottomBarOcclusion: number = 0;
   @Local auth: AuthSession = authSession;
   @Local unread: NotifyUnreadVM = notifyUnreadVM;
   @Local chat: ChatListVM = chatListVM;
@@ -326,10 +327,16 @@ export struct MessageView {
             })
           }
         }, (row: NotifyRow) => `${row.title}:${visualThemeStore.theme}`)
+        if (this.bottomBarOcclusion > 0) {
+          ListItem() {
+            Column().width('100%').height(this.bottomBarOcclusion)
+              .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
+          }.id('message-notify-bottom-occlusion')
+        }
       }
       .width('100%')
+      .height('100%')
       .padding({ left: 16, right: 16, top: 12 })
-      .layoutWeight(1)
       .edgeEffect(motionEdgeEffect()).scrollBar(BarState.Off)
     }.layoutWeight(1).refreshOffset(PULL_REFRESH_OFFSET)
     .onStateChange((state: RefreshStatus): void => {
@@ -395,10 +402,16 @@ export struct MessageView {
         if (this.chat.loaded && this.chat.groups.length === 0 && this.chat.error.length === 0) {
           ListItem() { PageState({ message: '还没有私信会话' }) }
         }
+        if (this.bottomBarOcclusion > 0) {
+          ListItem() {
+            Column().width('100%').height(this.bottomBarOcclusion)
+              .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
+          }.id('message-chat-bottom-occlusion')
+        }
       }
       .width('100%')
+      .height('100%')
       .padding({ left: 16, right: 16, top: 12 })
-      .layoutWeight(1)
       .edgeEffect(motionEdgeEffect()).scrollBar(BarState.Off)
     }.layoutWeight(1).refreshOffset(PULL_REFRESH_OFFSET)
     .onStateChange((state: RefreshStatus): void => {

@@ -12,6 +12,7 @@ export struct HomeComposeButton {
   @Param viewportHeight: number = 0;
   @Param topInset: number = 0;
   @Param active: boolean = true;
+  @Param externalOffsetX: number = 0;
   @Event onCompose: () => void = (): void => {};
 
   build() {
@@ -21,6 +22,7 @@ export struct HomeComposeButton {
       viewportHeight: this.viewportHeight,
       topInset: this.topInset,
       active: this.active,
+      externalOffsetX: this.externalOffsetX,
       symbol: $r('sys.symbol.plus'),
       diameter: 48,
       iconSize: 24,

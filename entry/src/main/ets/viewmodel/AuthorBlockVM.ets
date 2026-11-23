@@ -101,6 +101,13 @@ export class AuthorBlockVM {
       if (recover && this.current()) { this.known = false; void this.load(context, true); }
     }
   }
+
+  applySynced(blocked: boolean): void {
+    if (!this.current() || this.pending) { return; }
+    this.blocked = blocked;
+    this.known = true;
+    this.readAt = Date.now();
+  }
 }
 
 const blocks: Map<string, AuthorBlockVM> = new Map<string, AuthorBlockVM>();
@@ -109,4 +116,26 @@ export function authorBlockAction(uid: number): AuthorBlockVM {
   let vm: AuthorBlockVM | undefined = blocks.get(key);
   if (vm === undefined) { vm = new AuthorBlockVM(uid); blocks.set(key, vm); }
   return vm;
+}
+
+/** 用官方全量黑名单刷新当前账号已缓存的作者屏蔽态，避免评论区等待 30 秒 TTL。 */
+export function syncAuthorBlockCache(blockedUids: number[]): void {
+  const prefix: string = `${account()}:`;
+  const blockedSet: Set<number> = new Set<number>(blockedUids);
+  blocks.forEach((vm: AuthorBlockVM, key: string): void => {
+    if (!key.startsWith(prefix)) { return; }
+    const uid: number = Number(key.substring(prefix.length));
+    if (!Number.isSafeInteger(uid) || uid <= 0) { return; }
+    if (blockedSet.has(uid)) {
+      vm.applySynced(true);
+    } else if (vm.known && vm.blocked) {
+      vm.applySynced(false);
+    }
+  });
+}
+
+export function markAuthorBlocked(uid: number, blocked: boolean): void {
+  if (!Number.isSafeInteger(uid) || uid <= 0) { return; }
+  const vm: AuthorBlockVM | undefined = blocks.get(`${account()}:${uid}`);
+  if (vm !== undefined) { vm.applySynced(blocked); }
 }
