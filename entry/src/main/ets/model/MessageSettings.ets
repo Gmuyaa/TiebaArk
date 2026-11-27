@@ -37,11 +37,26 @@ export function parseMessageSettings(text: string): MessageSettings {
   return result;
 }
 
+export const ALL_MESSAGE_MASK_VALUES: number[] = [0, 1, 3];
+
 export function messageMaskLabel(value: number): string {
   if (value === 0) { return '接收全部私信'; }
   if (value === 1) { return '拒收陌生人私信'; }
   if (value === 3) { return '拒收全部私信'; }
   return '未确认';
+}
+
+export function messageMaskOptionLabels(): string[] {
+  return ALL_MESSAGE_MASK_VALUES.map((v: number): string => messageMaskLabel(v));
+}
+
+export function messageMaskOptionIndex(value: number): number {
+  return ALL_MESSAGE_MASK_VALUES.indexOf(value);
+}
+
+export function messageMaskOptionValue(index: number): number {
+  if (index < 0 || index >= ALL_MESSAGE_MASK_VALUES.length) { return -1; }
+  return ALL_MESSAGE_MASK_VALUES[index];
 }
 
 export function messagePushLabel(value: number): string {

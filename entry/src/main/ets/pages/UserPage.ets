@@ -4,7 +4,7 @@ import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpi
 import { FollowButton } from '../components/FollowButton';
 import { ForumActionButton } from '../components/ForumActionButton';
 import { UserGrowthBadge } from '../components/UserGrowthBadge';
-import { followChanges } from '../viewmodel/FollowActionVM';
+import { FollowChanges, followChanges } from '../viewmodel/FollowActionVM';
 /** 官方公开个人主页：资料、社交列表、帖子/回复/关注的吧，沿用鸿蒙共享导航。 */
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
@@ -22,6 +22,7 @@ import { ImageTransitionSource, closeImageTransition, imageLayerRetentionTransit
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { formatTimeText } from '../model/TimeText';
 import { UserPostItem, userReplyKey } from '../model/MyContent';
+import { ListDataSource } from '../model/ListDataSource';
 import { profilePortrait } from '../model/PageDirectory';
 import { ContentPiece, portraitUrl } from '../model/ThreadDetail';
 import { displayName, formatCount, ProfileForum, UserProfileInfo } from '../model/UserProfile';
@@ -30,6 +31,7 @@ import { openContentPiece } from '../navigation/ContentNavigation';
 import { UserPageVM } from '../viewmodel/UserPageVM';
 import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { avatarTrace } from '../utils/AvatarTrace';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
@@ -58,7 +60,7 @@ export struct UserPage {
   @Local vm: UserPageVM = new UserPageVM();
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
-  private changes = followChanges;
+  @Local changes: FollowChanges = followChanges;
   private relationshipRefreshPending: boolean = false;
   private deletionRevision: number = contentDeletionRevision();
 
@@ -82,6 +84,26 @@ export struct UserPage {
     this.vm.refresh(this.context());
   }
   private tabs: string[] = ['帖子', '回复', '关注的吧'];
+  @Local itemSource: ListDataSource<UserPostItem> = new ListDataSource<UserPostItem>();
+  @Local forumSource: ListDataSource<ProfileForum> = new ListDataSource<ProfileForum>();
+
+  private userItemKey(item: UserPostItem): string {
+    return this.vm.tab === 1 ? userReplyKey(item) : String(item.tid);
+  }
+
+  @Monitor('vm.items', 'vm.tab')
+  syncUserItems(): void {
+    this.itemSource.sync(this.vm.items,
+      (item: UserPostItem): string => this.userItemKey(item),
+      (item: UserPostItem): string => this.vm.tab === 1 ? userReplyKey(item) : String(item.tid));
+  }
+
+  @Monitor('vm.forums')
+  syncUserForums(): void {
+    this.forumSource.sync(this.vm.forums,
+      (forum: ProfileForum): string => `${forum.name}-${forum.avatar}`,
+      (forum: ProfileForum): string => forum.name);
+  }
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private cardImageScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
   @Local viewerImages: string[] = [];
@@ -230,7 +252,7 @@ export struct UserPage {
               }
             }
             if (this.vm.tab === 2) {
-              ForEach(this.vm.forums, (forum: ProfileForum) => {
+              LazyForEach(this.forumSource, (forum: ProfileForum) => {
                 ListItem() {
                   Row({ space: 14 }) {
                     AvatarComponent({ url: forum.avatar, avatarSize: 42, fallbackName: forum.name })
@@ -241,12 +263,12 @@ export struct UserPage {
                 }
               }, (forum: ProfileForum) => `${forum.name}-${forum.avatar}`)
             } else {
-              ForEach(this.vm.items, (item: UserPostItem) => {
+              LazyForEach(this.itemSource, (item: UserPostItem) => {
                 ListItem() {
                   if (this.vm.tab === 0) { this.ThreadCard(item) }
                   else { this.PostCard(item) }
                 }
-              }, (item: UserPostItem) => this.vm.tab === 1 ? userReplyKey(item) : String(item.tid))
+              }, (item: UserPostItem) => this.userItemKey(item))
             }
             if ((this.vm.tab === 2 ? this.vm.forums.length : this.vm.items.length) === 0) {
               ListItem() {
@@ -262,7 +284,9 @@ export struct UserPage {
                   endText: '暂无更多可见内容', onRetry: (): void => { void this.vm.load(this.context(), true); } })
               }
             }
-          }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
+          }.width('100%').height('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+          .alignSelf(ItemAlign.Center).padding({ left: 12, right: 12, top: 8 })
+          .cachedCount(3)
           .edgeEffect(motionEdgeEffect()).onReachEnd(() => {
             if (this.vm.pagingError.length === 0) { this.vm.load(this.context(), true); }
           })

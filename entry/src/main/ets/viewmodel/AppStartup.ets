@@ -8,6 +8,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { authSession } from '../auth/AuthSession';
 import { networkKindWatch } from '../utils/NetworkKindWatch';
 import { initForumAvatarCache } from '../utils/ForumAvatarPrefs';
+import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { restoreForumCache } from './ForumReadCache';
 
 const DOMAIN: number = 0x0000;
@@ -17,6 +18,7 @@ export function startPostConsentServices(context: common.UIAbilityContext): void
   if (postConsentStarted) { return; }
   postConsentStarted = true;
   void initForumAvatarCache(context);
+  void DeviceIdentity.ensure(context);
   networkKindWatch.start();
   authSession.restore(context).then(() => {
     restoreForumCache(context);

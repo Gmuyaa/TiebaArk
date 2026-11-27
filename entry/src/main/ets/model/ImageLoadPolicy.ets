@@ -110,6 +110,7 @@ export interface BodyImageSource {
   /** 原图字节数 */
   originBytes: number;
   isGif?: boolean;
+  isLong?: boolean;
 }
 
 /** 依据扩展名与贴吧列表 CDN 实测形态（`frs` `src_pic` GIF 为 `w=1920`）识别动图。 */
@@ -150,6 +151,8 @@ export class ViewerImage {
   originBytes: number = 0;
   /** 兜底展示地址 */
   fallback: string = '';
+  /** 服务端或上游已知的长图标记 */
+  isLong: boolean = false;
 
   /** 与 `ImageTransition` 共享转场配对键一致（原图优先，缺失退展示图）。 */
   transitionKey(): string {
@@ -233,6 +236,7 @@ export function viewerImagesForFeed(keys: string[], origins: string[] = []): Vie
     img.thumb = info.thumb || key || img.high || img.origin;
     img.fallback = key || info.thumb || img.origin;
     img.originBytes = info.originBytes;
+    img.isLong = info.long;
     out.push(img);
   }
   return out;
@@ -249,6 +253,7 @@ export function viewerImagesForBody(items: BodyImageSource[]): ViewerImage[] {
     img.thumb = item.staticUrl || item.imageUrl || img.high || img.origin;
     img.fallback = item.imageUrl || item.staticUrl || img.origin;
     img.originBytes = item.originBytes;
+    img.isLong = item.isLong === true;
     out.push(img);
   }
   return out;

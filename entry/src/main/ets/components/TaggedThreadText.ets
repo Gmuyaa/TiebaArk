@@ -10,6 +10,8 @@ import { HelpTag } from './HelpTag';
 export struct TaggedThreadText {
   @Param text: string = '';
   @Param labels: string[] = [];
+  /** 吧内帖子所属的独立分区前缀（如「闲聊&求助」）；仅吧内卡片传入，展示为「分区 | 标题」。 */
+  @Param prefix: string = '';
   @Param textSize: number = 16;
   @Param lineSize: number = 24;
   @Param weight: FontWeight = FontWeight.Bold;
@@ -33,6 +35,10 @@ export struct TaggedThreadText {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Text() {
+        if (this.prefix.length > 0) {
+          Span(this.prefix).fontColor(this.textColor ?? AppTheme.TEXT_MAIN)
+          Span('  |  ').fontColor(AppTheme.TEXT_MUTED).fontWeight(FontWeight.Normal)
+        }
         ForEach(ContentPiece.listFromRaw([{ type: 0, text: this.text.length > 0 ? this.text : '\u200b' }]),
           (piece: ContentPiece, index: number) => {
             if (piece.kind === ContentKind.EMOJI && piece.emojiUrl.length > 0) {
@@ -44,7 +50,7 @@ export struct TaggedThreadText {
         .fontColor(this.textColor ?? AppTheme.TEXT_MAIN).lineHeight(`${this.lineSize}fp`)
         .textIndent(`${this.firstIndent()}vp`)
         .maxLines(this.lines).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-        .accessibilityText(`${this.labels.join(' ')} ${this.text}`.trim())
+        .accessibilityText(`${this.labels.join(' ')} ${this.prefix} ${this.text}`.trim())
       if (this.labels.length > 0) {
         Row({ space: 4 * this.fontRatio() }) {
           ForEach(this.labels, (label: string) => {

@@ -201,7 +201,7 @@ export struct MessageView {
         title: '登录后查看通知',
         subtitle: '查看收到的赞、回复和 @ 提醒',
         onLogin: (): void => {
-          router.pushUrl({ url: 'pages/Login' });
+          void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
         }
       })
     } else {
@@ -397,7 +397,7 @@ export struct MessageView {
               }
             })
           }
-          .swipeAction({ end: this.swipeEnd.bind(this, group), edgeEffect: SwipeEdgeEffect.Spring })
+          .swipeAction({ end: (): void => { this.swipeEnd(group); }, edgeEffect: SwipeEdgeEffect.Spring })
         }, (group: ChatGroup) => `${group.groupIdText}:${group.lastMsgIdText}:${group.pinned}`)
         if (this.chat.loaded && this.chat.groups.length === 0 && this.chat.error.length === 0) {
           ListItem() { PageState({ message: '还没有私信会话' }) }

@@ -24,6 +24,7 @@ const NAME_BODY_GAP: number = 8;
 const BODY_META_GAP: number = 10;
 const SUB_BOX_GAP: number = 10;
 
+@ReusableV2
 @ComponentV2
 export struct ReplyItem {
   @Param tid: number = 0;

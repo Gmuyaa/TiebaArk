@@ -8,6 +8,7 @@ import { ComposeDraft } from '../viewmodel/ComposeVM';
 import { ComposeForumOption, ComposeOptionsVM } from '../viewmodel/ComposeOptionsVM';
 import { HotTopicItem, hotDiscussLabel } from '../model/HotTopic';
 import { AvatarComponent } from './AvatarComponent';
+import { ForumAvatarImage, forumAvatarRadius } from './ForumAvatarImage';
 import { ForumLevelBadge } from './ForumLevelBadge';
 import { GlassCircleButton } from './GlassCircleButton';
 import { SearchField } from './SearchField';
@@ -16,6 +17,7 @@ import { SearchField } from './SearchField';
 export struct ComposeOptionSheet {
   @Param kind: string = '';
   @Param draft: ComposeDraft = new ComposeDraft();
+  @Event onSelectForum: (item: ComposeForumOption) => void = (_item: ComposeForumOption): void => {};
   @Event onClose: () => void = (): void => {};
   @Local vm: ComposeOptionsVM = new ComposeOptionsVM();
 
@@ -34,7 +36,8 @@ export struct ComposeOptionSheet {
   }
 
   private chooseForum(item: ComposeForumOption): void {
-    this.draft.forum = item.name; this.draft.forumId = item.id; this.onClose();
+    this.onSelectForum(item);
+    this.onClose();
   }
 
   @Builder
@@ -60,7 +63,7 @@ export struct ComposeOptionSheet {
   @Builder
   ForumRow(item: ComposeForumOption) {
     Row({ space: 12 }) {
-      AvatarComponent({ url: item.avatar, avatarSize: 44, fallbackName: item.name })
+      ForumAvatarImage({ url: item.avatar, forumName: item.name, avatarSize: 44, radius: forumAvatarRadius(44) })
       Column({ space: 5 }) {
         Row({ space: 5 }) {
           Text(item.name).fontSize(17).fontColor(AppTheme.TEXT_MAIN).maxLines(1)
@@ -160,8 +163,13 @@ export struct ComposeOptionSheet {
         Text(hotDiscussLabel(item.discussCount)).fontSize(12).fontColor(AppTheme.TEXT_SUB)
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       Button(this.draft.topicId === item.id ? '已添加' : '添加').height(30).fontSize(13)
-        .backgroundColor(AppTheme.ACCENT_LIGHT).fontColor(AppTheme.ACCENT_DARK)
+        .backgroundColor(this.draft.topicId === item.id ? AppTheme.SURFACE_MUTED : AppTheme.ACCENT_LIGHT)
+        .fontColor(this.draft.topicId === item.id ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK)
         .onClick((): void => {
+          if (this.draft.topicId === item.id) {
+            this.draft.topic = ''; this.draft.topicId = 0;
+            return;
+          }
           this.draft.topic = item.name; this.draft.topicId = item.id; this.onClose();
         })
     }.width('100%').padding({ left: 12, right: 12, top: 10, bottom: 10 })
@@ -171,6 +179,18 @@ export struct ComposeOptionSheet {
   Topics() {
     Scroll() {
       Column() {
+        if (this.draft.topic.trim().length > 0) {
+          Row({ space: 10 }) {
+            Text(`已选 #${this.draft.topic.trim().replace(/^#+|#+$/g, '')}#`)
+              .fontSize(14).fontColor(AppTheme.ACCENT_DARK).fontWeight(FontWeight.Medium)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            Text('移除').fontSize(13).fontColor(AppTheme.TEXT_SUB).padding({ left: 8, top: 4, bottom: 4 })
+              .onClick((): void => {
+                this.draft.topic = ''; this.draft.topicId = 0;
+              })
+          }.width('100%').padding({ left: 14, right: 14, top: 12, bottom: 12 })
+            .border({ width: { bottom: 0.5 }, color: AppTheme.DIVIDER })
+        }
         Row({ space: 8 }) {
           Text('贴吧热榜').fontSize(18).fontWeight(FontWeight.Bold).fontColor(AppTheme.TEXT_MAIN).layoutWeight(1)
           if (!this.vm.allTopics && this.vm.topics.length > 10) {

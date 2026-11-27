@@ -80,7 +80,7 @@ export struct SearchPage {
     clearSearchHistory(context).then(() => {
       this.history = [];
     }).catch(() => {
-      promptAction.showToast({ message: '清空失败，请重试', duration: 1600 });
+      this.getUIContext().getPromptAction().showToast({ message: '清空失败，请重试', duration: 1600 });
     });
   }
 
@@ -138,12 +138,17 @@ export struct SearchPage {
             .fontColor(AppTheme.TEXT_MAIN)
           Blank()
           // 无历史时整个区不渲染，清空按钮不会空转。
-          SymbolGlyph($r('sys.symbol.trash'))
-            .fontSize(16).maxFontScale(1).width(16).height(24)
-            .responseRegion({ x: -12, y: -8, width: 40, height: 40 })
-            .accessibilityText('清空搜索历史')
-            .fontColor([AppTheme.TEXT_MUTED])
-            .onClick(() => { this.clearHistory(); })
+          Row() {
+            SymbolGlyph($r('sys.symbol.trash'))
+              .fontSize(16).maxFontScale(1)
+              .fontColor([AppTheme.TEXT_MUTED])
+          }
+          .width(24).height(24)
+          .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+          .responseRegion({ x: -8, y: -8, width: 40, height: 40 })
+          .accessibilityGroup(true)
+          .accessibilityText('清空搜索历史')
+          .onClick(() => { this.clearHistory(); })
         }
         .width('100%')
         .constraintSize({ minHeight: 24 }).alignItems(VerticalAlign.Center)

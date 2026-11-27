@@ -16,14 +16,24 @@ import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { readEmojiEditor, restoreEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEditor';
 import { VisualThemeStore, visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionDuration } from '../common/appearance/MotionPolicy';
 import { ComposeOptionSheet } from '../components/ComposeOptionSheet';
 import { CloseIcon } from '../components/CloseIcon';
+import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { GlassCircleButton } from '../components/GlassCircleButton';
-import { NavigationService } from '../navigation/AppNavigation';
+import { ImageViewer } from '../components/ImageViewer';
+import { ForumTab } from '../model/ThreadList';
+import { ComposePageParams, NavigationService } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
+import { authSession } from '../auth/AuthSession';
+import {
+  SavedComposeSnapshot, SavedComposeTab, clearComposeDraft, hasSavedComposeContent,
+  loadComposeDraft, saveComposeDraft
+} from '../utils/DraftStore';
 import { readStatusBarVp, STATUS_BAR_FALLBACK_VP } from '../utils/SafeArea';
+import { ComposeForumOption, ComposeOptionsVM } from '../viewmodel/ComposeOptionsVM';
 import { COMPOSE_TYPES, TITLE_MIN_LENGTH, TITLE_MAX_LENGTH, ComposeDraft, ComposePublishResult, ComposeVM, unsupportedComposeOptions } from '../viewmodel/ComposeVM';
 
 const TOP_BAR_HEIGHT: number = 40;
@@ -32,9 +42,13 @@ const EMOJI_TRANSITION_MS: number = 220;
 
 @ComponentV2
 export struct ComposePage {
+  @Param routeParams: ComposePageParams | undefined = undefined;
   @Local visualSettings: VisualThemeStore = visualThemeStore;
   @Local themeSettings: ThemeModeStore = themeModeStore;
   @Local vm: ComposeVM = new ComposeVM();
+  @Local quickOptions: ComposeOptionsVM = new ComposeOptionsVM();
+  @Local previewUrls: string[] = [];
+  @Local previewIndex: number = 0;
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local sheet: boolean = false;
   @Local sheetKind: string = '';
@@ -60,16 +74,136 @@ export struct ComposePage {
   private rebuildingBodies: boolean[] = [false, false, false, false];
   private bodyReady: boolean[] = [false, false, false, false];
   private closing: boolean = false;
+  private draftSaveTimer: number = -1;
+  private discardingDraft: boolean = false;
+  private publishedOk: boolean = false;
+  private draftLoadSeq: number = 0;
+  @Local draggingMediaIndex: number = -1;
   private previousKeyboardMode: PageKeyboardAvoidMode | undefined = undefined;
+
+  private hostContext(): common.UIAbilityContext {
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
+  }
+
+  private buildDraftSnapshot(): SavedComposeSnapshot {
+    const snap: SavedComposeSnapshot = new SavedComposeSnapshot();
+    snap.type = this.vm.type;
+    snap.tabs = [];
+    for (let i = 0; i < this.vm.drafts.length; i++) {
+      const src: ComposeDraft = this.vm.drafts[i];
+      const tab: SavedComposeTab = new SavedComposeTab();
+      tab.title = src.title;
+      tab.body = src.body;
+      tab.forum = src.forum;
+      tab.forumId = src.forumId;
+      tab.forumAvatar = src.forumAvatar;
+      tab.tabId = src.tabId;
+      tab.tabName = src.tabName;
+      tab.topic = src.topic;
+      tab.topicId = src.topicId;
+      tab.visibility = src.visibility;
+      tab.declaration = src.declaration;
+      tab.mood = src.mood;
+      tab.media = src.media.slice();
+      tab.video = src.video;
+      snap.tabs.push(tab);
+    }
+    return snap;
+  }
+
+  private scheduleDraftSave(): void {
+    if (this.discardingDraft || this.publishedOk) { return; }
+    if (this.draftSaveTimer >= 0) { clearTimeout(this.draftSaveTimer); }
+    this.draftSaveTimer = setTimeout((): void => {
+      this.draftSaveTimer = -1;
+      if (this.discardingDraft || this.publishedOk) { return; }
+      this.syncBody(this.vm.type);
+      const snap: SavedComposeSnapshot = this.buildDraftSnapshot();
+      void saveComposeDraft(this.hostContext(), authSession.forumCacheSessionKey(), snap);
+    }, 800);
+  }
+
+  private clearDraftTimer(): void {
+    if (this.draftSaveTimer >= 0) { clearTimeout(this.draftSaveTimer); this.draftSaveTimer = -1; }
+  }
+
+  private async restorePersistedDraft(context: common.UIAbilityContext, hasRouteForum: boolean): Promise<void> {
+    const seq: number = ++this.draftLoadSeq;
+    const saved: SavedComposeSnapshot | undefined =
+      await loadComposeDraft(context, authSession.forumCacheSessionKey());
+    if (seq !== this.draftLoadSeq || saved === undefined || !hasSavedComposeContent(saved)) { return; }
+    if (this.vm.hasContent()) {
+      const routeOnly: boolean = hasRouteForum &&
+        this.vm.drafts.every((d: ComposeDraft): boolean =>
+          d.title.trim().length === 0 && d.body.trim().length === 0 &&
+          d.media.length === 0 && d.video.length === 0);
+      if (!routeOnly) { return; }
+    }
+    const routeForumName: string = hasRouteForum ? (this.routeParams?.forumName ?? '').trim() : '';
+    const routeForumId: number = hasRouteForum ? (this.routeParams?.forumId ?? 0) : 0;
+    const routeForumAvatar: string = hasRouteForum ? (this.routeParams?.forumAvatar ?? '') : '';
+    const routeTabs: ForumTab[] | undefined = hasRouteForum ? this.routeParams?.tabs : undefined;
+
+    for (let i = 0; i < this.vm.drafts.length && i < saved.tabs.length; i++) {
+      const dst: ComposeDraft = this.vm.drafts[i];
+      const src: SavedComposeTab = saved.tabs[i];
+      dst.title = src.title;
+      dst.body = src.body;
+      dst.forum = src.forum;
+      dst.forumId = src.forumId;
+      dst.forumAvatar = src.forumAvatar;
+      dst.tabId = src.tabId;
+      dst.tabName = src.tabName;
+      dst.topic = src.topic;
+      dst.topicId = src.topicId;
+      dst.visibility = src.visibility;
+      dst.declaration = src.declaration;
+      dst.mood = src.mood;
+      dst.media = src.media.slice();
+      dst.video = src.video;
+    }
+    this.vm.type = saved.type >= 0 && saved.type < this.vm.drafts.length ? saved.type : 1;
+    if (hasRouteForum && routeForumName.length > 0 && this.vm.draft.forum !== routeForumName) {
+      void this.vm.selectForum(context, routeForumName, routeForumId, routeForumAvatar, routeTabs);
+    } else if (this.vm.draft.forum.length > 0) {
+      this.vm.syncSectionsForCurrentDraft(context);
+    }
+    if (this.bodyReady[this.vm.type]) {
+      this.restoreBody(this.vm.type);
+    }
+    try { this.getUIContext().getPromptAction().showToast({ message: '已恢复上次草稿', duration: 1600 }); } catch (_) {}
+  }
 
   aboutToAppear(): void {
     this.useEditorKeyboardMode();
     this.trackKeyboard();
-    readStatusBarVp(this.getUIContext().getHostContext() as common.UIAbilityContext)
+    const context: common.UIAbilityContext = this.hostContext();
+    readStatusBarVp(context)
       .then((height: number): void => { this.statusBarH = height; }).catch((): void => {});
+    void this.quickOptions.loadForums(context);
+    const hasRouteForum: boolean = this.routeParams !== undefined && (this.routeParams.forumName ?? '').trim().length > 0;
+    if (hasRouteForum && this.routeParams !== undefined) {
+      void this.vm.selectForum(context, this.routeParams.forumName ?? '', this.routeParams.forumId ?? 0,
+        this.routeParams.forumAvatar ?? '', this.routeParams.tabs);
+    }
+    void this.restorePersistedDraft(context, hasRouteForum);
   }
 
-  aboutToDisappear(): void { this.stopKeyboardTracking(); this.vm.dispose(); this.restoreKeyboardMode(); }
+  aboutToDisappear(): void {
+    ++this.draftLoadSeq;
+    this.clearDraftTimer();
+    if (!this.discardingDraft && !this.publishedOk) {
+      this.syncBody(this.vm.type);
+      const snap: SavedComposeSnapshot = this.buildDraftSnapshot();
+      if (hasSavedComposeContent(snap)) {
+        void saveComposeDraft(this.hostContext(), authSession.forumCacheSessionKey(), snap);
+      }
+    }
+    this.stopKeyboardTracking();
+    this.quickOptions.dispose();
+    this.vm.dispose();
+    this.restoreKeyboardMode();
+  }
 
   private trackKeyboard(): void {
     if (this.keyboardWin !== undefined) { return; }
@@ -77,12 +211,13 @@ export struct ComposePage {
     window.getLastWindow(this.getUIContext().getHostContext() as common.UIAbilityContext).then((win: window.Window): void => {
       if (seq !== this.keyboardWatchSeq) { return; }
       this.keyboardWin = win;
-      this.screenWvp = px2vp(win.getWindowProperties().windowRect.width);
-      this.safeBottomVp = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
-      this.updateKeyboard(px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height));
+      const ui = this.getUIContext();
+      this.screenWvp = ui.px2vp(win.getWindowProperties().windowRect.width);
+      this.safeBottomVp = ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
+      this.updateKeyboard(ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height));
       this.keyboardAreaCb = (data: window.AvoidAreaOptions): void => {
         if (data.type === window.AvoidAreaType.TYPE_KEYBOARD) {
-          this.updateKeyboard(px2vp(data.area.bottomRect.height));
+          this.updateKeyboard(ui.px2vp(data.area.bottomRect.height));
         }
       };
       win.on('avoidAreaChange', this.keyboardAreaCb);
@@ -201,15 +336,31 @@ export struct ComposePage {
   private close(): void {
     if (this.closing) { return; }
     if (this.vm.publishing) {
-      this.getUIContext().getPromptAction().showToast({ message: '正在发布中，请稍候' });
+      try { this.getUIContext().getPromptAction().showToast({ message: '正在发布中，请稍候' }); } catch (_) {}
       return;
     }
+    this.syncBody(this.vm.type);
     if (!this.vm.hasContent()) { NavigationService.back(); return; }
     this.closing = true;
-    this.getUIContext().getPromptAction().showDialog({ title: '放弃本次编辑？', message: '离开后，本页所有类型的未发布内容都会清空。',
-      buttons: [{ text: '继续编辑', color: AppTheme.TEXT_MAIN }, { text: '放弃', color: AppTheme.ACCENT }]
+    this.getUIContext().getPromptAction().showDialog({
+      title: '保留草稿？',
+      message: '你可以保存草稿下次继续编辑，或放弃当前未发布内容。',
+      buttons: [
+        { text: '继续编辑', color: AppTheme.TEXT_MAIN },
+        { text: '放弃', color: AppTheme.DANGER_TEXT },
+        { text: '保存草稿', color: AppTheme.ACCENT }
+      ]
     }).then((result): void => {
-      if (result.index === 1) { NavigationService.back(); }
+      if (result.index === 1) {
+        this.discardingDraft = true;
+        this.clearDraftTimer();
+        void clearComposeDraft(this.hostContext(), authSession.forumCacheSessionKey());
+        NavigationService.back();
+      } else if (result.index === 2) {
+        this.clearDraftTimer();
+        void saveComposeDraft(this.hostContext(), authSession.forumCacheSessionKey(), this.buildDraftSnapshot());
+        NavigationService.back();
+      }
     }).catch((): void => {}).finally((): void => { this.closing = false; });
   }
 
@@ -223,8 +374,13 @@ export struct ComposePage {
 
   private syncBody(type: number): void {
     if (!this.bodyReady[type] || this.rebuildingBodies[type]) { return; }
-    this.vm.drafts[type].body = readEmojiEditor(this.bodyControllers[type], this.emojiPicker.memeTokenTable(),
+    const next: string = readEmojiEditor(this.bodyControllers[type], this.emojiPicker.memeTokenTable(),
       new Map<string, string>()).text;
+    if (next !== this.vm.drafts[type].body) {
+      this.vm.drafts[type].body = next;
+      this.vm.clearError();
+      this.scheduleDraftSave();
+    }
   }
 
   @Monitor('visualSettings.theme', 'themeSettings.isDark')
@@ -251,7 +407,7 @@ export struct ComposePage {
     if (this.emojiOpen) {
       this.awaitEmojiKeyboard();
       this.getUIContext().getFocusController().activate(true, false);
-      this.getUIContext().getFocusController().requestFocus('compose-body');
+      try { this.getUIContext().getFocusController().requestFocus('compose-body'); } catch (_) {}
     } else {
       this.clearKeyboardWait();
       this.animateEmojiLayout((): void => { this.emojiAwaitKeyboard = false; this.emojiOpen = true; });
@@ -301,7 +457,7 @@ export struct ComposePage {
 
   private async pick(asVideo: boolean = false): Promise<void> {
     await this.vm.pickMedia(asVideo);
-    if (this.vm.error.length > 0) { this.getUIContext().getPromptAction().showToast({ message: this.vm.error }); }
+    if (this.vm.error.length > 0) { try { this.getUIContext().getPromptAction().showToast({ message: this.vm.error }); } catch (_) {} }
   }
 
   private bodyHint(): string {
@@ -325,7 +481,9 @@ export struct ComposePage {
           .onClick((): void => {
             this.syncBody(this.vm.type);
             this.collapseEmoji();
-            this.getUIContext().getFocusController().clearFocus(); this.vm.type = index;
+            this.getUIContext().getFocusController().clearFocus();
+            this.vm.type = index;
+            this.vm.syncSectionsForCurrentDraft(this.hostContext());
           })
       }, (label: string): string => label)
     }.width('100%').height('100%').padding({ left: 4, right: 4 })
@@ -336,8 +494,9 @@ export struct ComposePage {
     Row({ space: 4 }) {
       if (this.vm.publishing) { LoadingProgress().width(16).height(16).color(AppTheme.TEXT_SUB) }
       Text(this.vm.publishing ? '发布中' : '发布').fontSize(14).fontWeight(FontWeight.Bold)
-        .fontColor(this.vm.publishing ? AppTheme.TEXT_SUB : AppTheme.ACCENT_DARK).maxLines(1)
-        .maxFontScale(1.25).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .fontColor(this.vm.publishing ? AppTheme.TEXT_SUB :
+          (this.vm.publishBlocked().length === 0 ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB))
+        .maxLines(1).maxFontScale(1.25).textOverflow({ overflow: TextOverflow.Ellipsis })
     }.width('100%').height('100%').justifyContent(FlexAlign.Center)
       .enabled(!this.vm.publishing).borderRadius(TOP_BAR_HEIGHT / 2)
       .id('compose-publish').accessibilityGroup(true)
@@ -356,17 +515,21 @@ export struct ComposePage {
     this.syncBody(this.vm.type);
     const blocked: string = this.vm.publishBlocked();
     if (blocked.length > 0) {
-      this.getUIContext().getPromptAction().showToast({ message: blocked });
+      try { this.getUIContext().getPromptAction().showToast({ message: blocked }); } catch (_) {}
       return;
     }
     const ignored: string[] = unsupportedComposeOptions(this.vm.draft);
     if (ignored.length > 0) {
-      const result = await this.getUIContext().getPromptAction().showDialog({
-        title: '这些选项本次发布不会生效',
-        message: `${ignored.join('、')}尚未接入发布接口，继续发布将忽略以上设置。`,
-        buttons: [{ text: '取消', color: AppTheme.TEXT_MAIN }, { text: '继续发布', color: AppTheme.ACCENT }]
-      });
-      if (result.index !== 1 || this.vm.publishing) { return; }
+      let confirmed: boolean = false;
+      try {
+        const result = await this.getUIContext().getPromptAction().showDialog({
+          title: '这些选项本次发布不会生效',
+          message: `${ignored.join('、')}尚未接入发布接口，继续发布将忽略以上设置。`,
+          buttons: [{ text: '取消', color: AppTheme.TEXT_MAIN }, { text: '继续发布', color: AppTheme.ACCENT }]
+        });
+        confirmed = result.index === 1;
+      } catch (_) {}
+      if (!confirmed || this.vm.publishing) { return; }
     }
     this.collapseEmoji();
     this.getUIContext().getFocusController().clearFocus();
@@ -375,10 +538,13 @@ export struct ComposePage {
     const outcome: ComposePublishResult =
       await this.vm.publish(this.getUIContext().getHostContext() as common.UIAbilityContext);
     if (!outcome.ok) {
-      this.getUIContext().getPromptAction().showToast({ message: outcome.message });
+      try { this.getUIContext().getPromptAction().showToast({ message: outcome.message }); } catch (_) {}
       return;
     }
-    this.getUIContext().getPromptAction().showToast({ message: '发布成功' });
+    this.publishedOk = true;
+    this.clearDraftTimer();
+    void clearComposeDraft(this.hostContext(), authSession.forumCacheSessionKey());
+    try { this.getUIContext().getPromptAction().showToast({ message: '发布成功' }); } catch (_) {}
     // 先关掉发帖页再进新帖：返回时回到吧页/首页，而不是回到已清空的编辑器
     NavigationService.back();
     if (outcome.tid > 0) {
@@ -398,10 +564,35 @@ export struct ComposePage {
     }.width('100%').padding({ left: 16, right: 16, top: this.statusBarH + 8, bottom: 16 })
   }
 
+  private openMediaPreview(index: number): void {
+    if (this.vm.type === 2 || this.vm.draft.media.length === 0) { return; }
+    this.collapseEmoji();
+    this.getUIContext().getFocusController().clearFocus();
+    this.previewUrls = this.vm.draft.media.slice();
+    this.previewIndex = Math.max(0, Math.min(index, this.previewUrls.length - 1));
+  }
+
+  private showSectionHelp(): void {
+    this.getUIContext().getPromptAction().showDialog({
+      title: '版块分区',
+      message: '选择分区后，帖子将归类展示在该吧对应的版块下；非必选，再次点击已选分区可取消。',
+      buttons: [{ text: '知道了', color: AppTheme.ACCENT }]
+    }).catch((): void => {});
+  }
+
+  private handleSelectForum(item: ComposeForumOption): void {
+    void this.vm.selectForum(this.hostContext(), item.name, item.id, item.avatar);
+  }
+
+  private titleShortage(): number {
+    const trimmed: number = this.vm.draft.title.trim().length;
+    return trimmed > 0 && trimmed < TITLE_MIN_LENGTH ? TITLE_MIN_LENGTH - trimmed : 0;
+  }
+
   @Builder
   Media() {
     Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(10), cross: LengthMetrics.vp(10) } }) {
-      ForEach(this.vm.draft.media, (uri: string) => {
+      ForEach(this.vm.draft.media, (uri: string, index: number) => {
         Stack({ alignContent: Alignment.TopEnd }) {
           if (this.vm.type === 2) {
             Column({ space: 8 }) {
@@ -410,12 +601,66 @@ export struct ComposePage {
             }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
           } else {
             Image(uri).width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).objectFit(ImageFit.Cover)
+              .accessibilityText(`查看第${index + 1}张图片，长按可拖动调整顺序`)
+              .onClick((): void => { this.openMediaPreview(index); })
+            if (this.vm.draft.media.length > 1) {
+              Row() {
+                if (index > 0) {
+                  SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(12).fontColor([Color.White])
+                    .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+                    .accessibilityText(`将第${index + 1}张图片前移`)
+                    .onClick((): void => {
+                      this.vm.moveMedia(index, index - 1);
+                      this.scheduleDraftSave();
+                    })
+                }
+                Text(`${index + 1}`).fontSize(10).fontWeight(FontWeight.Medium).fontColor(Color.White)
+                  .layoutWeight(1).textAlign(TextAlign.Center)
+                if (index < this.vm.draft.media.length - 1) {
+                  SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).fontColor([Color.White])
+                    .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+                    .accessibilityText(`将第${index + 1}张图片后移`)
+                    .onClick((): void => {
+                      this.vm.moveMedia(index, index + 1);
+                      this.scheduleDraftSave();
+                    })
+                }
+              }
+              .width(MEDIA_PREVIEW_SIZE)
+              .height(22)
+              .backgroundColor('#7A000000')
+              .alignItems(VerticalAlign.Center)
+              .position({ x: 0, y: MEDIA_PREVIEW_SIZE - 22 })
+            }
           }
-          Row() { CloseIcon({ iconSize: 14 }).width(14).height(14) }
-            .width(32).height(32).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-            .backgroundColor(AppTheme.CARD).borderRadius(16).accessibilityText('移除附件')
-            .onClick((): void => { this.vm.draft.media = this.vm.draft.media.filter((value: string): boolean => value !== uri); })
-        }.borderRadius(16).clip(true)
+          Row() { CloseIcon({ iconSize: 12 }).width(12).height(12) }
+            .width(24).height(24).margin({ top: 4, right: 4 })
+            .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+            .backgroundColor(AppTheme.CARD).opacity(0.92).borderRadius(12).accessibilityText('移除附件')
+            .onClick((): void => {
+              this.vm.draft.media = this.vm.draft.media.filter((value: string): boolean => value !== uri);
+              this.vm.clearError();
+              this.scheduleDraftSave();
+            })
+        }
+        .borderRadius(16)
+        .clip(true)
+        .opacity(this.draggingMediaIndex === index ? 0.55 : 1)
+        .draggable(this.vm.type !== 2 && this.vm.draft.media.length > 1)
+        .onDragStart((): void => {
+          this.draggingMediaIndex = index;
+        })
+        .onDrop((): void => {
+          const from: number = this.draggingMediaIndex;
+          this.draggingMediaIndex = -1;
+          if (from >= 0 && from !== index) {
+            this.vm.moveMedia(from, index);
+            this.scheduleDraftSave();
+          }
+        })
+        .onDragEnd((): void => {
+          this.draggingMediaIndex = -1;
+        })
       }, (uri: string): string => uri)
       if (this.vm.draft.video.length > 0) {
         Stack({ alignContent: Alignment.TopEnd }) {
@@ -423,10 +668,11 @@ export struct ComposePage {
             SymbolGlyph($r('sys.symbol.video')).fontSize(30).fontColor([AppTheme.ACCENT])
             Text('已选择视频').fontSize(13).fontColor(AppTheme.TEXT_MAIN)
           }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
-          Row() { CloseIcon({ iconSize: 14 }).width(14).height(14) }
-            .width(32).height(32).justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
-            .backgroundColor(AppTheme.CARD).borderRadius(16).accessibilityText('移除视频')
-            .onClick((): void => { this.vm.draft.video = ''; })
+          Row() { CloseIcon({ iconSize: 12 }).width(12).height(12) }
+            .width(24).height(24).margin({ top: 4, right: 4 })
+            .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+            .backgroundColor(AppTheme.CARD).opacity(0.92).borderRadius(12).accessibilityText('移除视频')
+            .onClick((): void => { this.vm.draft.video = ''; this.vm.clearError(); })
         }.borderRadius(16).clip(true)
       }
       if ((this.vm.type === 2 && this.vm.draft.media.length === 0) ||
@@ -434,7 +680,8 @@ export struct ComposePage {
         Column({ space: 8 }) {
           SymbolGlyph(this.vm.type === 2 ? $r('sys.symbol.video') : $r('sys.symbol.plus'))
             .fontSize(28).maxFontScale(1).fontWeight(FontWeight.Lighter).fontColor([AppTheme.TEXT_SUB])
-          Text(this.vm.picking ? '选择中…' : (this.vm.type === 2 ? '选择视频' : '添加图片'))
+          Text(this.vm.picking ? '选择中…' : (this.vm.type === 2 ? '选择视频' :
+            (this.vm.draft.media.length > 0 ? `${this.vm.draft.media.length}/9` : '添加图片')))
             .fontSize(12).fontColor(AppTheme.TEXT_SUB)
         }.width(MEDIA_PREVIEW_SIZE).height(MEDIA_PREVIEW_SIZE).justifyContent(FlexAlign.Center).backgroundColor(AppTheme.SURFACE_MUTED)
           .borderRadius(16).enabled(!this.vm.picking).opacity(this.vm.picking ? 0.5 : 1)
@@ -449,43 +696,158 @@ export struct ComposePage {
     if (title === '选择的吧') { return this.vm.draft.forum || '选择合适的吧'; }
     if (title === '添加心情') { return this.vm.draft.mood || '选择心情'; }
     if (title === '悬赏帖贝') { return '暂未开放'; }
-    if (title === '添加话题') { return this.vm.draft.topic || '添加话题'; }
+    if (title === '添加话题') {
+      const topic: string = this.vm.draft.topic.trim().replace(/^#+|#+$/g, '');
+      return topic.length > 0 ? `#${topic}#` : '添加话题';
+    }
     if (title === '设置展示范围') { return this.vm.draft.visibility; }
     return this.vm.draft.declaration || '未设置';
   }
 
+  private optionHasCustomValue(title: string): boolean {
+    if (title === '添加话题') { return this.vm.draft.topic.trim().length > 0; }
+    if (title === '添加心情') { return this.vm.draft.mood.length > 0; }
+    if (title === '设置展示范围') { return this.vm.draft.visibility !== '全场景可见'; }
+    if (title === '内容声明') { return this.vm.draft.declaration.length > 0; }
+    return false;
+  }
+
+  private showSectionRow(): boolean {
+    return this.vm.supportsSections() && this.vm.draft.forum.length > 0 &&
+      (this.vm.sectionsLoading || this.vm.sectionsError.length > 0 || this.vm.forumSections.length > 0);
+  }
+
   @Builder
-  OptionRow(symbol: Resource, title: string) {
-    Row({ space: 12 }) {
-      SymbolGlyph(symbol).fontSize(18).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
-        .flexShrink(0).accessibilityLevel('no')
-      Text(title === '选择的吧' ? '发布到' : title).fontSize(14).fontColor(AppTheme.TEXT_MAIN)
-        .maxLines(2).layoutWeight(1)
-      Text(this.optionValue(title)).fontSize(13).fontColor(AppTheme.TEXT_SUB).maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '48%' }).flexShrink(1)
-      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
-        .flexShrink(0).accessibilityLevel('no')
-    }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .borderRadius(12).accessibilityGroup(true).accessibilityText(`${title}，${this.optionValue(title)}`)
-      .onClick((): void => { this.openOption(title); })
+  ForumAndSectionCard() {
+    Column() {
+      Row({ space: 12 }) {
+        SymbolGlyph($r('sys.symbol.message')).fontSize(18).maxFontScale(1)
+          .fontColor([this.vm.draft.forum.length > 0 ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB])
+          .flexShrink(0).accessibilityLevel('no')
+        Text('发布到').fontSize(14).fontColor(AppTheme.TEXT_MAIN).maxLines(1).layoutWeight(1)
+        Row({ space: 6 }) {
+          if (this.vm.draft.forum.length > 0) {
+            ForumAvatarImage({ url: this.vm.draft.forumAvatar, forumName: this.vm.draft.forum,
+              avatarSize: 20, radius: forumAvatarRadius(20) })
+          }
+          Text(this.vm.draft.forum || '选择合适的吧').fontSize(13)
+            .fontWeight(this.vm.draft.forum.length > 0 ? FontWeight.Medium : FontWeight.Normal)
+            .fontColor(this.vm.draft.forum.length > 0 ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.constraintSize({ maxWidth: '58%' }).flexShrink(1).alignItems(VerticalAlign.Center)
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+          .flexShrink(0).accessibilityLevel('no')
+      }.width('100%').constraintSize({ minHeight: 50 }).padding({ left: 12, right: 12, top: 8, bottom: 8 })
+        .id('compose-forum-row').accessibilityGroup(true)
+        .accessibilityText(`发布到，${this.vm.draft.forum || '选择合适的吧'}`)
+        .onClick((): void => { this.openOption('选择的吧'); })
+
+      if (this.quickOptions.quickForums.length > 0) {
+        Scroll() {
+          Row({ space: 8 }) {
+            ForEach(this.quickOptions.quickForums, (item: ComposeForumOption) => {
+              Row({ space: 6 }) {
+                ForumAvatarImage({ url: item.avatar, forumName: item.name,
+                  avatarSize: 18, radius: forumAvatarRadius(18) })
+                Text(item.name).fontSize(13).maxLines(1)
+                  .fontWeight(this.vm.draft.forum === item.name ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(this.vm.draft.forum === item.name ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN)
+              }.padding({ left: 8, right: 10, top: 6, bottom: 6 }).borderRadius(14)
+                .backgroundColor(this.vm.draft.forum === item.name ? AppTheme.ACCENT_LIGHT : AppTheme.CARD)
+                .accessibilityGroup(true).accessibilityText(`快捷选择${item.name}吧`)
+                .accessibilitySelected(this.vm.draft.forum === item.name)
+                .onClick((): void => { this.handleSelectForum(item); })
+            }, (item: ComposeForumOption): string => `${item.name}|${item.avatar}|${item.id}`)
+          }.padding({ left: 12, right: 12 })
+        }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+          .padding({ top: 2, bottom: this.showSectionRow() ? 10 : 8 })
+      }
+
+      if (this.showSectionRow()) {
+        Divider().strokeWidth(0.5).color(AppTheme.DIVIDER).padding({ left: 12, right: 12 })
+        Row({ space: 10 }) {
+          Row({ space: 4 }) {
+            Text('版块分区').fontSize(13).fontColor(AppTheme.TEXT_SUB).maxLines(1)
+            SymbolGlyph($r('sys.symbol.info_circle')).fontSize(14).maxFontScale(1).fontColor([AppTheme.TEXT_MUTED])
+          }.alignItems(VerticalAlign.Center).flexShrink(0)
+            .accessibilityGroup(true).accessibilityText('版块分区说明')
+            .onClick((): void => { this.showSectionHelp(); })
+
+          if (this.vm.sectionsLoading) {
+            Row({ space: 6 }) {
+              LoadingProgress().width(14).height(14).color(AppTheme.TEXT_SUB)
+              Text('读取版块中…').fontSize(12).fontColor(AppTheme.TEXT_SUB)
+            }.layoutWeight(1)
+          } else if (this.vm.sectionsError.length > 0) {
+            Row({ space: 8 }) {
+              Text('读取失败').fontSize(12).fontColor(AppTheme.TEXT_SUB)
+              Text('重试').fontSize(12).fontWeight(FontWeight.Medium).fontColor(AppTheme.ACCENT_DARK)
+                .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+                .onClick((): void => { void this.vm.retryForumSections(this.hostContext()); })
+            }.layoutWeight(1)
+          } else {
+            Scroll() {
+              Row({ space: 8 }) {
+                ForEach(this.vm.forumSections, (tab: ForumTab) => {
+                  Text(tab.name).fontSize(13).maxLines(1)
+                    .fontWeight(this.vm.draft.tabId === tab.id ? FontWeight.Medium : FontWeight.Normal)
+                    .fontColor(this.vm.draft.tabId === tab.id ? AppTheme.ACCENT_DARK : AppTheme.TEXT_MAIN)
+                    .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14)
+                    .backgroundColor(this.vm.draft.tabId === tab.id ? AppTheme.ACCENT_LIGHT : AppTheme.CARD)
+                    .id(`compose-section-${tab.id}`)
+                    .accessibilityText(`版块分区，${tab.name}`)
+                    .accessibilitySelected(this.vm.draft.tabId === tab.id)
+                    .onClick((): void => { this.vm.toggleSection(tab); })
+                }, (tab: ForumTab): string => `${tab.id}|${tab.name}`)
+              }.padding({ right: 12 })
+            }.layoutWeight(1).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+          }
+        }.width('100%').padding({ left: 12, top: 10, bottom: 6 }).alignItems(VerticalAlign.Center)
+          .id('compose-section-row')
+      }
+    }.width('100%').backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(16)
+      .padding({ top: 4, bottom: 4 })
+  }
+
+  @Builder
+  OptionRow(symbol: Resource, title: string, showDivider: boolean = true) {
+    Column() {
+      Row({ space: 12 }) {
+        SymbolGlyph(symbol).fontSize(18).maxFontScale(1)
+          .fontColor([this.optionHasCustomValue(title) ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB])
+          .flexShrink(0).accessibilityLevel('no')
+        Text(title).fontSize(14).fontColor(AppTheme.TEXT_MAIN)
+          .maxLines(2).layoutWeight(1)
+        Text(this.optionValue(title)).fontSize(13)
+          .fontColor(this.optionHasCustomValue(title) ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+          .fontWeight(this.optionHasCustomValue(title) ? FontWeight.Medium : FontWeight.Normal)
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .constraintSize({ maxWidth: '48%' }).flexShrink(1)
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
+          .flexShrink(0).accessibilityLevel('no')
+      }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: 12, right: 12, top: 8, bottom: 8 })
+        .borderRadius(12).accessibilityGroup(true).accessibilityText(`${title}，${this.optionValue(title)}`)
+        .onClick((): void => { this.openOption(title); })
+      if (showDivider) {
+        Divider().strokeWidth(0.5).color(AppTheme.DIVIDER).padding({ left: 42, right: 12 })
+      }
+    }.width('100%')
   }
 
   @Builder
   Options() {
     Column() {
-      this.OptionRow($r('sys.symbol.message'), '选择的吧')
       if (this.vm.type === 3) {
-        this.OptionRow($r('sys.symbol.face_smiling'), '添加心情')
-        this.OptionRow($r('sys.symbol.gift'), '悬赏帖贝')
+        this.OptionRow($r('sys.symbol.face_smiling'), '添加心情', true)
+        this.OptionRow($r('sys.symbol.gift'), '悬赏帖贝', true)
+        this.OptionRow($r('sys.symbol.eye'), '设置展示范围', false)
       } else {
-        this.OptionRow($r('sys.symbol.hash'), '添加话题')
-      }
-      this.OptionRow($r('sys.symbol.eye'), '设置展示范围')
-      if (this.vm.type !== 3) {
-        this.OptionRow($r('sys.symbol.info_circle'), '内容声明')
+        this.OptionRow($r('sys.symbol.hash'), '添加话题', true)
+        this.OptionRow($r('sys.symbol.eye'), '设置展示范围', true)
+        this.OptionRow($r('sys.symbol.info_circle'), '内容声明', false)
       }
     }.width('100%').backgroundColor(AppTheme.SURFACE_MUTED).borderRadius(16)
-      .padding({ top: 4, bottom: 4 })
+      .margin({ top: 12 }).padding({ top: 4, bottom: 4 })
   }
 
   @Builder
@@ -493,9 +855,9 @@ export struct ComposePage {
     RichEditor({ controller: this.bodyControllers[type] })
       .caretColor(AppTheme.ACCENT)
       .selectedBackgroundColor(AppTheme.SELECTION_BACKGROUND)
-      .id('compose-body').width('100%').height(type === 0 ? 270 : 144).maxLength(20000)
+      .id('compose-body').width('100%').constraintSize({ minHeight: type === 0 ? 220 : 136 }).maxLength(20000)
       .placeholder(this.bodyHint(), { font: { size: 16 }, fontColor: AppTheme.TEXT_SUB })
-      .backgroundColor(Color.Transparent).padding({ top: 8, left: 0, right: 0, bottom: 0 })
+      .backgroundColor(Color.Transparent).padding({ top: 8, left: 0, right: 0, bottom: 8 })
       .accessibilityText('正文')
       .focusBox({ strokeWidth: LengthMetrics.vp(0) })
       .onReady((): void => { this.restoreBody(type); })
@@ -508,10 +870,14 @@ export struct ComposePage {
   Editor() {
     Column() {
       if (this.vm.type !== 2 || this.vm.draft.media.length > 0) {
-        Row() {
+        Row({ space: 8 }) {
           Text(`标题 · ${TITLE_MIN_LENGTH}–${TITLE_MAX_LENGTH}个字`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
             .layoutWeight(1)
-          Text(`${this.vm.draft.title.length}/${TITLE_MAX_LENGTH}`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+          if (this.titleShortage() > 0) {
+            Text(`还差 ${this.titleShortage()} 字`).fontSize(12).fontColor(AppTheme.DANGER_TEXT)
+          }
+          Text(`${this.vm.draft.title.length}/${TITLE_MAX_LENGTH}`).fontSize(12)
+            .fontColor(this.titleShortage() > 0 ? AppTheme.DANGER_TEXT : AppTheme.TEXT_SUB)
             .id('compose-title-count')
         }.width('100%').padding({ top: 8, bottom: 2 })
         Row({ space: 6 }) {
@@ -527,14 +893,22 @@ export struct ComposePage {
             .accessibilityText(`标题，${TITLE_MIN_LENGTH}至${TITLE_MAX_LENGTH}个字`)
             .backgroundColor(Color.Transparent).padding(0)
             .onFocus((): void => { this.awaitEmojiKeyboard(); })
-            .onChange((value: string): void => { this.vm.draft.title = value; })
+            .onChange((value: string): void => { this.vm.draft.title = value; this.vm.clearError(); this.scheduleDraftSave(); })
         }.width('100%').border({ width: { bottom: 0.5 }, color: AppTheme.DIVIDER })
-        Text('正文').fontSize(12).fontColor(AppTheme.TEXT_SUB).width('100%').padding({ top: 12 })
+        Row() {
+          Text('正文').fontSize(12).fontColor(AppTheme.TEXT_SUB).layoutWeight(1)
+          if (this.vm.draft.body.trim().length > 0) {
+            Text(`${this.vm.draft.body.trim().length} 字`).fontSize(12).fontColor(AppTheme.TEXT_SUB)
+          }
+        }.width('100%').padding({ top: 12 })
         ForEach([this.vm.type], (type: number) => { this.BodyEditor(type) }, (type: number): string => String(type))
       }
       this.Media()
-      if (this.vm.type !== 2 || this.vm.draft.media.length > 0) { this.Options() }
-    }.width('100%').padding({ left: 20, right: 20 })
+      if (this.vm.type !== 2 || this.vm.draft.media.length > 0) {
+        this.ForumAndSectionCard()
+        this.Options()
+      }
+    }.width('100%').constraintSize({ maxWidth: windowBreakpoint.wideMaxWidth() }).padding({ left: 20, right: 20 })
   }
 
   @Builder
@@ -584,7 +958,8 @@ export struct ComposePage {
   SheetContent() {
     if (this.isOptionPanel()) {
       ComposeOptionSheet({ kind: this.sheetKind, draft: this.optionDraft,
-        onClose: (): void => { this.sheet = false; } })
+        onSelectForum: (item: ComposeForumOption): void => { this.handleSelectForum(item); },
+        onClose: (): void => { this.sheet = false; this.vm.clearError(); } })
     } else {
     Scroll() {
       Column({ space: 12 }) {
@@ -614,13 +989,21 @@ export struct ComposePage {
           Column() {
             this.Editor()
             if (this.vm.publishing || this.vm.publishStep.length > 0) {
-              Text(this.vm.publishStep.length > 0 ? this.vm.publishStep : '正在发布…')
-                .fontSize(13).fontColor(AppTheme.TEXT_SUB).padding({ top: 8, bottom: 8 })
+              Row({ space: 8 }) {
+                LoadingProgress().width(14).height(14).color(AppTheme.TEXT_SUB)
+                Text(this.vm.publishStep.length > 0 ? this.vm.publishStep : '正在发布…')
+                  .fontSize(13).fontColor(AppTheme.TEXT_SUB)
+              }.width('100%').padding({ top: 12, bottom: 8, left: 20, right: 20 })
             } else if (this.vm.error.length > 0) {
-              // 失败原因常驻：toast 一闪而过，hilog 缓冲也留不住，界面必须能读到整句。
-              Text(`发布失败：${this.vm.error}`)
-                .fontSize(13).fontColor(AppTheme.TEXT_SUB).width('100%')
-                .padding({ top: 8, bottom: 8, left: 16, right: 16 })
+              // 失败原因常驻：toast 一闪而过，hilog 缓冲也留不住，界面必须能读到整句并支持重试。
+              Row({ space: 12 }) {
+                Text(`发布失败：${this.vm.error}`)
+                  .fontSize(13).fontColor(AppTheme.DANGER_TEXT).layoutWeight(1)
+                Text('重试').fontSize(13).fontWeight(FontWeight.Medium).fontColor(AppTheme.ACCENT_DARK)
+                  .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+                  .onClick((): void => { void this.startPublish(); })
+              }.width('100%').margin({ top: 12 }).padding({ left: 20, right: 20 })
+                .alignItems(VerticalAlign.Center)
             }
             // 内容保留在原生面板背后供材质取样；末尾占位仍让最后一项能滚到工具栏上方。
             Column().width('100%').height(this.inputPanelHeight() +
@@ -638,6 +1021,11 @@ export struct ComposePage {
             }.width('100%')
           }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
         }
+        if (this.previewUrls.length > 0) {
+          ImageViewer({ imageUrls: this.previewUrls, initialIndex: this.previewIndex,
+            onClose: (): void => { this.previewUrls = []; this.previewIndex = 0; } })
+            .zIndex(100)
+        }
       }.width('100%').height('100%').backgroundColor(AppTheme.CARD)
         .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
         .bindSheet($$this.sheet, this.SheetContent(), {
@@ -652,6 +1040,9 @@ export struct ComposePage {
         this.stopKeyboardTracking(); this.restoreKeyboardMode();
       })
       .onBackPressed((): boolean => {
+        if (this.previewUrls.length > 0) {
+          this.previewUrls = []; this.previewIndex = 0; return true;
+        }
         if (this.emojiOpen || this.emojiAwaitKeyboard) {
           this.collapseEmoji(); return true;
         }

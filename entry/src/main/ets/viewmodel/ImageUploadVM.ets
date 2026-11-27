@@ -21,7 +21,8 @@ export class ImageUploadVM {
   private disposed: boolean = false;
   private current(mine: number): boolean { return !this.disposed && this.epoch === mine && this.account === accountWithPortrait(); }
   contentToken(): string { return this.account === accountWithPortrait() && !this.disposed && this.image !== undefined ? uploadedImageToken(this.image) : ''; }
-  async pickAndUpload(context: common.UIAbilityContext, forumName: string, forCollection: boolean = false): Promise<void> {
+  async pickAndUpload(context: common.UIAbilityContext, forumName: string, forCollection: boolean = false,
+    imGroupId: string = ''): Promise<void> {
     if (this.disposed || ((this.busy || this.selecting) && this.account === accountWithPortrait())) { return; }
     const mine: number = ++this.epoch; this.account = accountWithPortrait();
     this.image = undefined; this.error = ''; this.busy = false; this.selecting = false;
@@ -34,6 +35,11 @@ export class ImageUploadVM {
       this.selecting = false;
       if (result.cancelled) { return; }
       if (result.input === undefined) { this.error = result.message; return; }
+      if (imGroupId.length > 0) {
+        result.input.groupId = imGroupId;
+        result.input.smallWidth = 360;
+        result.input.smallHeight = 360;
+      }
       await this.upload(context, result.input);
     } catch (err) { if (this.current(mine)) { this.error = '图片准备失败，请重试'; } }
     finally {
@@ -53,6 +59,8 @@ export class ImageUploadVM {
     const bytes: Uint8Array = input.bytes.slice();
     const forCollection: boolean = input.forCollection;
     const width: number = input.width; const height: number = input.height; const forumName: string = input.forumName.trim();
+    const smallWidth: number = input.smallWidth; const smallHeight: number = input.smallHeight;
+    const groupId: string = input.groupId.length > 0 ? input.groupId : '1';
     const userName: string = authSession.snapshot.userName;
     this.busy = true; this.totalBytes = bytes.length;
     try {
@@ -84,6 +92,7 @@ export class ImageUploadVM {
         chunk.digest = digest; chunk.totalSize = bytes.length; chunk.chunkSize = chunkSize; chunk.chunkNo = chunkNo;
         chunk.bytes = bytes.slice((chunkNo - 1) * chunkSize, Math.min(chunkNo * chunkSize, bytes.length));
         chunk.width = width; chunk.height = height; chunk.forumName = forumName; chunk.userName = userName;
+        chunk.smallWidth = smallWidth; chunk.smallHeight = smallHeight; chunk.groupId = groupId;
         chunk.watermarkType = watermarkType;
         const chunkError: string = imageUploadChunkError(chunk);
         if (chunkError.length > 0) { this.error = chunkError; return; }
@@ -108,6 +117,10 @@ export class ImageUploadVM {
           const image: UploadedPostImage = new UploadedPostImage(); image.id = response.data.image.id;
           image.width = response.data.image.width; image.height = response.data.image.height;
           image.previewUrl = response.data.image.previewUrl;
+          image.bigUrl = response.data.image.bigUrl;
+          image.smallUrl = response.data.image.smallUrl;
+          image.smallWidth = response.data.image.smallWidth;
+          image.smallHeight = response.data.image.smallHeight;
           image.localPreview = localPreview;
           this.image = image; this.uploadedBytes = bytes.length; return;
         }

@@ -130,7 +130,7 @@ export struct ForbiddenForumsPane {
     }
     .width('100%').height('100%').padding({ left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER })
     .scrollBar(BarState.Off).cachedCount(2)
-    .onScroll(() => { this.onScrolled(); })
+    .onDidScroll(() => { this.onScrolled(); })
     .onReachEnd(() => {
       void this.vm.load(this.context(), true, this.onPageStarted, this.onPageSettled).then((): void => { this.syncMirror(); });
     })

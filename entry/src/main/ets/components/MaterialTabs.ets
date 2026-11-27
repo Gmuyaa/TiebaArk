@@ -22,9 +22,10 @@ export struct MaterialTabs {
   @Param animationDuration: number = 0;
   @Param animationCurve: Curve | ICurve | undefined = undefined;
   @Param animationMode: AnimationMode = AnimationMode.CONTENT_FIRST;
-  @Local contentWidth: number = 0;
+  private contentWidth: number = 0;
   private componentBarModifier: CommonModifier = new CommonModifier();
   @Event onChange: (index: number) => void = (_index: number): void => {};
+  @Event onTabBarClick: (index: number) => void = (_index: number): void => {};
   @Event onAnimationStart: (index: number, targetIndex: number) => void =
     (_index: number, _targetIndex: number): void => {};
   @Event onAnimationEnd: (index: number) => void = (_index: number): void => {};
@@ -86,6 +87,7 @@ export struct MaterialTabs {
           systemMaterial: materialManager.officialOf(this.slot, this.applyShadow)
         })
         .onChange((index: number): void => { this.onChange(index); })
+        .onTabBarClick((index: number): void => { this.onTabBarClick(index); })
         .onAnimationStart((index: number, targetIndex: number): void => {
           this.onAnimationStart(index, targetIndex);
         })
@@ -101,7 +103,7 @@ export struct MaterialTabs {
       .width('100%').height('100%')
       .backgroundColor(Color.Transparent)
       .clip(false)
-      .onAreaChange((_old: Area, area: Area): void => {
+      .onSizeChange((_old: SizeOptions, area: SizeOptions): void => {
         const width: number = Number(area.width);
         if (width > 0 && Math.abs(width - this.contentWidth) > 0.5) { this.contentWidth = width; }
       })

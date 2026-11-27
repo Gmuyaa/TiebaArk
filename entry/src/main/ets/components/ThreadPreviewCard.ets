@@ -15,6 +15,7 @@ import { popupMotion } from '../common/appearance/MotionPolicy';
 import { hdsEffect } from '@kit.UIDesignKit';
 
 /** 标准帖子卡：页面传入展示值与动作，组件不发请求、不执行导航。 */
+@ReusableV2
 @ComponentV2
 export struct ThreadPreviewCard {
   @Param authorName: string = '';
@@ -29,6 +30,8 @@ export struct ThreadPreviewCard {
   /** 仅传已确认的发帖日期；不要将最后回复时间填到作者信息中。 */
   @Param postedTime: string = '';
   @Param title: string = '';
+  /** 仅吧内列表传入帖子所属独立分区名；首页/搜索/我的等外部列表保持空串不展示。 */
+  @Param sectionLabel: string = '';
   @Param summary: string = '';
   @Param contentPieces: ContentPiece[] = [];
   @Event onActivateContent: (piece: ContentPiece) => void = (_piece: ContentPiece): void => {};
@@ -60,6 +63,10 @@ export struct ThreadPreviewCard {
   @Event onOpenForum: () => void = (): void => {};
   @Event onOpenThread: () => void = (): void => {};
   @Event onOpenImage: (index: number) => void = (_index: number): void => {};
+
+  aboutToReuse(): void {
+    this.actionState = new ThreadCardActionState();
+  }
 
   /** 复用正文解析器识别列表摘要里的官方表情编码。 */
   private summaryPieces(): ContentPiece[] {
@@ -233,6 +240,7 @@ export struct ThreadPreviewCard {
     Column({ space: visualThemeStore.isPaper ? PaperLayout.CARD_TEXT_GAP : ThreadCardLayout.TITLE_BODY_GAP }) {
       if (this.title.length > 0 || this.isTop || this.isGood || this.isHelp) {
         TaggedThreadText({ text: this.title, labels: this.titleLabels(),
+          prefix: this.title.length > 0 ? this.sectionLabel : '',
           textColor: AppTheme.TEXT_MAIN,
           textSize: visualThemeStore.isPaper ? PaperLayout.CARD_TITLE_SIZE : ThreadCardLayout.TITLE_SIZE,
           lineSize: visualThemeStore.isPaper ? PaperLayout.CARD_TITLE_LINE : ThreadCardLayout.TITLE_LINE })

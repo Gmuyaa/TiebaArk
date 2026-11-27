@@ -9,6 +9,7 @@ import { image } from '@kit.ImageKit';
 import { promptAction } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { PageHeader } from '../components/PageHeader';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { GlassPillButton } from '../components/GlassPillButton';
@@ -37,6 +38,7 @@ import { closeImageTransition } from '../components/ImageTransition';
 import { ThreadCardActionsVM, ThreadCardActionState } from '../viewmodel/ThreadCardActionsVM';
 import { contentDeletionRevision } from '../viewmodel/ContentDeletionRevision';
 import { MyListItemDataSource, MyListRow, myListRowKey } from '../model/MyListItemDataSource';
+import { ListDataSource } from '../model/ListDataSource';
 
 /** 已删除帖子的左下角提示（标题同色灰显，见 `CardItem`） */
 const DELETED_LABEL: string = '该帖子已被删除';
@@ -59,9 +61,24 @@ export struct MyListPage {
   private favoriteResultTimer: number = -1;
   /** 收藏列表的 LazyForEach 数据源（吧头像逐条上屏只重建那一行，见 model/MyListItemDataSource） */
   @Local favSource: MyListItemDataSource = new MyListItemDataSource();
+  @Local listSource: ListDataSource<MyListItem> = new ListDataSource<MyListItem>();
   private cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
   private deletionRevision: number = contentDeletionRevision();
   @Local pageVisible: boolean = false;
+
+  private myListItemKey(item: MyListItem): string {
+    if (this.vm.kind === 'reply') {
+      return `${item.key}-${item.forumAvatar}-${item.title}-${item.content}-${item.meta}`;
+    }
+    if (this.vm.kind === 'thread') {
+      return `${item.tid}-${item.forumAvatar}-${item.hideFromProfile}`;
+    }
+    return `${item.tid}-${item.title}-${item.forumAvatar}-${item.isDeleted}-${item.hideFromProfile}`;
+  }
+
+  private myListItemId(item: MyListItem): string {
+    return this.vm.kind === 'reply' ? item.key : String(item.tid);
+  }
 
   /**
    * `vm.items` 一变就推给 LazyForEach 数据源。收藏页的三种变化都走这里：首屏/刷新（整表重建）、
@@ -71,6 +88,9 @@ export struct MyListPage {
   @Monitor('vm.items')
   syncFavoriteSource(): void {
     this.favSource.sync(this.vm.items);
+    this.listSource.sync(this.vm.items,
+      (item: MyListItem): string => this.myListItemKey(item),
+      (item: MyListItem): string => this.myListItemId(item));
   }
 
   @Monitor('vm.loading', 'vm.loadingMore', 'vm.threadPendingTid', 'vm.removing', 'pageVisible')
@@ -194,7 +214,7 @@ export struct MyListPage {
     }
     // 已删除的帖子点进去只会是空详情页 / 加载失败，直接不跳（不给"点了没反应"的入口）
     if (item.isDeleted) {
-      promptAction.showToast({ message: DELETED_LABEL, duration: 1500 });
+      this.getUIContext().getPromptAction().showToast({ message: DELETED_LABEL, duration: 1500 });
       return;
     }
     // Shared 单栈：同栈进 ThreadDetail。历史/收藏项没有实时 replyCount，不传（同 SearchResultPage）。
@@ -256,7 +276,7 @@ export struct MyListPage {
         .fontSize(14).constraintSize({ minHeight: 40, minWidth: 40 }).textAlign(TextAlign.Center)
         .fontColor(AppTheme.ACCENT_DARK)
         .onClick(() => {
-          promptAction.showDialog({
+          this.getUIContext().getPromptAction().showDialog({
             title: '清空浏览历史',
             message: '将删除本机的全部浏览记录，且无法恢复。',
             buttons: [
@@ -304,15 +324,18 @@ export struct MyListPage {
         PageState({ fillRemaining: true, message: this.emptyText() }).layoutWeight(1)
       } else {
         List() {
-          ForEach(this.vm.items, (item: MyListItem) => {
+          LazyForEach(this.listSource, (item: MyListItem) => {
             ListItem() {
               this.CardItem(item)
             }
             .margin({ left: 12, right: 12, top: 5, bottom: 5 })
-          }, (item: MyListItem) => `${item.tid}-${item.title}-${item.forumAvatar}-${item.isDeleted}-${item.hideFromProfile}`)
+          }, (item: MyListItem) => this.myListItemKey(item))
         }
         .width('100%')
+        .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+        .alignSelf(ItemAlign.Center)
         .layoutWeight(1)
+        .cachedCount(3)
         .backgroundColor(AppTheme.BG)
         .edgeEffect(motionEdgeEffect())
       }
@@ -374,10 +397,12 @@ export struct MyListPage {
               onAction: (): void => { void this.vm.load(this.hostContext()); } })
           }
           List({ space: ThreadCardLayout.LIST_GAP }) {
-            ForEach(this.vm.items, (item: MyListItem) => {
+            LazyForEach(this.listSource, (item: MyListItem) => {
               ListItem() { this.ThreadCard(item) }
-            }, (item: MyListItem) => `${item.tid}-${item.forumAvatar}-${item.hideFromProfile}`)
-          }.padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
+            }, (item: MyListItem) => this.myListItemKey(item))
+          }.padding({ left: 12, right: 12, top: 8 }).width('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+            .alignSelf(ItemAlign.Center).layoutWeight(1)
+            .cachedCount(3)
             .edgeEffect(motionEdgeEffect())
         }
       }.width('100%').height('100%')
@@ -449,7 +474,8 @@ export struct MyListPage {
               if (this.vm.managing) {
                 ListItem() { Row().height(FAVORITE_ACTION_INSET).width('100%') }
               }
-            }.padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
+            }.padding({ left: 12, right: 12, top: 8 }).width('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+              .alignSelf(ItemAlign.Center).layoutWeight(1)
               .cachedCount(2).edgeEffect(motionEdgeEffect()).onReachEnd(() => {
                 if (this.vm.pagingError.length === 0) { this.vm.loadMore(this.hostContext()); }
               })
@@ -497,15 +523,17 @@ export struct MyListPage {
               onAction: (): void => { void this.vm.load(this.hostContext()); } })
           }
           List({ space: 10 }) {
-            ForEach(this.vm.items, (item: MyListItem) => {
+            LazyForEach(this.listSource, (item: MyListItem) => {
               ListItem() { this.ReplyCard(item) }
-            }, (item: MyListItem) => `${item.key}-${item.forumAvatar}-${item.title}-${item.content}-${item.meta}`)
+            }, (item: MyListItem) => this.myListItemKey(item))
             ListItem() {
               ListFooter({ loading: this.vm.loadingMore, error: this.vm.pagingError, hasMore: this.vm.hasMore,
               onRetry: (): void => { void this.vm.loadMore(this.hostContext()); } })
             }
           }
-          .padding({ left: 12, right: 12, top: 8 }).width('100%').layoutWeight(1)
+          .padding({ left: 12, right: 12, top: 8 }).width('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+          .alignSelf(ItemAlign.Center).layoutWeight(1)
+          .cachedCount(3)
           .edgeEffect(motionEdgeEffect())
           .onReachEnd(() => {
             if (this.vm.pagingError.length === 0) {

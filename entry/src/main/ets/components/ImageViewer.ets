@@ -1,4 +1,5 @@
 import { MotionEffect } from '../common/appearance/MotionConfig';
+import { motionStore } from '../common/appearance/MotionStore';
 import { motionDuration, motionGeometryId, motionTransition, motionSwiperCurve } from '../common/appearance/MotionPolicy';
 import { ImageMenuPosition } from './ImageMenuPosition';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
@@ -10,9 +11,14 @@ import { ImageTransitionSeed, ImageTransitionTarget, bindImageTransitionReturn, 
   closeImageTransition, imageFadeTransition, imageSharedDuration, imageLayerRetentionTransition } from './ImageTransition';
 import { ImageTransitionCrop } from '../model/ImageTransitionCrop';
 import { DismissDragFrame, evaluateDismissDrag, shouldDismissDrag } from '../model/ImageDismissGesture';
+import {
+  FlingMotionState, LongMinimapLayout, VIEWER_MAX_FLING_VELOCITY, VIEWER_MIN_FLING_VELOCITY,
+  VIEWER_MIN_SCALE, ViewerTransform, applyEdgeResistance, computeLongMinimap, minimapScrubPanY,
+  stepFlingMotion, viewerDoubleTapScale, viewerMaxScale, viewerOffsetLimit, zoomAroundPoint
+} from '../model/ImageViewerMotion';
 /** 全屏图片查看器，支持缩放、滑动切换、导出与当前图片超分。 */
 
-import { display, promptAction, UIUtils, window } from '@kit.ArkUI';
+import { AnimatorResult, display, promptAction, UIUtils, window } from '@kit.ArkUI';
 import { AppTheme } from '../theme/Theme';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -26,6 +32,7 @@ import {
 } from '../utils/ImageExport';
 import { fetchImageBytes } from '../net/ImageDownload';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
+import { longImageMinimapStore } from '../common/appearance/LongImageMinimapStore';
 import { imageLoadStore } from '../common/appearance/ImageLoadStore';
 import {
   ImageLoadPolicy, ViewerImage, formatOriginBytes, viewerCanLoadOrigin, viewerSource
@@ -40,10 +47,11 @@ import {
   SrToggleResult
 } from '../viewmodel/ImageSuperResolutionVM';
 
-const MIN_SCALE: number = 1;
-const MAX_SCALE: number = 4;
-const DOUBLE_TAP_SCALE: number = 2;
+const MIN_SCALE: number = VIEWER_MIN_SCALE;
 const ANIMATION_DURATION: number = 180;
+const DOUBLE_TAP_DURATION: number = 220;
+const MINIMAP_HIDE_DELAY_MS: number = 1500;
+const MINIMAP_HIT_PAD: number = 8;
 /** 解码尺寸可能有取整误差；明显不同的预览/原图比例不能错误共享返回。 */
 const SHARED_ASPECT_TOLERANCE: number = 0.01;
 /** 导出菜单日志域；只记状态与地址前 60 字符，不含凭据 */
@@ -101,6 +109,10 @@ struct ZoomableImagePage {
 
   onLongPressImage: () => void = (): void => {};
   onTapImage: () => void = (): void => {};
+  @Prop explicitLong: boolean = false;
+  @Prop bottomSafeVp: number = 0;
+  onMinimapActiveChange: (index: number, active: boolean) => void = (_index: number, _active: boolean): void => {};
+  onMultiTouchChange: (active: boolean) => void = (_active: boolean): void => {};
   @Prop dismissBlocked: boolean = false;
   onDismissDragChange: (active: boolean, backdropOpacity: number, chromeOpacity: number) => void =
     (_active: boolean, _backdropOpacity: number, _chromeOpacity: number): void => {};
@@ -142,12 +154,37 @@ struct ZoomableImagePage {
 
 
   private pinchBase: number = MIN_SCALE;
+  private pinchBasePanX: number = 0;
+  private pinchBasePanY: number = 0;
+  private pinchStartCenterX: number = 0;
+  private pinchStartCenterY: number = 0;
+  private pinchActive: boolean = false;
+  private pinchCooldownUntil: number = 0;
+  private activeTouchCount: number = 0;
+  private multiTouchReported: boolean = false;
   @State private zoomAnimating: boolean = false;
   private zoomAnimationEpoch: number = 0;
   private pageActive: boolean = false;
   private imageLoadEpoch: number = 0;
   private panBaseX: number = 0;
   private panBaseY: number = 0;
+  private lastPanOffsetX: number = 0;
+  private lastPanOffsetY: number = 0;
+  private lastPanTimeMs: number = 0;
+  private trackedVelocityX: number = 0;
+  private trackedVelocityY: number = 0;
+  private flingAnimator: AnimatorResult | undefined = undefined;
+  private flingState: FlingMotionState = new FlingMotionState();
+  private flingLastMs: number = 0;
+  /** 惯性滑行中落指急停；消费当次单指点按，避免误关查看器。 */
+  private stoppedFlingOnDown: boolean = false;
+  @State private minimapVisible: boolean = false;
+  @State private minimapOpacity: number = 0;
+  private minimapHideTimer: number = -1;
+  private minimapFadeEpoch: number = 0;
+  private minimapScrubbing: boolean = false;
+  private minimapGuardUntil: number = 0;
+  private minimapReportedActive: boolean = false;
   /** 用户拖过图片后，加载完成不再自动把长图拉回顶部。 */
   private panTouched: boolean = false;
 
@@ -163,6 +200,11 @@ struct ZoomableImagePage {
 
   aboutToDisappear(): void {
     this.pageActive = false;
+    this.stopFlingMotion();
+    this.hideMinimapImmediate();
+    this.pinchActive = false;
+    this.activeTouchCount = 0;
+    this.syncMultiTouchState();
     this.stopReturnState();
     ++this.imageLoadEpoch;
     ++this.zoomAnimationEpoch;
@@ -197,6 +239,13 @@ struct ZoomableImagePage {
   }
 
   private resetImageState(): void {
+    this.stopFlingMotion();
+    this.hideMinimapImmediate();
+    this.pinchActive = false;
+    this.pinchCooldownUntil = 0;
+    this.activeTouchCount = 0;
+    this.syncMultiTouchState();
+    this.stoppedFlingOnDown = false;
     this.zoomScale = MIN_SCALE;
     this.panX = 0;
     this.panY = 0;
@@ -215,19 +264,21 @@ struct ZoomableImagePage {
     try {
       const screen: display.Display = display.getDefaultDisplaySync();
       if (screen.width > 0 && screen.height > 0) {
-        this.containerWidth = px2vp(screen.width);
-        this.containerHeight = px2vp(screen.height);
+        const ui = this.getUIContext();
+        this.containerWidth = ui.px2vp(screen.width);
+        this.containerHeight = ui.px2vp(screen.height);
       }
     } catch (_) { /* 无同步显示信息时仍可由窗口/布局回调提供尺寸。 */ }
     const epoch: number = this.imageLoadEpoch;
     try {
-      const context = this.getUIContext().getHostContext();
+      const ui = this.getUIContext();
+      const context = ui.getHostContext();
       window.getLastWindow(context).then((win: window.Window) => {
         if (!this.canUpdatePage() || epoch !== this.imageLoadEpoch) { return; }
         const rect = win.getWindowProperties().windowRect;
-        this.containerWidth = rect.width > 0 ? px2vp(rect.width) : this.containerWidth;
-        this.containerHeight = rect.height > 0 ? px2vp(rect.height) : this.containerHeight;
-        this.topSafeVp = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height);
+        this.containerWidth = rect.width > 0 ? ui.px2vp(rect.width) : this.containerWidth;
+        this.containerHeight = rect.height > 0 ? ui.px2vp(rect.height) : this.containerHeight;
+        this.topSafeVp = ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect.height);
         this.clampOffsets();
       }).catch(() => {
         // onAreaChange 会提供更精确的组件尺寸；这里仅作为早期兜底。
@@ -376,9 +427,49 @@ struct ZoomableImagePage {
     this.reportReturnEligibility();
   }
 
-  /** 手势护栏：刚碰过超分按钮的一小段时间内，不认"单击关闭 / 双击放大 / 长按导出" */
+  /** 手势护栏：刚碰过超分按钮或右侧定位条的一小段时间内，不认"单击关闭 / 双击放大 / 长按导出" */
   private srBlocked(): boolean {
-    return this.srTouchActive || Date.now() < this.srGuardUntil;
+    return this.srTouchActive || Date.now() < this.srGuardUntil || this.minimapBlocked();
+  }
+
+  private minimapBlocked(): boolean {
+    return this.minimapScrubbing || Date.now() < this.minimapGuardUntil;
+  }
+
+  private pinchBlocked(): boolean {
+    return this.pinchActive || this.activeTouchCount >= 2 || Date.now() < this.pinchCooldownUntil;
+  }
+
+  private syncMultiTouchState(): void {
+    const active: boolean = this.pinchActive || this.activeTouchCount >= 2;
+    if (this.multiTouchReported === active) { return; }
+    this.multiTouchReported = active;
+    this.onMultiTouchChange(active);
+  }
+
+  private updateActiveTouchCount(event: TouchEvent): void {
+    let count: number = 0;
+    if (event.touches !== undefined) {
+      for (let i: number = 0; i < event.touches.length; i++) {
+        const touch: TouchObject = event.touches[i];
+        if (touch.type !== TouchType.Up && touch.type !== TouchType.Cancel) {
+          count++;
+        }
+      }
+    }
+    this.activeTouchCount = count;
+    if (count >= 2) {
+      this.stopFlingMotion();
+      this.stoppedFlingOnDown = false;
+      // 第二根手指落屏瞬间立即取消由第一指误触发的下拉返回，把控制权干净交给双指缩放。
+      if (this.activePanMode === 2 || this.dismissDragActive) {
+        this.resetDismissDragImmediate();
+        this.onDismissDragChange(false, 1, 1);
+      } else if (this.activePanMode === 1) {
+        this.activePanMode = 0;
+      }
+    }
+    this.syncMultiTouchState();
   }
 
   private srIconColor(): ResourceColor {
@@ -454,7 +545,8 @@ struct ZoomableImagePage {
     .width(SR_BUTTON_TOUCH)
     .height(SR_BUTTON_TOUCH)
     .position({ x: this.srButtonBox().x, y: this.srButtonBox().y })
-    .opacity(this.dismissChromeOpacity)
+    .opacity(this.dismissChromeOpacity * (1 - this.minimapOpacity))
+    .hitTestBehavior(this.minimapVisible ? HitTestMode.None : HitTestMode.Default)
     .accessibilityText(this.srAccessibilityText())
     .accessibilityLevel('yes')
     .onTouch((event: TouchEvent) => {
@@ -482,8 +574,9 @@ struct ZoomableImagePage {
       result.height = frame.height;
       return result;
     }
-    const imageWidth: number = px2vp(widthPx);
-    const imageHeight: number = px2vp(heightPx);
+    const ui = this.getUIContext();
+    const imageWidth: number = ui.px2vp(widthPx);
+    const imageHeight: number = ui.px2vp(heightPx);
     if (frame.width <= 0 || frame.height <= 0) {
       result.width = imageWidth;
       result.height = imageHeight;
@@ -495,14 +588,27 @@ struct ZoomableImagePage {
     return result;
   }
 
+  private effectiveMaxScale(): number {
+    const size: ImageSize = this.sourceImageSize();
+    return viewerMaxScale(this.containerWidth, size.width);
+  }
+
+  private offsetLimitXFor(scale: number): number {
+    const size: ImageSize = this.sourceImageSize();
+    return viewerOffsetLimit(this.containerWidth, size.width, scale);
+  }
+
+  private offsetLimitYFor(scale: number): number {
+    const size: ImageSize = this.sourceImageSize();
+    return viewerOffsetLimit(this.containerHeight, size.height, scale);
+  }
+
   private offsetLimitX(): number {
-    const size = this.sourceImageSize();
-    return Math.max(0, (size.width * this.zoomScale - this.containerWidth) / 2);
+    return this.offsetLimitXFor(this.zoomScale);
   }
 
   private offsetLimitY(): number {
-    const size = this.sourceImageSize();
-    return Math.max(0, (size.height * this.zoomScale - this.containerHeight) / 2);
+    return this.offsetLimitYFor(this.zoomScale);
   }
 
   private clampOffsets(): void {
@@ -510,6 +616,274 @@ struct ZoomableImagePage {
     const limitY: number = this.offsetLimitY();
     this.panX = Math.max(-limitX, Math.min(limitX, this.panX));
     this.panY = Math.max(-limitY, Math.min(limitY, this.panY));
+  }
+
+  /** 仅依赖容器/原图/缩放的静态定位条外框（不读 `panY`，避免滑动时触发 `Image` 重求值）。 */
+  private currentMinimapFrame(): LongMinimapLayout {
+    if (!longImageMinimapStore.enabled) { return new LongMinimapLayout(); }
+    const size: ImageSize = this.sourceImageSize();
+    return computeLongMinimap(
+      this.containerWidth, this.containerHeight,
+      size.width, size.height,
+      this.displayedSourceWidth(), this.displayedSourceHeight(),
+      this.explicitLong, this.zoomScale, 0,
+      this.topSafeVp, this.bottomSafeVp
+    );
+  }
+
+  private currentMinimapLayout(): LongMinimapLayout {
+    if (!longImageMinimapStore.enabled) { return new LongMinimapLayout(); }
+    const size: ImageSize = this.sourceImageSize();
+    return computeLongMinimap(
+      this.containerWidth, this.containerHeight,
+      size.width, size.height,
+      this.displayedSourceWidth(), this.displayedSourceHeight(),
+      this.explicitLong, this.zoomScale, this.panY,
+      this.topSafeVp, this.bottomSafeVp
+    );
+  }
+
+  private setMinimapReportedActive(active: boolean): void {
+    if (this.minimapReportedActive === active) { return; }
+    this.minimapReportedActive = active;
+    this.onMinimapActiveChange(this.index, active);
+  }
+
+  private clearMinimapHideTimer(): void {
+    if (this.minimapHideTimer >= 0) {
+      clearTimeout(this.minimapHideTimer);
+      this.minimapHideTimer = -1;
+    }
+  }
+
+  private hideMinimapImmediate(): void {
+    this.clearMinimapHideTimer();
+    ++this.minimapFadeEpoch;
+    this.minimapScrubbing = false;
+    this.minimapOpacity = 0;
+    this.minimapVisible = false;
+    this.setMinimapReportedActive(false);
+  }
+
+  private showMinimap(scheduleHide: boolean): void {
+    if (!this.canUpdatePage()) { return; }
+    const layout: LongMinimapLayout = this.currentMinimapLayout();
+    if (!layout.visible) {
+      this.hideMinimapImmediate();
+      return;
+    }
+    this.clearMinimapHideTimer();
+    ++this.minimapFadeEpoch;
+    this.setMinimapReportedActive(true);
+    if (!this.minimapVisible || this.minimapOpacity < 0.99) {
+      this.minimapVisible = true;
+      const duration: number = motionDuration(150, MotionEffect.FADE);
+      if (duration === 0) {
+        this.minimapOpacity = 1;
+      } else {
+        this.getUIContext().animateTo({ duration: duration, curve: Curve.EaseOut }, (): void => {
+          this.minimapOpacity = 1;
+        });
+      }
+    }
+    if (scheduleHide) {
+      this.scheduleMinimapHide();
+    }
+  }
+
+  private scheduleMinimapHide(): void {
+    this.clearMinimapHideTimer();
+    if (!this.minimapVisible || this.minimapScrubbing) { return; }
+    const epoch: number = ++this.minimapFadeEpoch;
+    this.minimapHideTimer = setTimeout((): void => {
+      this.minimapHideTimer = -1;
+      if (!this.canUpdatePage() || epoch !== this.minimapFadeEpoch || this.minimapScrubbing) { return; }
+      this.getUIContext().runScopedTask((): void => {
+        if (!this.canUpdatePage() || epoch !== this.minimapFadeEpoch || this.minimapScrubbing) { return; }
+        this.setMinimapReportedActive(false);
+        const duration: number = motionDuration(240, MotionEffect.FADE);
+        if (duration === 0) {
+          this.minimapOpacity = 0;
+          this.minimapVisible = false;
+          return;
+        }
+        this.getUIContext().animateTo({
+          duration: duration,
+          curve: Curve.EaseOut,
+          onFinish: (): void => {
+            if (!this.canUpdatePage() || epoch !== this.minimapFadeEpoch) { return; }
+            this.minimapVisible = false;
+          }
+        }, (): void => {
+          this.minimapOpacity = 0;
+        });
+      });
+    }, MINIMAP_HIDE_DELAY_MS);
+  }
+
+  private stopFlingMotion(): void {
+    if (this.flingAnimator !== undefined) {
+      this.flingAnimator.cancel();
+      this.flingAnimator = undefined;
+    }
+  }
+
+  private startFlingMotion(vx: number, vy: number): void {
+    this.stopFlingMotion();
+    if (!this.canUpdatePage() || !this.panAllowed()) { return; }
+    const limitX: number = this.offsetLimitX();
+    const limitY: number = this.offsetLimitY();
+    const overscrolled: boolean = Math.abs(this.panX) > limitX + 0.5 || Math.abs(this.panY) > limitY + 0.5;
+    const moveOn: boolean = motionStore.isOn(MotionEffect.MOVE);
+    const springOn: boolean = motionStore.isOn(MotionEffect.SPRING);
+    const axisVx: number = moveOn && limitX > 0.5
+      ? Math.max(-VIEWER_MAX_FLING_VELOCITY, Math.min(VIEWER_MAX_FLING_VELOCITY, vx)) : 0;
+    const axisVy: number = moveOn && limitY > 0.5
+      ? Math.max(-VIEWER_MAX_FLING_VELOCITY, Math.min(VIEWER_MAX_FLING_VELOCITY, vy)) : 0;
+    const speed: number = Math.hypot(axisVx, axisVy);
+    if (!overscrolled && speed < VIEWER_MIN_FLING_VELOCITY) {
+      this.clampOffsets();
+      this.scheduleMinimapHide();
+      return;
+    }
+    if (!moveOn && !springOn) {
+      this.clampOffsets();
+      this.scheduleMinimapHide();
+      return;
+    }
+    const state: FlingMotionState = new FlingMotionState();
+    state.panX = this.panX;
+    state.panY = this.panY;
+    state.velocityX = axisVx;
+    state.velocityY = axisVy;
+    state.settled = false;
+    this.flingState = state;
+    this.flingLastMs = Date.now();
+    this.showMinimap(false);
+    const animator: AnimatorResult = this.getUIContext().createAnimator({
+      duration: 10000,
+      easing: 'linear',
+      delay: 0,
+      fill: 'none',
+      direction: 'normal',
+      iterations: -1,
+      begin: 0,
+      end: 1
+    });
+    this.flingAnimator = animator;
+    animator.onFrame = (_progress: number): void => {
+      if (!this.canUpdatePage() || this.flingAnimator !== animator) { return; }
+      const now: number = Date.now();
+      const dtSec: number = Math.max(0.001, Math.min(0.05, (now - this.flingLastMs) / 1000));
+      this.flingLastMs = now;
+      const next: FlingMotionState = stepFlingMotion(
+        this.flingState, dtSec, this.offsetLimitX(), this.offsetLimitY(), springOn);
+      this.flingState = next;
+      this.panX = next.panX;
+      this.panY = next.panY;
+      if (next.settled) {
+        this.stopFlingMotion();
+        this.clampOffsets();
+        this.scheduleMinimapHide();
+      }
+    };
+    animator.play();
+  }
+
+  private resolveReleaseVelocity(eventVelocity: number, trackedVelocity: number, nowMs: number): number {
+    // 抬手前手指短暂停顿超过 80ms 时，忽略滞后的采样速度避免误触发滑行。
+    if (this.lastPanTimeMs > 0 && nowMs - this.lastPanTimeMs > 80) { return 0; }
+    if (Number.isFinite(eventVelocity) && Math.abs(eventVelocity) >= VIEWER_MIN_FLING_VELOCITY) {
+      return eventVelocity;
+    }
+    return Number.isFinite(trackedVelocity) ? trackedVelocity : 0;
+  }
+
+  private minimapDecodeSize(): ImageSourceSize | undefined {
+    const frame: LongMinimapLayout = this.currentMinimapFrame();
+    if (!frame.visible || frame.stripWidth <= 0 || frame.stripHeight <= 0) { return undefined; }
+    return {
+      width: Math.max(16, Math.round(frame.stripWidth * 1.5)),
+      height: Math.max(32, Math.round(frame.stripHeight * 1.5))
+    };
+  }
+
+  @Builder
+  private LongMinimapOverlay() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Image(this.displaySource())
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Fill)
+          .autoResize(true)
+          .sourceSize(this.minimapDecodeSize())
+          .hitTestBehavior(HitTestMode.None)
+        Row()
+          .width('100%')
+          .height(this.currentMinimapLayout().topMaskHeight)
+          .backgroundColor('#A6000000')
+          .hitTestBehavior(HitTestMode.None)
+        Row()
+          .width('100%')
+          .height(this.currentMinimapLayout().bottomMaskHeight)
+          .position({ x: 0, y: this.currentMinimapLayout().bottomMaskTop })
+          .backgroundColor('#A6000000')
+          .hitTestBehavior(HitTestMode.None)
+        Row()
+          .width('100%')
+          .height(this.currentMinimapLayout().windowHeight)
+          .position({ x: 0, y: this.currentMinimapLayout().windowTop })
+          .border({ width: 1.5, color: Color.White })
+          .borderRadius(1)
+          .hitTestBehavior(HitTestMode.None)
+      }
+      .width(this.currentMinimapFrame().stripWidth)
+      .height(this.currentMinimapFrame().stripHeight)
+      .position({ x: MINIMAP_HIT_PAD, y: MINIMAP_HIT_PAD })
+      .backgroundColor('#CC000000')
+      .border({ width: 0.5, color: '#33FFFFFF' })
+      .borderRadius(3)
+      .clip(true)
+    }
+    .width(this.currentMinimapFrame().stripWidth + MINIMAP_HIT_PAD * 2)
+    .height(this.currentMinimapFrame().stripHeight + MINIMAP_HIT_PAD * 2)
+    .position({
+      x: this.currentMinimapFrame().stripX - MINIMAP_HIT_PAD,
+      y: this.currentMinimapFrame().stripY - MINIMAP_HIT_PAD
+    })
+    .opacity(this.minimapOpacity * this.dismissChromeOpacity)
+    .hitTestBehavior(this.minimapVisible ? HitTestMode.Block : HitTestMode.None)
+    .onTouch((event: TouchEvent): void => {
+      if (!this.minimapVisible || !this.canUpdatePage()) { return; }
+      event.stopPropagation();
+      this.minimapGuardUntil = Date.now() + 450;
+      const hasTouch: boolean = event.touches !== undefined && event.touches.length > 0;
+      const touchY: number = hasTouch ? event.touches[0].y - MINIMAP_HIT_PAD : 0;
+      if (event.type === TouchType.Down) {
+        this.stopFlingMotion();
+        this.stoppedFlingOnDown = false;
+        this.minimapScrubbing = true;
+        this.panTouched = true;
+        this.showMinimap(false);
+        if (hasTouch) {
+          const cur: LongMinimapLayout = this.currentMinimapLayout();
+          if (cur.visible) {
+            this.panY = minimapScrubPanY(touchY, cur.stripHeight, cur.windowHeight, this.offsetLimitY());
+          }
+        }
+      } else if (event.type === TouchType.Move) {
+        if (this.minimapScrubbing && hasTouch) {
+          const cur: LongMinimapLayout = this.currentMinimapLayout();
+          if (cur.visible) {
+            this.panY = minimapScrubPanY(touchY, cur.stripHeight, cur.windowHeight, this.offsetLimitY());
+          }
+        }
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.minimapScrubbing = false;
+        this.scheduleMinimapHide();
+      }
+    })
   }
 
   /** 图片比容器高：宽度拟合后纵向溢出，需要靠拖动阅读。 */
@@ -525,7 +899,7 @@ struct ZoomableImagePage {
   /** 允许上下拖动返回：1× 非溢出且无其他阻塞手势或菜单。 */
   private dismissDragAllowed(): boolean {
     return this.canUpdatePage() && !this.holdTransitionPreview && !this.zoomAnimating &&
-      !this.dismissBlocked && !this.srBlocked() &&
+      !this.dismissBlocked && !this.srBlocked() && !this.pinchBlocked() &&
       this.zoomScale === MIN_SCALE && !this.verticalOverflow();
   }
 
@@ -589,11 +963,12 @@ struct ZoomableImagePage {
 
   private setScale(value: number): void {
     if (!this.canUpdatePage()) { return; }
-    const next: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
+    const next: number = Math.max(MIN_SCALE, Math.min(this.effectiveMaxScale(), value));
     this.zoomScale = next;
     if (next === MIN_SCALE) {
       this.panX = 0;
       this.panY = this.restPanY();
+      this.hideMinimapImmediate();
     } else {
       this.clampOffsets();
     }
@@ -606,12 +981,19 @@ struct ZoomableImagePage {
     }
   }
 
-  private animateZoom(action: () => void): void {
+  private animateZoom(action: () => void, durationMs: number = ANIMATION_DURATION): void {
     if (!this.canUpdatePage()) { return; }
     const epoch: number = ++this.zoomAnimationEpoch;
     this.zoomAnimating = true;
     this.reportReturnEligibility();
-    this.getUIContext().animateTo({ duration: motionDuration(ANIMATION_DURATION, MotionEffect.SCALE),
+    const duration: number = motionDuration(durationMs, MotionEffect.SCALE);
+    if (duration === 0) {
+      action();
+      this.zoomAnimating = false;
+      this.reportReturnEligibility();
+      return;
+    }
+    this.getUIContext().animateTo({ duration: duration, curve: Curve.EaseOut,
       onFinish: (): void => {
         if (!this.canUpdatePage() || epoch !== this.zoomAnimationEpoch) { return; }
         this.zoomAnimating = false;
@@ -620,7 +1002,19 @@ struct ZoomableImagePage {
   }
 
   private settleScale(): void {
-    const target: number = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.zoomScale));
+    const target: number = Math.max(MIN_SCALE, Math.min(this.effectiveMaxScale(), this.zoomScale));
+    const limitX: number = this.offsetLimitXFor(target);
+    const limitY: number = this.offsetLimitYFor(target);
+    const needPanClamp: boolean = target === MIN_SCALE
+      ? (Math.abs(this.panX) > 0.5 || Math.abs(this.panY - this.restPanY()) > 0.5)
+      : (Math.abs(this.panX) > limitX + 0.5 || Math.abs(this.panY) > limitY + 0.5);
+    if (Math.abs(target - this.zoomScale) < 0.001 && !needPanClamp) {
+      this.zoomScale = target;
+      this.zoomAnimating = false;
+      this.clampOffsets();
+      this.reportReturnEligibility();
+      return;
+    }
     this.animateZoom(() => {
       this.setScale(target);
       if (target === MIN_SCALE) {
@@ -631,11 +1025,13 @@ struct ZoomableImagePage {
   }
 
   /**
-   * 退出前先把长图拉回顶部：正文裁切态展示的是图片顶部，停在滚动中段直接反向转场会和落点对不上、跳一下。
+   * 1× 状态下退出前把长图拉回顶部以衔接共享退场；已放大时走淡出关闭，无需把画面强行拉回。
    */
   private closeWithTopReset(): void {
     if (!this.canUpdatePage()) { return; }
-    if (Math.abs(this.panY - this.restPanY()) <= 1) {
+    this.stopFlingMotion();
+    this.hideMinimapImmediate();
+    if (this.zoomScale > MIN_SCALE || Math.abs(this.panY - this.restPanY()) <= 1) {
       this.onTapImage();
       return;
     }
@@ -654,14 +1050,38 @@ struct ZoomableImagePage {
     });
   }
 
-  private toggleDoubleTapZoom(): void {
-    this.animateZoom(() => {
-      if (this.zoomScale > MIN_SCALE) {
-        this.setScale(MIN_SCALE);
-      } else {
-        this.setScale(DOUBLE_TAP_SCALE);
+  private toggleDoubleTapZoom(event?: GestureEvent): void {
+    if (!this.canUpdatePage()) { return; }
+    this.stopFlingMotion();
+    this.stoppedFlingOnDown = false;
+    const fit: ImageSize = this.sourceImageSize();
+    const targetScale: number = viewerDoubleTapScale(this.zoomScale, this.containerWidth, fit.width);
+    let focalX: number = this.containerWidth / 2;
+    let focalY: number = this.containerHeight / 2;
+    if (event !== undefined && event.fingerList !== undefined && event.fingerList.length > 0) {
+      const finger: FingerInfo = event.fingerList[0];
+      if (Number.isFinite(finger.localX) && Number.isFinite(finger.localY)) {
+        focalX = finger.localX;
+        focalY = finger.localY;
       }
-    });
+    }
+    const target: ViewerTransform = zoomAroundPoint(
+      this.containerWidth, this.containerHeight, fit.width, fit.height,
+      this.zoomScale, targetScale, this.panX, this.panY, focalX, focalY);
+    if (target.scale > MIN_SCALE) {
+      this.panTouched = true;
+    }
+    this.animateZoom(() => {
+      this.zoomScale = target.scale;
+      this.panX = target.panX;
+      this.panY = target.scale === MIN_SCALE ? this.restPanY() : target.panY;
+      this.reportReturnEligibility();
+    }, DOUBLE_TAP_DURATION);
+    if (target.scale > MIN_SCALE) {
+      this.showMinimap(true);
+    } else {
+      this.hideMinimapImmediate();
+    }
   }
 
   private retry(): void {
@@ -834,22 +1254,43 @@ struct ZoomableImagePage {
           .transition(this.imageContentTransition())
         }
         .width('100%').height('100%')
-        // 保留原来的子层单 Pan 与父层 Pinch/LongPress/Tap 仲裁，触摸区不随窄图片缩小。
+        // 子层只处理严格单指拖动；双指缩放走父层 parallelGesture，避免单指 Pan 抢占双指捏合。
+        .onTouch((event: TouchEvent): void => {
+          this.updateActiveTouchCount(event);
+          if (event.type === TouchType.Down && this.activeTouchCount === 1) {
+            if (this.flingAnimator !== undefined) {
+              this.stopFlingMotion();
+              this.stoppedFlingOnDown = true;
+              this.showMinimap(true);
+            } else {
+              this.stoppedFlingOnDown = false;
+            }
+          }
+        })
         .gesture(
-          PanGesture({ fingers: 1, distance: 5,
+          PanGesture({ fingers: 1, distance: this.zoomScale > MIN_SCALE ? 4 : 6,
             // 1× 下只吃纵向拖动（长图滚动或上下拖动返回），横向留给 Swiper 翻页；放大后两个方向都归图片。
             direction: this.zoomScale > MIN_SCALE ? PanDirection.All : PanDirection.Vertical })
             .tag('image-zoom-pan')
-            .onActionStart(() => {
-              if (!this.canUpdatePage()) {
+            .onActionStart((event: GestureEvent) => {
+              const fingers: number = event.fingerList !== undefined ? event.fingerList.length : 1;
+              if (!this.canUpdatePage() || this.minimapBlocked() || this.pinchBlocked() || fingers >= 2) {
                 this.activePanMode = 0;
                 return;
               }
+              this.stopFlingMotion();
+              this.stoppedFlingOnDown = false;
               if (this.panAllowed()) {
                 this.activePanMode = 1;
                 this.panTouched = true;
                 this.panBaseX = this.panX;
                 this.panBaseY = this.panY;
+                this.lastPanOffsetX = event.offsetX;
+                this.lastPanOffsetY = event.offsetY;
+                this.lastPanTimeMs = Date.now();
+                this.trackedVelocityX = 0;
+                this.trackedVelocityY = 0;
+                this.showMinimap(false);
               } else if (this.dismissDragAllowed()) {
                 this.activePanMode = 2;
                 ++this.dismissAnimationEpoch;
@@ -860,10 +1301,40 @@ struct ZoomableImagePage {
             })
             .onActionUpdate((event: GestureEvent) => {
               if (!this.canUpdatePage()) { return; }
+              const fingers: number = event.fingerList !== undefined ? event.fingerList.length : 1;
+              if (this.pinchBlocked() || fingers >= 2) {
+                if (this.activePanMode === 2 && this.dismissDragActive) {
+                  this.resetDismissDragImmediate();
+                  this.onDismissDragChange(false, 1, 1);
+                }
+                this.activePanMode = 0;
+                return;
+              }
               if (this.activePanMode === 1 && this.panAllowed()) {
-                this.panX = this.panBaseX + event.offsetX;
-                this.panY = this.panBaseY + event.offsetY;
-                this.clampOffsets();
+                const nowMs: number = Date.now();
+                const dtMs: number = nowMs - this.lastPanTimeMs;
+                if (dtMs > 0) {
+                  const instVx: number = (event.offsetX - this.lastPanOffsetX) * 1000 / dtMs;
+                  const instVy: number = (event.offsetY - this.lastPanOffsetY) * 1000 / dtMs;
+                  this.trackedVelocityX = this.trackedVelocityX * 0.35 + instVx * 0.65;
+                  this.trackedVelocityY = this.trackedVelocityY * 0.35 + instVy * 0.65;
+                }
+                this.lastPanOffsetX = event.offsetX;
+                this.lastPanOffsetY = event.offsetY;
+                this.lastPanTimeMs = nowMs;
+
+                const limitX: number = this.offsetLimitX();
+                const limitY: number = this.offsetLimitY();
+                const rawX: number = limitX > 0.5 ? this.panBaseX + event.offsetX : 0;
+                const rawY: number = limitY > 0.5 ? this.panBaseY + event.offsetY : 0;
+                if (motionStore.isOn(MotionEffect.SPRING)) {
+                  this.panX = limitX > 0.5 ? applyEdgeResistance(rawX, limitX, this.containerWidth) : 0;
+                  this.panY = limitY > 0.5 ? applyEdgeResistance(rawY, limitY, this.containerHeight) : 0;
+                } else {
+                  this.panX = Math.max(-limitX, Math.min(limitX, rawX));
+                  this.panY = Math.max(-limitY, Math.min(limitY, rawY));
+                }
+                this.showMinimap(false);
               } else if (this.activePanMode === 2 && this.dismissDragActive) {
                 const frame: DismissDragFrame = evaluateDismissDrag(event.offsetX, event.offsetY, this.containerHeight);
                 this.dismissDragX = frame.translateX;
@@ -877,9 +1348,15 @@ struct ZoomableImagePage {
               const mode: number = this.activePanMode;
               this.activePanMode = 0;
               if (mode === 1) {
-                if (this.canUpdatePage()) { this.clampOffsets(); }
+                if (this.canUpdatePage() && !this.pinchBlocked()) {
+                  const nowMs: number = Date.now();
+                  const vx: number = this.resolveReleaseVelocity(event.velocityX, this.trackedVelocityX, nowMs);
+                  const vy: number = this.resolveReleaseVelocity(event.velocityY, this.trackedVelocityY, nowMs);
+                  this.startFlingMotion(vx, vy);
+                }
               } else if (mode === 2 && this.dismissDragActive) {
-                if (this.canUpdatePage() && shouldDismissDrag(event.offsetY, event.velocityY, this.containerHeight)) {
+                if (this.canUpdatePage() && !this.pinchBlocked() &&
+                  shouldDismissDrag(event.offsetY, event.velocityY, this.containerHeight)) {
                   this.onDismissCommit((): void => { this.resetDismissDragImmediate(); });
                 } else {
                   this.reboundDismissDrag();
@@ -889,11 +1366,18 @@ struct ZoomableImagePage {
             .onActionCancel(() => {
               const mode: number = this.activePanMode;
               this.activePanMode = 0;
-              if (mode === 2 && this.dismissDragActive) { this.reboundDismissDrag(); }
+              if (mode === 1) {
+                if (this.canUpdatePage() && !this.pinchBlocked()) { this.startFlingMotion(0, 0); }
+              } else if (mode === 2 && this.dismissDragActive) {
+                this.reboundDismissDrag();
+              }
             })
         )
-        .onGestureJudgeBegin((info: GestureInfo, _event: BaseGestureEvent): GestureJudgeResult => {
-          return info.tag === 'image-zoom-pan' && !this.panAllowed() && !this.dismissDragAllowed()
+        .onGestureJudgeBegin((info: GestureInfo, event: BaseGestureEvent): GestureJudgeResult => {
+          if (info.tag !== 'image-zoom-pan') { return GestureJudgeResult.CONTINUE; }
+          const multiFinger: boolean = this.pinchBlocked() ||
+            (event.fingerList !== undefined && event.fingerList.length >= 2);
+          return multiFinger || this.minimapBlocked() || (!this.panAllowed() && !this.dismissDragAllowed())
             ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE;
         })
         this.LoadOverlay()
@@ -907,36 +1391,120 @@ struct ZoomableImagePage {
         this.applyInitialPan();
         this.clampOffsets();
       })
+      .parallelGesture(
+        PinchGesture({ fingers: 2, distance: 2 })
+          .onActionStart((event: GestureEvent) => {
+            if (!this.canUpdatePage() || this.holdTransitionPreview) { return; }
+            this.stopFlingMotion();
+            this.stoppedFlingOnDown = false;
+            this.pinchActive = true;
+            this.syncMultiTouchState();
+            if (this.activePanMode === 2 || this.dismissDragActive) {
+              this.resetDismissDragImmediate();
+              this.onDismissDragChange(false, 1, 1);
+            }
+            this.activePanMode = 0;
+            ++this.zoomAnimationEpoch;
+            this.zoomAnimating = true;
+            this.reportReturnEligibility();
+            this.pinchBase = this.zoomScale;
+            this.pinchBasePanX = this.panX;
+            this.pinchBasePanY = this.panY;
+            this.pinchStartCenterX = Number.isFinite(event.pinchCenterX) && event.pinchCenterX > 0
+              ? event.pinchCenterX : this.containerWidth / 2;
+            this.pinchStartCenterY = Number.isFinite(event.pinchCenterY) && event.pinchCenterY > 0
+              ? event.pinchCenterY : this.containerHeight / 2;
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            if (!this.canUpdatePage() || this.holdTransitionPreview || !this.pinchActive) { return; }
+            const maxScale: number = this.effectiveMaxScale();
+            const rawScale: number = this.pinchBase * event.scale;
+            let nextScale: number = rawScale;
+            if (motionStore.isOn(MotionEffect.SPRING)) {
+              if (rawScale < MIN_SCALE) {
+                nextScale = Math.max(0.75, MIN_SCALE - (MIN_SCALE - rawScale) * 0.45);
+              } else if (rawScale > maxScale) {
+                nextScale = Math.min(maxScale * 1.18, maxScale + (rawScale - maxScale) * 0.3);
+              }
+            } else {
+              nextScale = Math.max(MIN_SCALE, Math.min(maxScale, rawScale));
+            }
+            const curX: number = Number.isFinite(event.pinchCenterX) && event.pinchCenterX > 0
+              ? event.pinchCenterX : this.pinchStartCenterX;
+            const curY: number = Number.isFinite(event.pinchCenterY) && event.pinchCenterY > 0
+              ? event.pinchCenterY : this.pinchStartCenterY;
+            const ratio: number = nextScale / Math.max(0.001, this.pinchBase);
+            const dx: number = this.pinchStartCenterX - this.containerWidth / 2;
+            const dy: number = this.pinchStartCenterY - this.containerHeight / 2;
+            const rawPanX: number = (curX - this.containerWidth / 2) - (dx - this.pinchBasePanX) * ratio;
+            const rawPanY: number = (curY - this.containerHeight / 2) - (dy - this.pinchBasePanY) * ratio;
+            const limitX: number = this.offsetLimitXFor(nextScale);
+            const limitY: number = this.offsetLimitYFor(nextScale);
+            this.zoomScale = nextScale;
+            if (nextScale <= MIN_SCALE) {
+              this.panX = 0;
+              this.panY = 0;
+              this.hideMinimapImmediate();
+            } else {
+              this.panX = Math.max(-limitX, Math.min(limitX, rawPanX));
+              this.panY = Math.max(-limitY, Math.min(limitY, rawPanY));
+              this.panTouched = true;
+              this.showMinimap(false);
+            }
+            this.reportReturnEligibility();
+          })
+          .onActionEnd(() => {
+            this.pinchActive = false;
+            this.pinchCooldownUntil = Date.now() + 120;
+            this.syncMultiTouchState();
+            if (!this.holdTransitionPreview) {
+              this.settleScale();
+              if (this.zoomScale > MIN_SCALE) {
+                this.scheduleMinimapHide();
+              } else {
+                this.hideMinimapImmediate();
+              }
+            }
+          })
+          .onActionCancel(() => {
+            this.pinchActive = false;
+            this.pinchCooldownUntil = Date.now() + 120;
+            this.syncMultiTouchState();
+            if (!this.holdTransitionPreview) {
+              this.settleScale();
+              if (this.zoomScale > MIN_SCALE) {
+                this.scheduleMinimapHide();
+              } else {
+                this.hideMinimapImmediate();
+              }
+            }
+          })
+      )
       .gesture(
         GestureGroup(GestureMode.Exclusive,
-          PinchGesture({ fingers: 2 })
-            .onActionStart(() => {
-              if (!this.canUpdatePage() || this.holdTransitionPreview) { return; }
-              ++this.zoomAnimationEpoch;
-              this.zoomAnimating = true;
-              this.reportReturnEligibility();
-              this.pinchBase = this.zoomScale;
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              if (!this.holdTransitionPreview) { this.setScale(this.pinchBase * event.scale); }
-            })
-            .onActionEnd(() => {
-              if (!this.holdTransitionPreview) { this.settleScale(); }
-            }),
           LongPressGesture({ duration: 450 })
             .onAction((): void => {
-              if (!this.srBlocked() && !this.dismissDragActive) { this.onLongPressImage(); }
+              if (!this.srBlocked() && !this.pinchBlocked() && !this.dismissDragActive) { this.onLongPressImage(); }
             }),
           TapGesture({ count: 2 })
-            .onAction(() => {
-              if (!this.holdTransitionPreview && !this.srBlocked() && !this.dismissDragActive) { this.toggleDoubleTapZoom(); }
+            .onAction((event: GestureEvent) => {
+              if (!this.holdTransitionPreview && !this.srBlocked() && !this.pinchBlocked() && !this.dismissDragActive) {
+                this.toggleDoubleTapZoom(event);
+              }
             }),
           TapGesture({ count: 1 })
             .onAction(() => {
-              if (!this.srBlocked() && !this.dismissDragActive) { this.closeWithTopReset(); }
+              if (this.stoppedFlingOnDown) {
+                this.stoppedFlingOnDown = false;
+                return;
+              }
+              if (!this.srBlocked() && !this.pinchBlocked() && !this.dismissDragActive) { this.closeWithTopReset(); }
             })
         )
       )
+      if (this.currentMinimapFrame().visible) {
+        this.LongMinimapOverlay()
+      }
       if (smartReachStore.imageMenuLongPress && superResolutionStore.enabled) {
         this.SuperResolutionButton()
       }
@@ -981,8 +1549,11 @@ export struct ImageViewer {
   private swiperController: SwiperController = new SwiperController();
   private swipeDragging: boolean = false;
   @State private dismissDragging: boolean = false;
+  @State private multiTouchActive: boolean = false;
   @State private backdropOpacity: number = 1;
   @State private chromeOpacity: number = 1;
+  @State private longMinimapActive: boolean = false;
+  @State private minimapMenuOpacity: number = 1;
   private pendingDismissReset: (() => void) | null = null;
   private lastPreparedShared: boolean = false;
   /** 底部安全区（系统手势条高度，vp）：页码贴底时用它把文字顶到手势条之上 */
@@ -1047,6 +1618,7 @@ export struct ImageViewer {
     this.readSafeArea();
     this.hideSystemStatusBar();
     smartReachStore.load(this.hostContext());
+    void longImageMinimapStore.load(this.hostContext());
     this.openExport();
   }
 
@@ -1077,7 +1649,7 @@ export struct ImageViewer {
       window.getLastWindow(context).then((win: window.Window) => {
         this.viewerWindow = win;
         const area: window.AvoidArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-        this.statusWasVisible = px2vp(area.topRect.height) > 0;
+        this.statusWasVisible = this.getUIContext().px2vp(area.topRect.height) > 0;
         win.setSpecificSystemBarEnabled('status', false, true).then(() => {
           this.statusHiddenByViewer = true;
         }).catch(() => {
@@ -1128,10 +1700,25 @@ export struct ImageViewer {
     return this.transitionAlive && !this.imageTransition.isClosing();
   }
 
+  private setLongMinimapActive(active: boolean): void {
+    if (!this.canUpdateViewer() || this.longMinimapActive === active) { return; }
+    this.longMinimapActive = active;
+    const duration: number = motionDuration(180, MotionEffect.FADE);
+    if (duration === 0) {
+      this.minimapMenuOpacity = active ? 0 : 1;
+      return;
+    }
+    this.getUIContext().animateTo({ duration: duration, curve: Curve.EaseOut }, (): void => {
+      this.minimapMenuOpacity = active ? 0 : 1;
+    });
+  }
+
   private setCurrentPage(index: number): void {
     if (!this.canUpdateViewer() || !Number.isInteger(index) || index < 0 ||
       index >= this.effectiveImageUrls().length || index === this.currentIndex) { return; }
     this.currentIndex = index;
+    this.multiTouchActive = false;
+    this.setLongMinimapActive(false);
     this.imageTransition.setReturnEnabled(index === this.initialIndex && this.cropReturnEligible);
     this.syncSrCurrent(index);
     this.openExport();
@@ -1372,6 +1959,22 @@ export struct ImageViewer {
     return formatOriginBytes(item.originBytes);
   }
 
+  private preloadAdjacentUrls(): string[] {
+    const items: ViewerImage[] = this.effectiveViewerImages();
+    if (items.length <= 1) { return []; }
+    const candidates: number[] = [this.currentIndex + 1, this.currentIndex - 1, this.currentIndex + 2];
+    const out: string[] = [];
+    for (let i: number = 0; i < candidates.length && out.length < 2; i++) {
+      const idx: number = candidates[i];
+      if (idx < 0 || idx >= items.length) { continue; }
+      const url: string = this.displayUrlAt(idx);
+      if (url.length > 0 && !out.includes(url)) {
+        out.push(url);
+      }
+    }
+    return out;
+  }
+
   private clampedIndex(index: number, count: number): number {
     if (count <= 0 || index < 0) {
       return 0;
@@ -1383,8 +1986,9 @@ export struct ImageViewer {
     try {
       const context = this.getUIContext().getHostContext();
       window.getLastWindow(context).then((win: window.Window) => {
-        const systemBottom: number = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).bottomRect.height);
-        const navBottom: number = px2vp(
+        const ui = this.getUIContext();
+        const systemBottom: number = ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).bottomRect.height);
+        const navBottom: number = ui.px2vp(
           win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
         this.bottomSafeVp = Math.max(systemBottom, navBottom);
       }).catch(() => {
@@ -1499,7 +2103,7 @@ export struct ImageViewer {
   }
 
   private toast(message: string): void {
-    promptAction.showToast({ message: message, duration: 2000 });
+    this.getUIContext().getPromptAction().showToast({ message: message, duration: 2000 });
   }
 
   /** 保存到相册：安全控件授权成功后直接保存到相册 */
@@ -1868,6 +2472,16 @@ export struct ImageViewer {
                   (): void => { this.onBeforeClose(); });
               },
               dismissBlocked: this.exportBusy.length > 0 || this.menuRevealed,
+              explicitLong: item.isLong,
+              bottomSafeVp: this.bottomSafeVp,
+              onMinimapActiveChange: (pageIndex: number, active: boolean): void => {
+                if (this.canUpdateViewer() && pageIndex === this.currentIndex) {
+                  this.setLongMinimapActive(active);
+                }
+              },
+              onMultiTouchChange: (active: boolean): void => {
+                if (this.canUpdateViewer()) { this.multiTouchActive = active; }
+              },
               onDismissDragChange: (active: boolean, backdropOpacity: number, chromeOpacity: number): void => {
                 this.handleDismissDragChange(active, backdropOpacity, chromeOpacity);
               },
@@ -1880,8 +2494,9 @@ export struct ImageViewer {
           (item: ViewerImage, index: number) => `${index}:${item.transitionKey()}`)
         }
         .index(this.settledIndex)
+        .cachedCount(1)
         .indicator(false)
-        .disableSwipe(this.exportBusy.length > 0 || this.holdTransitionPreview || this.dismissDragging)
+        .disableSwipe(this.exportBusy.length > 0 || this.holdTransitionPreview || this.dismissDragging || this.multiTouchActive)
         .loop(false)
         .duration(motionDuration(400)).curve(motionSwiperCurve())
         .onGestureSwipe((_index: number, _event: SwiperAnimationEvent): void => {
@@ -1907,15 +2522,25 @@ export struct ImageViewer {
         .height('100%')
         .transition(TransitionEffect.IDENTITY)
       }
+      // 借用 ArkUI 官方图片缓存提前预取相邻 ±1/+2 张图，减少连续翻图等待；不新增独立磁盘缓存。
+      ForEach(this.preloadAdjacentUrls(), (url: string) => {
+        Image(url)
+          .width(1)
+          .height(1)
+          .opacity(0)
+          .hitTestBehavior(HitTestMode.None)
+          .accessibilityLevel('no')
+      }, (url: string): string => `preload:${url}`)
       if (!smartReachStore.imageMenuLongPress || !this.menuRevealed) {
         this.PageBadge(this.effectiveImageUrls().length)
       }
-      // 常显小胶囊只接住自身触摸；图片仍可缩放、翻页和单击关闭。
+      // 常显小胶囊只接住自身触摸；长图右侧定位条显示期间自动淡出避让。
       if (this.exportOpen && !this.menuHidden && !smartReachStore.imageMenuLongPress) {
         ImageMenuPosition({ viewportWidth: this.viewerWidth, viewportHeight: this.viewerHeight,
           capsuleHeight: superResolutionStore.enabled ? 200 : 162, bottomInset: this.bottomSafeVp,
           busy: this.exportBusy.length > 0, content: (): void => { this.ExportSheet() } })
-          .opacity(this.chromeOpacity)
+          .opacity(this.chromeOpacity * this.minimapMenuOpacity)
+          .hitTestBehavior(this.longMinimapActive ? HitTestMode.None : HitTestMode.Default)
           .transition(imageFadeTransition())
       }
       if (smartReachStore.imageMenuLongPress && this.menuRevealed) {

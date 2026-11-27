@@ -1,0 +1,6 @@
+{
+  "layered-image": {
+    "background": "$media:icon_azure_white_bg",
+    "foreground": "$media:icon_azure_white_fg"
+  }
+}

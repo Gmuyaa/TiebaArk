@@ -14,6 +14,9 @@ import { mergeProfile, UserProfileInfo, avatarIdentity } from '../model/UserProf
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { avatarTrace, avatarTracePhase, avatarUptimeMs } from '../utils/AvatarTrace';
 import { AuthStore, StoreResult } from './AuthStore';
+import {
+  SavedAccount, loadAccountRoster, removeAccountRoster, upsertAccountRoster
+} from './AccountRosterStore';
 import { deleteForumSnapshot } from '../utils/ForumSnapshotStore';
 import {
   AuthSnapshot, CredentialBundle, credentialsFromUserInput, expiredSnapshot,
@@ -43,6 +46,8 @@ export class AuthSession {
 
   /** **整体替换**触发 `@Trace`（不就地改字段）；页面在 build 里读 `snapshot.xxx` 即订阅到这里。 */
   @Trace snapshot: AuthSnapshot = AuthSnapshot.loggedOut();
+  @Trace savedAccounts: SavedAccount[] = [];
+  @Trace switchingAccount: boolean = false;
   /**
    * 仅用于**本人头像图片**的展示缓存键，不改变协议 portrait 或账号身份。远端身份变化、账号变化、
    * 上传后复查及用户主动强刷时推进；同一路径的图片内容也可能更新，需用新 URL 请求。
@@ -141,6 +146,7 @@ export class AuthSession {
       if (verifiedUid > 0) {
         this.stableForumUid = verifiedUid;
         void AuthStore.saveForumUid(verifiedUid);
+        this.archiveActiveAccount(verifiedUid, merged);
       }
       this.publishAvatarIdentity(merged.portrait);
       avatarTracePhase('profile-refresh', 0, startedMs,
@@ -310,6 +316,7 @@ export class AuthSession {
     // 记住上下文：资料端点要签名 → 要设备身份 → 要 preferences → 要 context。
     // 放在最前面（**在并发去重之前**）：重复调用时也要刷新它，代价只是一次赋值。
     this.deviceContext = context;
+    this.savedAccounts = loadAccountRoster(context);
     if (this.restoring !== undefined) {
       return this.restoring;
     }
@@ -470,13 +477,113 @@ export class AuthSession {
     if (!saved.ok) { return LoginResult.failure(saved.message); }
 
     this.deviceContext = context;
+    if (this.stableForumUid > 0 && this.credentials.isUsable()) {
+      void AuthStore.saveAccountCredentials(this.stableForumUid, this.credentials);
+    }
     this.snapshot = loggedInSnapshotCarrying(this.snapshot);
     return LoginResult.success();
   }
 
+  private archiveActiveAccount(uid: number, profile: UserProfileInfo): void {
+    if (!Number.isSafeInteger(uid) || uid <= 0 || !this.credentials.isUsable()) { return; }
+    void AuthStore.saveAccountCredentials(uid, this.credentials);
+    if (this.deviceContext === undefined) { return; }
+    const entry: SavedAccount = new SavedAccount();
+    entry.uid = uid;
+    entry.nickname = profile.nickName.length > 0 ? profile.nickName : this.snapshot.nickname;
+    entry.userName = profile.userName.length > 0 ? profile.userName : this.snapshot.userName;
+    entry.portrait = profile.portrait.length > 0 ? profile.portrait : this.snapshot.portrait;
+    entry.savedAt = Date.now();
+    this.savedAccounts = upsertAccountRoster(this.deviceContext, entry);
+  }
+
+  refreshSavedAccounts(context: common.Context): void {
+    this.deviceContext = context;
+    this.savedAccounts = loadAccountRoster(context);
+  }
+
+  async switchAccount(context: common.UIAbilityContext, targetUid: number): Promise<LoginResult> {
+    if (this.switchingAccount) { return LoginResult.failure('正在切换账号，请稍候'); }
+    if (!Number.isSafeInteger(targetUid) || targetUid <= 0) {
+      return LoginResult.failure('目标账号无效');
+    }
+    if (this.isLoggedIn() && this.snapshot.uid === targetUid) {
+      return LoginResult.success();
+    }
+    this.deviceContext = context;
+    this.switchingAccount = true;
+    const operation: number = ++this.credentialOperation;
+    try {
+      const bundle: CredentialBundle = await AuthStore.loadAccountCredentials(targetUid);
+      if (operation !== this.credentialOperation) { return LoginResult.failure('切换已取消'); }
+      if (!bundle.isUsable()) {
+        this.savedAccounts = removeAccountRoster(context, targetUid);
+        return LoginResult.failure('该账号凭据已不存在，请重新登录', true);
+      }
+      const tbsResponse: TbsResponse = await this.api.fetchTbsWithBduss(bundle.bduss);
+      if (operation !== this.credentialOperation) { return LoginResult.failure('切换已取消'); }
+      if (!tbsResponse.ok) {
+        return LoginResult.failure(tbsResponse.describeFailure(), tbsResponse.transportError.length === 0);
+      }
+      if (!tbsResponse.isLogin) {
+        return LoginResult.failure('该账号登录已失效，请重新登录', true);
+      }
+      if (tbsResponse.tbs.length > 0) {
+        bundle.tbs = tbsResponse.tbs;
+        void AuthStore.saveAccountCredentials(targetUid, bundle);
+      }
+      this.api.resetUidCache();
+      this.profileVersion++;
+      const saved: StoreResult = await AuthStore.save(bundle,
+        (): boolean => operation === this.credentialOperation);
+      if (operation !== this.credentialOperation) { return LoginResult.failure('切换已取消'); }
+      if (!saved.ok) { return LoginResult.failure(saved.message); }
+      await this.clearWebLoginState();
+      this.applyCredentials(bundle);
+      this.stableForumUid = targetUid;
+      void AuthStore.saveForumUid(targetUid);
+      const existing: SavedAccount | undefined = this.savedAccounts.find((a: SavedAccount): boolean => a.uid === targetUid);
+      if (existing !== undefined) {
+        const snap = loggedInSnapshotCarrying(this.snapshot);
+        snap.uid = targetUid;
+        snap.nickname = existing.nickname;
+        snap.userName = existing.userName;
+        snap.portrait = existing.portrait;
+        this.snapshot = snap;
+        existing.savedAt = Date.now();
+        this.savedAccounts = upsertAccountRoster(context, existing);
+      }
+      void this.fetchProfileAndUpdate();
+      hilog.info(0x0000, 'AuthSession', 'account switched: uid=%{public}d', targetUid);
+      return LoginResult.success();
+    } catch (err) {
+      const e: Error = err as Error;
+      return LoginResult.failure(`切换账号失败：${e.message}`);
+    } finally {
+      this.switchingAccount = false;
+    }
+  }
+
+  async removeSavedAccount(context: common.Context, targetUid: number): Promise<StoreResult> {
+    this.deviceContext = context;
+    const res: StoreResult = await AuthStore.removeAccountCredentials(targetUid);
+    this.savedAccounts = removeAccountRoster(context, targetUid);
+    return res;
+  }
+
+  private async clearWebLoginState(): Promise<boolean> {
+    let ok: boolean = true;
+    try { await webview.WebCookieManager.clearAllCookies(); } catch (_) { ok = false; }
+    try { webview.WebCookieManager.clearAllCookiesSync(true); } catch (_) {}
+    try { await webview.WebCookieManager.saveCookieAsync(); } catch (_) {}
+    try { webview.WebStorage.deleteAllData(false); } catch (_) {}
+    try { webview.WebStorage.deleteAllData(true); } catch (_) {}
+    return ok;
+  }
+
   /**
    * 退出登录。只清**账号**凭据与账号相关状态（BDUSS / stoken / tbs / 登录态，ArkWeb 登录带来的
-   * Cookie 也一并清）。**不重置设备身份**（`DeviceIdentity` 的 androidId/uuid）：退出后匿名浏览
+   * Cookie 与存储也一并清）。**不重置设备身份**（`DeviceIdentity` 的 androidId/uuid）：退出后匿名浏览
    * 仍可用，也不会因为换设备指纹触发风控。
    */
   async logout(context: common.UIAbilityContext): Promise<StoreResult> {
@@ -484,9 +591,7 @@ export class AuthSession {
     const oldUid: number = this.stableForumUid;
     this.applyCredentials(new CredentialBundle());
     const result: StoreResult = await AuthStore.clear();
-    let cookiesCleared: boolean = true;
-    try { await webview.WebCookieManager.clearAllCookies(); }
-    catch (_) { cookiesCleared = false; }
+    const cookiesCleared: boolean = await this.clearWebLoginState();
     await deleteForumSnapshot(context, oldUid);
     if (!cookiesCleared) { return StoreResult.failure('网页登录状态清理失败，请重试退出登录'); }
     return result;

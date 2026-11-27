@@ -1,6 +1,6 @@
 /** 帖子卡片的共用视觉参数；紧凑卡与回复卡后续迁移时复用，不改变其信息结构。 */
 export class ThreadCardLayout {
-  static readonly RADIUS: number = 9;
+  static readonly RADIUS: number = 16;
   static readonly SIDE_PADDING: number = 14;
   static readonly TOP_PADDING: number = 13;
   static readonly BOTTOM_PADDING: number = 12;

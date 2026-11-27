@@ -110,7 +110,7 @@ export struct ForumIdentity {
     void this.vm.ensureIntroduction(this.context());
   }
   private async activate(): Promise<void> {
-    if (!authSession.isLoggedIn()) { router.pushUrl({ url: 'pages/Login' }); return; }
+    if (!authSession.isLoggedIn()) { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); return; }
     const message: string = await this.vm.activate(this.context());
     if (message.length > 0) { this.getUIContext().getPromptAction().showToast({ message }); }
   }

@@ -12,6 +12,7 @@ import { HdsNavDestination, ScrollEffectType } from '@kit.UIDesignKit';
 import { ChatBubble } from '../components/ChatBubble';
 import { emojiPanelDialogOptions, emojiPanelGridHeight, emojiPanelHeight } from '../components/EmojiPanelDialog';
 import { GlassBackButton } from '../components/GlassBackButton';
+import { ImageViewer } from '../components/ImageViewer';
 import { MaterialTabs } from '../components/MaterialTabs';
 import { PageState } from '../components/PageState';
 import { authSession } from '../auth/AuthSession';
@@ -20,16 +21,20 @@ import { motionDuration } from '../common/appearance/MotionPolicy';
 import { motionStore } from '../common/appearance/MotionStore';
 import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
 import { VisualThemeStore, visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
-import { ChatMessage } from '../model/Chat';
+import { ChatImageContent, ChatMessage, MSG_TYPE_IMAGE } from '../model/Chat';
+import { ListDataSource } from '../model/ListDataSource';
+import { UploadedPostImage } from '../model/ImageUpload';
 import { REPLY_EMOTICON_CODES, emojiImageUrl, emojiTokenFromUrl } from '../model/ThreadDetail';
 import { ChatPageParams, NavigationService } from '../navigation/AppNavigation';
 import { AppTheme, DetailTheme } from '../theme/Theme';
 import { readEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEditor';
 import { STATUS_BAR_FALLBACK_VP, readBottomInsetVp, readStatusBarVp } from '../utils/SafeArea';
 import { ChatVM } from '../viewmodel/ChatVM';
+import { ImageUploadVM } from '../viewmodel/ImageUploadVM';
 
 const TIME_GAP_MS: number = 5 * 60 * 1000;
 const COMPOSER_MIN_HEIGHT: number = 48;
@@ -56,6 +61,18 @@ export struct ChatPage {
   @Local visualSettings: VisualThemeStore = visualThemeStore;
   @Local themeSettings: ThemeModeStore = themeModeStore;
   @Local vm: ChatVM = new ChatVM();
+  @Local imageUpload: ImageUploadVM = new ImageUploadVM();
+  @Local viewerOpen: boolean = false;
+  @Local viewerUrls: string[] = [];
+  @Local viewerIndex: number = 0;
+  @Local msgSource: ListDataSource<ChatMessage> = new ListDataSource<ChatMessage>();
+  private loadingOlder: boolean = false;
+
+  private syncMessageSource(): void {
+    this.msgSource.sync(this.vm.messages,
+      (item: ChatMessage): string => `${item.key()}-${item.sendState}`,
+      (item: ChatMessage): string => item.key());
+  }
   @Local draft: string = '';
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local bottomInset: number = 0;
@@ -91,7 +108,7 @@ export struct ChatPage {
   }
 
   aboutToAppear(): void {
-    this.screenW = px2vp(display.getDefaultDisplaySync().width);
+    try { this.screenW = this.getUIContext().px2vp(display.getDefaultDisplaySync().width); } catch (_) {}
     readStatusBarVp(this.context())
       .then((vp: number): void => { this.statusBarH = vp; }).catch(() => {});
     readBottomInsetVp(this.context())
@@ -105,6 +122,7 @@ export struct ChatPage {
     this.clearScrollTimers();
     this.stopKeyboardTracking();
     this.restoreKeyboardMode();
+    this.imageUpload.dispose();
     this.vm.dispose();
   }
 
@@ -128,14 +146,15 @@ export struct ChatPage {
     window.getLastWindow(this.context()).then((win: window.Window): void => {
       if (seq !== this.keyboardWatchSeq) { return; }
       this.avoidWin = win;
-      this.screenW = px2vp(win.getWindowProperties().windowRect.width);
-      this.bottomInset = px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
-      this.updateKeyboard(px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height));
+      const ui = this.getUIContext();
+      this.screenW = ui.px2vp(win.getWindowProperties().windowRect.width);
+      this.bottomInset = ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
+      this.updateKeyboard(ui.px2vp(win.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height));
       this.avoidAreaCb = (data: window.AvoidAreaOptions): void => {
         if (data.type === window.AvoidAreaType.TYPE_KEYBOARD) {
-          this.updateKeyboard(px2vp(data.area.bottomRect.height));
+          this.updateKeyboard(ui.px2vp(data.area.bottomRect.height));
         } else if (data.type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR) {
-          this.bottomInset = px2vp(data.area.bottomRect.height);
+          this.bottomInset = ui.px2vp(data.area.bottomRect.height);
         }
       };
       win.on('avoidAreaChange', this.avoidAreaCb);
@@ -268,6 +287,8 @@ export struct ChatPage {
 
   @Monitor('vm.messages')
   onMessagesChanged(): void {
+    this.syncMessageSource();
+    if (this.loadingOlder) { return; }
     this.scrollToBottom();
   }
 
@@ -298,6 +319,7 @@ export struct ChatPage {
     }
     await this.vm.open(this.context(), groupIdText, peerUidText,
       this.routeParams?.peerName ?? '', this.routeParams?.peerPortrait ?? '');
+    this.syncMessageSource();
     this.scrollToBottom();
   }
 
@@ -336,10 +358,75 @@ export struct ChatPage {
   private showTime(index: number): boolean {
     const list: ChatMessage[] = this.vm.messages;
     if (index <= 0) { return true; }
+    if (index >= list.length) { return false; }
     const current: ChatMessage = list[index];
     const previous: ChatMessage = list[index - 1];
     if (current.createTimeMs <= 0 || previous.createTimeMs <= 0) { return false; }
     return current.createTimeMs - previous.createTimeMs > TIME_GAP_MS;
+  }
+
+  private loadOlderMessages(): void {
+    if (!this.vm.hasOlderHistory) { return; }
+    this.clearScrollTimers();
+    this.loadingOlder = true;
+    try {
+      const added: number = this.vm.loadOlder();
+      if (added > 0) {
+        this.syncMessageSource();
+      }
+    } finally {
+      setTimeout((): void => { this.loadingOlder = false; }, 120);
+    }
+  }
+
+  private openChatImage(targetUrl: string): void {
+    this.dismissInput();
+    const urls: string[] = [];
+    for (let i: number = 0; i < this.vm.messages.length; i++) {
+      const m: ChatMessage = this.vm.messages[i];
+      if (m.msgType !== MSG_TYPE_IMAGE) { continue; }
+      const img: ChatImageContent | undefined = m.imageContent();
+      if (img === undefined) { continue; }
+      const url: string = img.bigSrc.length > 0 ? img.bigSrc : img.src;
+      if (url.length > 0) { urls.push(url); }
+    }
+    let idx: number = urls.indexOf(targetUrl);
+    if (idx < 0) {
+      urls.push(targetUrl);
+      idx = urls.length - 1;
+    }
+    this.viewerUrls = urls;
+    this.viewerIndex = idx;
+    this.viewerOpen = true;
+  }
+
+  private async pickAndSendImage(): Promise<void> {
+    if (this.vm.sending || this.imageUpload.busy || this.imageUpload.selecting) { return; }
+    this.dismissInput();
+    const imGroupId: string = this.vm.uploadGroupId();
+    await this.imageUpload.pickAndUpload(this.context(), '', true, imGroupId);
+    const uploaded: UploadedPostImage | undefined = this.imageUpload.image;
+    if (uploaded === undefined) {
+      if (this.imageUpload.error.length > 0) {
+        try { this.getUIContext().getPromptAction().showToast({ message: this.imageUpload.error }); } catch (_) {}
+      }
+      return;
+    }
+    const srcUrl: string = uploaded.smallUrl.length > 0 ? uploaded.smallUrl
+      : (uploaded.bigUrl.length > 0 ? uploaded.bigUrl : uploaded.previewUrl);
+    const bigUrl: string = uploaded.bigUrl.length > 0 ? uploaded.bigUrl
+      : (uploaded.previewUrl.length > 0 ? uploaded.previewUrl : srcUrl);
+    if (srcUrl.length === 0) {
+      try { this.getUIContext().getPromptAction().showToast({ message: '图片上传未返回可用地址' }); } catch (_) {}
+      return;
+    }
+    const sendW: number = uploaded.smallWidth > 0 && uploaded.smallHeight > 0 ? uploaded.smallWidth : uploaded.width;
+    const sendH: number = uploaded.smallWidth > 0 && uploaded.smallHeight > 0 ? uploaded.smallHeight : uploaded.height;
+    const err: string = await this.vm.sendImage(this.context(), srcUrl, sendW, sendH,
+      (): void => { this.scrollToBottom(); }, bigUrl);
+    if (err.length > 0) {
+      try { this.getUIContext().getPromptAction().showToast({ message: err }); } catch (_) {}
+    }
   }
 
   private async send(): Promise<void> {
@@ -352,7 +439,7 @@ export struct ChatPage {
       this.scrollToBottom();
     });
     if (failure.length > 0) {
-      this.getUIContext().getPromptAction().showToast({ message: failure });
+      try { this.getUIContext().getPromptAction().showToast({ message: failure }); } catch (_) {}
     }
     this.scrollToBottom();
   }
@@ -440,7 +527,7 @@ export struct ChatPage {
   private async retry(message: ChatMessage): Promise<void> {
     const failure: string = await this.vm.retry(this.context(), message);
     if (failure.length > 0) {
-      this.getUIContext().getPromptAction().showToast({ message: failure });
+      try { this.getUIContext().getPromptAction().showToast({ message: failure }); } catch (_) {}
     }
     this.scrollToBottom();
   }
@@ -521,9 +608,25 @@ export struct ChatPage {
   MessageList() {
     List({ space: 0, scroller: this.scroller }) {
       ListItem() {
-        Row().width('100%').height(this.statusBarH + NAV_BAR_HEIGHT)
+        Column() {
+          Row().width('100%').height(this.statusBarH + NAV_BAR_HEIGHT).hitTestBehavior(HitTestMode.None)
+          if (this.vm.hasOlderHistory && this.vm.messages.length > 0) {
+            Row() {
+              Text('查看更早消息')
+                .fontSize(13)
+                .fontColor(AppTheme.ACCENT)
+                .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+                .borderRadius(14)
+                .backgroundColor(AppTheme.SURFACE_MUTED)
+                .onClick((): void => { this.loadOlderMessages(); })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.Center)
+            .padding({ top: 10, bottom: 6 })
+          }
+        }
+        .width('100%')
       }
-      .hitTestBehavior(HitTestMode.None)
       if (this.vm.loading && this.vm.messages.length === 0) {
         ListItem() { PageState({ loading: true, message: '正在读取聊天记录…' }).height(240) }
       } else if (this.vm.error.length > 0 && this.vm.messages.length === 0) {
@@ -540,16 +643,17 @@ export struct ChatPage {
               onAction: (): void => { void this.open(); } })
           }
         }
-        ForEach(this.vm.messages, (item: ChatMessage, index: number) => {
+        LazyForEach(this.msgSource, (item: ChatMessage, index: number) => {
           ListItem() {
             ChatBubble({
               message: item,
               showTime: this.showTime(index),
               selfPortrait: this.selfPortrait(),
-              onRetry: (message: ChatMessage): void => { void this.retry(message); }
+              onRetry: (message: ChatMessage): void => { void this.retry(message); },
+              onOpenImage: (url: string): void => { this.openChatImage(url); }
             });
           }
-        }, (item: ChatMessage) => item.key())
+        }, (item: ChatMessage) => `${item.key()}-${item.sendState}`)
         // 末尾避让放在列表内容里而不是 padding：padding 会在底部留出不画内容的死带，破坏悬浮材质透视。
         ListItem() {
           Row().width('100%').height(this.listTailSpace())
@@ -558,7 +662,11 @@ export struct ChatPage {
       }
     }
     .width('100%')
+    .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+    .alignSelf(ItemAlign.Center)
     .height('100%')
+    .cachedCount(6)
+    .maintainVisibleContentPosition(true)
     .edgeEffect(EdgeEffect.Spring)
     .scrollBar(BarState.Off)
     .onClick((): void => { this.dismissInput(); })
@@ -588,6 +696,7 @@ export struct ChatPage {
       })
     }
     .width('100%')
+    .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
     .padding({ left: BAR_SIDE_MARGIN, right: BAR_SIDE_MARGIN, bottom: this.barBottomMargin() })
   }
 
@@ -632,6 +741,7 @@ export struct ChatPage {
   ComposerContent() {
     Row({ space: 4 }) {
       this.DraftInput()
+      this.ImagePickAction()
       this.EmojiToggleAction()
       this.SendAction()
     }
@@ -646,6 +756,31 @@ export struct ChatPage {
         this.scrollToBottom();
       }
     })
+  }
+
+  @Builder
+  ImagePickAction() {
+    Row() {
+      if (this.imageUpload.busy || this.imageUpload.selecting) {
+        LoadingProgress()
+          .width(18)
+          .height(18)
+          .color(AppTheme.ACCENT)
+      } else {
+        SymbolGlyph($r('sys.symbol.picture'))
+          .fontSize(21)
+          .maxFontScale(1)
+          .fontColor([AppTheme.TEXT_MAIN])
+      }
+    }
+    .width(ACTION_BUTTON_SIZE)
+    .height(ACTION_BUTTON_SIZE)
+    .margin({ bottom: 2 })
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(ACTION_BUTTON_SIZE / 2)
+    .id('chat-image-button')
+    .accessibilityText('发送图片')
+    .onClick((): void => { void this.pickAndSendImage(); })
   }
 
   @Builder
@@ -810,6 +945,15 @@ export struct ChatPage {
         if (!this.conversationBroken()) {
           this.ComposerBar()
         }
+
+        if (this.viewerOpen && this.viewerUrls.length > 0) {
+          ImageViewer({
+            imageUrls: this.viewerUrls,
+            initialIndex: this.viewerIndex,
+            onClose: (): void => { this.viewerOpen = false; }
+          })
+            .zIndex(100)
+        }
       }
       .width('100%')
       .height('100%')
@@ -837,10 +981,10 @@ export struct ChatPage {
       content: { stackBuilder: (): void => { this.ChatNavBar(); } }
     })
     .hideBackButton(true)
-    .hideTitleBar(false)
+    .hideTitleBar(this.viewerOpen)
     .systemBarStyle(
-      { statusBarContentColor: themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
-      { statusBarContentColor: themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
+      { statusBarContentColor: this.viewerOpen || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
+      { statusBarContentColor: this.viewerOpen || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
     )
     .bindToScrollable([this.scroller])
     .onShown((): void => {
@@ -852,6 +996,10 @@ export struct ChatPage {
       this.restoreKeyboardMode();
     })
     .onBackPressed((): boolean => {
+      if (this.viewerOpen) {
+        this.viewerOpen = false;
+        return true;
+      }
       if (this.showEmoji || this.emojiAwaitKeyboard) {
         this.collapseEmoji();
         return true;

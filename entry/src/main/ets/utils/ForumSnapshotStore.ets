@@ -12,6 +12,7 @@ export interface StoredForumHeader {
   level: number; levelName: string; currentScore: number; nextScore: number;
   signed: boolean | undefined; missedDays: number;
   continuousCount?: number; totalCount?: number;
+  heroColor?: string;
   day: string; accessedAt: number; fetchedAt: number;
 }
 export interface StoredForumSnapshot {
@@ -99,7 +100,8 @@ export function loadForumSnapshot(context: common.UIAbilityContext, uid: number)
         typeof header.accessedAt !== 'number' || typeof header.fetchedAt !== 'number' ||
         typeof header.missedDays !== 'number' ||
         (header.continuousCount !== undefined && !Number.isSafeInteger(header.continuousCount)) ||
-        (header.totalCount !== undefined && !Number.isSafeInteger(header.totalCount))) { return undefined; }
+        (header.totalCount !== undefined && !Number.isSafeInteger(header.totalCount)) ||
+        (header.heroColor !== undefined && typeof header.heroColor !== 'string')) { return undefined; }
     }
     return value;
   } catch (_) { return undefined; }

@@ -6,7 +6,9 @@ import { ReadingDecodeSize, readingDecodeSize } from './PostImageLayout';
 
 /** 单个信息流缩略图的目标解码上限，不代表整个页面的实际内存上限。 */
 export const FEED_IMAGE_DECODE_PIXELS: number = 2 * 1024 * 1024;
-export const FEED_IMAGE_DECODE_EDGE: number = 4096;
+export const FEED_IMAGE_DECODE_EDGE: number = 8192;
+/** 单张长图卡片顶部裁切框的宽高比（3:5 竖长预览窗）。 */
+export const FEED_SINGLE_LONG_RATIO: number = 0.6;
 
 /** 新版信息流最多展示前三张；这里仅产出预览下标，原图序列仍由页面持有。 */
 export function modernFeedPreviewIndices(total: number): number[] {
@@ -55,7 +57,7 @@ export function modernFeedImageGap(contentWidth: number, total: number): number 
   return modernFeedGapForColumns(contentWidth, modernFeedColumns(modernFeedPreviewIndices(total).length));
 }
 
-/** 单图（含长图）完整等比适配宽高上限；多图固定为等宽正方形。 */
+/** 单图常规比例完整等比适配；单张长图按 3:5 竖框顶部裁切；多图固定为等宽正方形。 */
 export function modernFeedImageBox(info: FeedImageInfo, contentWidth: number,
   total: number, density: number): FeedImageBox {
   return modernFeedImageBoxForColumns(info, contentWidth,
@@ -77,9 +79,14 @@ export function modernFeedImageBoxForColumns(info: FeedImageInfo, contentWidth: 
   box.known = true;
   box.long = info.long || ratio < PREVIEW_LONG_RATIO;
   if (columnCount < 2) {
-    // 长图标记只描述内容，不再让单图转入顶部裁切；卡片与完整图片保持同一比例。
-    box.width = Math.min(width, info.width * nativeScale(density), PREVIEW_SINGLE_MAX_H * ratio);
-    box.height = box.width / ratio;
+    const nativeWidth: number = info.width * nativeScale(density);
+    if (box.long && ratio < FEED_SINGLE_LONG_RATIO && nativeWidth / ratio > PREVIEW_SINGLE_MAX_H) {
+      box.width = Math.min(width, PREVIEW_SINGLE_MAX_H * FEED_SINGLE_LONG_RATIO);
+      box.height = Math.min(PREVIEW_SINGLE_MAX_H, box.width / FEED_SINGLE_LONG_RATIO);
+    } else {
+      box.width = Math.min(width, nativeWidth, PREVIEW_SINGLE_MAX_H * ratio);
+      box.height = box.width / ratio;
+    }
   }
   return box;
 }
@@ -138,7 +145,8 @@ export function modernFeedImageTransform(info: FeedImageInfo, box: FeedImageBox,
   result.scale = drawn.width / containedWidth;
   result.xPercent = (drawn.x - (box.width - containedWidth) * result.scale / 2) / box.width * 100;
   result.yPercent = (drawn.y - (box.height - containedHeight) * result.scale / 2) / box.height * 100;
-  // 方格分配可能产生浮点尾差；近零位移必须精确归零，避免单位缩放被误判为纯平移。
+  // 方格与单图裁切可能产生浮点尾差；近单位缩放与近零位移精确归一，保证共享配对稳定。
+  if (Math.abs(result.scale - 1) < 0.0000000001) { result.scale = 1; }
   if (Math.abs(result.xPercent) < 0.0000000001) { result.xPercent = 0; }
   if (Math.abs(result.yPercent) < 0.0000000001) { result.yPercent = 0; }
   return result;

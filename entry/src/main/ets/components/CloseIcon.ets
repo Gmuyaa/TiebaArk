@@ -1,6 +1,6 @@
 import { AppTheme } from '../theme/Theme';
 
-/** xmark 的绘制 em 与 advance 不同，用独立方形布局盒承载，避免父容器按 advance 居中。 */
+/** 关闭图标容器：保持居中布局，不依赖手工定位偏移。 */
 @ComponentV2
 export struct CloseIcon {
   @Param iconSize: number = 20;
@@ -8,9 +8,9 @@ export struct CloseIcon {
   @Param color: ResourceColor | undefined = undefined;
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
+    Stack({ alignContent: Alignment.Center }) {
       SymbolGlyph($r('sys.symbol.xmark')).fontSize(this.iconSize).maxFontScale(1)
-        .fontWeight(this.iconWeight).fontColor([this.color ?? AppTheme.TEXT_MAIN]).position({ x: 0, y: 0 })
+        .fontWeight(this.iconWeight).fontColor([this.color ?? AppTheme.TEXT_MAIN])
     }.width(this.iconSize).height(this.iconSize).hitTestBehavior(HitTestMode.Transparent)
   }
 }

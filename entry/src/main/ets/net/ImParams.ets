@@ -147,6 +147,11 @@ export class ImGroupSyncParams {
 
   static build(cursors: ImGroupCursor[], getType: number = ImGroupSyncParams.GET_TYPE_PRIVATE): ImRequest {
     const data: ProtoWriter = new ProtoWriter();
+    // 图片尺寸协商（官方 GetGroupMsg.DataReq tag 1-4）；缺少时服务端可能不下发私信图片 URL。
+    data.writeInt32(1, 1080);
+    data.writeInt32(2, 1920);
+    data.writeInt32(3, 360);
+    data.writeInt32(4, 360);
     for (let i = 0; i < cursors.length; i++) {
       const item: ProtoWriter = new ProtoWriter();
       item.writeInt64(1, cursors[i].groupId);   // groupId
@@ -167,6 +172,7 @@ export class ImGroupSyncParams {
 /** 拼 `CommitPersonalMsgReqIdl{data=1}`（205001）。 */
 export class ImSendParams {
   static readonly MSG_TYPE_TEXT: number = 1;
+  static readonly MSG_TYPE_IMAGE: number = 2;
 
   /**
    * @param groupId 已有会话的真实 groupId；0 表示首次开聊（服务端按 toUid 找/建组）。

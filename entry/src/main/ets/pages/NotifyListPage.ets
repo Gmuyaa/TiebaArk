@@ -7,9 +7,11 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { PageHeader } from '../components/PageHeader';
 import { NotifyAuthor, NotifyItem, NotifyKind } from '../model/Notify';
+import { ListDataSource } from '../model/ListDataSource';
 import { formatTimeText } from '../model/TimeText';
 import { NavigationService, NotifyListParams } from '../navigation/AppNavigation';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { NotifyVM } from '../viewmodel/NotifyVM';
 import { authSession, AuthSession } from '../auth/AuthSession';
@@ -27,11 +29,16 @@ export struct NotifyListPage {
   /** kind 只在 aboutToAppear 解析一次（同 MyListPage 的 parseKind 约定） */
   @Local kind: NotifyKind = 'reply';
   @Local vm: NotifyVM = new NotifyVM('reply');
+  @Local notifySource: ListDataSource<NotifyItem> = new ListDataSource<NotifyItem>();
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local refreshing: boolean = false;
   @Local auth: AuthSession = authSession;
   @Monitor('auth.snapshot')
   onAccountChanged(): void { void this.reload(); }
+  @Monitor('vm.items')
+  syncNotifySource(): void {
+    this.notifySource.sync(this.vm.items, (item: NotifyItem): string => item.key());
+  }
   private scroller: ListScroller = new ListScroller();
 
   private context(): common.UIAbilityContext {
@@ -110,7 +117,7 @@ export struct NotifyListPage {
             if (!this.vm.loadedOnce && this.vm.loading) {
               ListItem() { PageState({ loading: true, message: '正在加载…' }) }
             } else {
-              ForEach(this.vm.items, (item: NotifyItem) => {
+              LazyForEach(this.notifySource, (item: NotifyItem) => {
                 ListItem() { this.NotifyRow(item) }
               }, (item: NotifyItem) => item.key())
               if (!this.vm.hasItems() && this.vm.error.length === 0) {
@@ -121,7 +128,9 @@ export struct NotifyListPage {
           /*
            * 底部**不留**安全区留白（全站列表同口径，见 AGENTS.md）。
            */
-          }.width('100%').height('100%').padding({ left: 12, right: 12, top: 8 })
+          }.width('100%').height('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+          .alignSelf(ItemAlign.Center).padding({ left: 12, right: 12, top: 8 })
+          .cachedCount(4)
           .edgeEffect(motionEdgeEffect())
           .scrollBar(BarState.Off)
           .onReachEnd(() => {

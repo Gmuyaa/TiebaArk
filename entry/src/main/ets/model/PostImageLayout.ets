@@ -8,8 +8,10 @@ export const POST_IMAGE_MAX_H_RATIO: number = 2;
 export const POST_LONG_WIDTH_RATIO: number = 0.8;
 /** 正文图片未测到尺寸时的占位高度上限。 */
 export const POST_IMAGE_PREVIEW_MAX_HEIGHT: number = 280;
-/** 评论图片完整等比预览的高度上限；帖子正文仍按原规则展开阅读。 */
+/** 评论单图预览的高度上限；常规比例等比缩进此上限，长图按 3:5 竖框顶部裁切。 */
 export const COMMENT_IMAGE_PREVIEW_MAX_HEIGHT: number = 200;
+/** 评论单张长图顶部裁切框的宽高比（3:5 竖长预览窗，与信息流卡片一致）。 */
+export const COMMENT_SINGLE_LONG_RATIO: number = 0.6;
 /** 只限制单个解码目标，不把它当成整个页面的实际内存上限。 */
 export const POST_IMAGE_DECODE_PIXELS: number = 8 * 1024 * 1024;
 export const POST_IMAGE_DECODE_EDGE: number = 16384;
@@ -89,19 +91,29 @@ export function readingImageClipped(info: FeedImageInfo, frame: FeedImageBox): b
   return Number.isFinite(fullHeight) && fullHeight > frame.height + 0.5;
 }
 
-/** 评论只缩小整张预览，不裁切或额外撑宽；实际图片与圆角、共享源框保持一致。 */
+/** 评论单图常规比例等比缩进高度上限；长图按 3:5 竖框顶部裁切，避免缩成极窄细条。 */
 export function commentImageBox(info: FeedImageInfo, contentWidth: number,
   density: number, placeholder: boolean = false): FeedImageBox {
-  const box: FeedImageBox = readingImageBox(info, contentWidth, density, true);
-  if (placeholder) {
-    // 低流量模式只显示提示文字，不把文字挤进长图缩小后的窄框。
-    box.width = Number.isFinite(contentWidth) && contentWidth > 0 ? contentWidth : BODY_MIN_BOX_W;
-    box.height = Math.min(COMMENT_IMAGE_PREVIEW_MAX_HEIGHT, box.width / BODY_FALLBACK_ASPECT);
+  const usable: number = Number.isFinite(contentWidth) && contentWidth > 0 ? contentWidth : BODY_MIN_BOX_W;
+  const box: FeedImageBox = new FeedImageBox();
+  box.width = usable;
+  box.height = Math.min(COMMENT_IMAGE_PREVIEW_MAX_HEIGHT, usable / BODY_FALLBACK_ASPECT);
+  box.long = info.long;
+  if (placeholder || !hasReadingImageSize(info)) {
     return box;
   }
-  const scale: number = Math.min(1, COMMENT_IMAGE_PREVIEW_MAX_HEIGHT / box.height);
-  box.width *= scale;
-  box.height *= scale;
+  const ratio: number = info.width / info.height;
+  const scale: number = Number.isFinite(density) && density > 0 ? Math.max(1, density) : 1;
+  const nativeWidth: number = info.width / scale * 1.5;
+  box.known = true;
+  box.long = info.long || ratio < PREVIEW_LONG_RATIO;
+  if (box.long && ratio < COMMENT_SINGLE_LONG_RATIO && nativeWidth / ratio > COMMENT_IMAGE_PREVIEW_MAX_HEIGHT) {
+    box.width = Math.min(usable, COMMENT_IMAGE_PREVIEW_MAX_HEIGHT * COMMENT_SINGLE_LONG_RATIO);
+    box.height = Math.min(COMMENT_IMAGE_PREVIEW_MAX_HEIGHT, box.width / COMMENT_SINGLE_LONG_RATIO);
+    return box;
+  }
+  box.width = Math.max(1, Math.min(usable, nativeWidth, COMMENT_IMAGE_PREVIEW_MAX_HEIGHT * ratio));
+  box.height = Math.max(1, Math.min(COMMENT_IMAGE_PREVIEW_MAX_HEIGHT, box.width / ratio));
   return box;
 }
 

@@ -7,9 +7,12 @@ import { common } from '@kit.AbilityKit';
 import { ChatGroup, ChatMessage, dedupeChatMessages } from '../model/Chat';
 import { chatStore } from './ChatStore';
 
+const HISTORY_PAGE_SIZE: number = 30;
+
 @ObservedV2
 export class ChatVM {
   @Trace messages: ChatMessage[] = [];
+  @Trace hasOlderHistory: boolean = false;
   @Trace title: string = '';
   @Trace portrait: string = '';
   @Trace uidText: string = '';
@@ -19,6 +22,7 @@ export class ChatVM {
   @Trace exists: boolean = true;
 
   private groupIdText: string = '';
+  private visibleLimit: number = HISTORY_PAGE_SIZE;
   /** 进入会话时路由声明的对端 uid：发送前用它核对，防止组身份被改写后消息发到另一个人。 */
   private expectedPeerUidText: string = '';
   private listener: () => void = (): void => { this.pull(); };
@@ -50,6 +54,7 @@ export class ChatVM {
       groupIdText = direct.groupIdText;
     }
     this.groupIdText = groupIdText;
+    this.visibleLimit = HISTORY_PAGE_SIZE;
     this.opened = true;
     this.pull();
     this.loading = this.messages.length === 0;
@@ -70,6 +75,11 @@ export class ChatVM {
   private vmHasRealGroup(): boolean {
     const group: ChatGroup | undefined = chatStore.group(this.groupIdText);
     return group !== undefined && group.groupId > BigInt(0);
+  }
+
+  uploadGroupId(): string {
+    const group: ChatGroup | undefined = chatStore.group(this.groupIdText);
+    return group !== undefined && group.groupId > BigInt(0) ? group.groupId.toString() : '1';
   }
 
   /** 下拉刷新：重拉增量（不清空本地消息）。 */
@@ -99,6 +109,20 @@ export class ChatVM {
     }
   }
 
+  async sendImage(context: common.UIAbilityContext, imageUrl: string, width: number, height: number,
+    onEnqueued?: () => void, bigUrl: string = ''): Promise<string> {
+    if (this.sending) { return '正在发送，请稍候'; }
+    const mismatch: string = this.identityMismatch();
+    if (mismatch.length > 0) { return mismatch; }
+    this.sending = true;
+    try {
+      return await chatStore.sendImage(context, this.groupIdText, imageUrl, width, height, onEnqueued, bigUrl);
+    } finally {
+      this.sending = false;
+      this.pull();
+    }
+  }
+
   /**
    * 发送前的身份闸门：会话当前认定的对端必须和进来时路由声明的那个一致。
    * 对不上说明组身份被改写或尚未确认——宁可发不出去，也不能把消息送给另一个人。
@@ -121,6 +145,15 @@ export class ChatVM {
     return failure;
   }
 
+  /** 从本地持久化历史库向上展开一页更早消息，返回新增条数。 */
+  loadOlder(): number {
+    if (!this.opened || !this.hasOlderHistory) { return 0; }
+    const before: number = this.messages.length;
+    this.visibleLimit += HISTORY_PAGE_SIZE;
+    this.pull();
+    return Math.max(0, this.messages.length - before);
+  }
+
   private pull(): void {
     if (!this.opened) { return; }
     const group: ChatGroup | undefined = chatStore.group(this.groupIdText);
@@ -130,6 +163,13 @@ export class ChatVM {
       this.portrait = group.peer.portrait;
       this.uidText = group.peer.uidText;
     }
-    this.messages = dedupeChatMessages(chatStore.messagesOf(this.groupIdText));
+    const all: ChatMessage[] = dedupeChatMessages(chatStore.messagesOf(this.groupIdText));
+    if (all.length > this.visibleLimit) {
+      this.hasOlderHistory = true;
+      this.messages = all.slice(all.length - this.visibleLimit);
+    } else {
+      this.hasOlderHistory = false;
+      this.messages = all;
+    }
   }
 }

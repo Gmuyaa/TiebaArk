@@ -300,7 +300,7 @@ struct PostFlowImage {
 
   /** 外框比整张图矮时才是裁切态；普通图仍然是完整 Contain 显示。 */
   private clipped(): boolean {
-    return !this.commentPreview && readingImageClipped(this.sourceInfo(), this.frame());
+    return readingImageClipped(this.sourceInfo(), this.frame());
   }
 
   /** 裁切态的绘制放大量：让缩略图的宽度正好贴满外框，顶部保持在 y = 0。 */
@@ -483,7 +483,7 @@ struct PostFlowImage {
           }
         }
       }
-      if (this.clipped() && !this.isOff()) {
+      if ((this.clipped() || this.frame().long) && !this.isOff() && this.frame().width >= 56) {
         // 只留左上角标，不加底部渐变：裁切边界靠角标和"点开看全"就够了。
         // `.align()` 只对齐文本自身内容，不会把子组件摆到 Stack 的角上，这里用铺满的 Row 定位。
         Row() {

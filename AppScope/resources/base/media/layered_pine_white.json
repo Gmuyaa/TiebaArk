@@ -1,0 +1,6 @@
+{
+  "layered-image": {
+    "background": "$media:icon_pine_white_bg",
+    "foreground": "$media:icon_pine_white_fg"
+  }
+}

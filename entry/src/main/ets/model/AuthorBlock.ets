@@ -1,5 +1,57 @@
 import { ProtoReader, WireType } from '../proto/ProtoWire';
 
+export class AuthorBlockScope {
+  follow: boolean = false;
+  interact: boolean = false;
+  chat: boolean = false;
+
+  static all(): AuthorBlockScope {
+    const scope: AuthorBlockScope = new AuthorBlockScope();
+    scope.follow = true;
+    scope.interact = true;
+    scope.chat = true;
+    return scope;
+  }
+
+  static none(): AuthorBlockScope {
+    return new AuthorBlockScope();
+  }
+
+  static fromFlags(follow: boolean, interact: boolean, chat: boolean): AuthorBlockScope {
+    const scope: AuthorBlockScope = new AuthorBlockScope();
+    scope.follow = follow;
+    scope.interact = interact;
+    scope.chat = chat;
+    return scope;
+  }
+
+  static fromResult(result: AuthorBlockResult): AuthorBlockScope {
+    return AuthorBlockScope.fromFlags(result.follow === 1, result.interact === 1, result.chat === 1);
+  }
+
+  any(): boolean {
+    return this.follow || this.interact || this.chat;
+  }
+
+  equals(other: AuthorBlockScope): boolean {
+    return this.follow === other.follow && this.interact === other.interact && this.chat === other.chat;
+  }
+
+  clone(): AuthorBlockScope {
+    return AuthorBlockScope.fromFlags(this.follow, this.interact, this.chat);
+  }
+}
+
+/** 按官方顺序格式化拉黑范围；未读回或无任何限制时返回空串，避免伪造状态。 */
+export function authorBlockScopeLabel(scope: AuthorBlockScope | undefined): string {
+  if (scope === undefined) { return ''; }
+  const parts: string[] = [];
+  if (scope.follow) { parts.push('关注'); }
+  if (scope.interact) { parts.push('互动'); }
+  if (scope.chat) { parts.push('私信'); }
+  return parts.length > 0 ? `禁止${parts.join('、')}` : '';
+}
+
 export class AuthorBlockResult {
   code: number = -1;
   message: string = '';
@@ -8,6 +60,7 @@ export class AuthorBlockResult {
   interact: number = 0;
   chat: number = 0;
   blocked(): boolean { return this.interact === 1; }
+  scope(): AuthorBlockScope { return AuthorBlockScope.fromResult(this); }
 }
 
 /** SetUserBlack／GetUserBlackInfo 官方响应：1=Error、2=DataRes。 */
@@ -60,11 +113,35 @@ export class ImBlacklistUser {
   name: string = '';
   nameShow: string = '';
   portrait: string = '';
+  scopeKnown: boolean = false;
+  follow: boolean = false;
+  interact: boolean = false;
+  chat: boolean = false;
 
   displayName(): string {
     if (this.nameShow.length > 0) { return this.nameShow; }
     if (this.name.length > 0) { return this.name; }
     return this.uidText.length > 0 ? `用户 ${this.uidText}` : `用户 ${this.uid}`;
+  }
+
+  scope(): AuthorBlockScope {
+    return AuthorBlockScope.fromFlags(this.follow, this.interact, this.chat);
+  }
+
+  applyScope(scope: AuthorBlockScope): void {
+    this.scopeKnown = true;
+    this.follow = scope.follow;
+    this.interact = scope.interact;
+    this.chat = scope.chat;
+  }
+
+  scopeLabel(): string {
+    return this.scopeKnown ? authorBlockScopeLabel(this.scope()) : '';
+  }
+
+  scopeKey(): string {
+    if (!this.scopeKnown) { return '?'; }
+    return `${this.follow ? 1 : 0}${this.interact ? 1 : 0}${this.chat ? 1 : 0}`;
   }
 }
 

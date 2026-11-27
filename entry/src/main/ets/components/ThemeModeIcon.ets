@@ -28,7 +28,5 @@ export struct ThemeModeIcon {
       .fontSize(this.iconSize).maxFontScale(1)
       .fontWeight(FontWeight.Regular)
       .fontColor([this.iconColor ?? AppTheme.ICON])
-      .width(this.iconSize)
-      .height(this.iconSize)
   }
 }

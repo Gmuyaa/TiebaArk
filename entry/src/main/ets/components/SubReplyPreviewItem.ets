@@ -3,7 +3,7 @@
  * 所以不显示头像与时间，正文里的图片退化成"查看图片"链接、不撑开高度；发言者用沉蓝色，回复对象与连接词用辅助灰。
  */
 
-import { ContentPiece, SubPostItem, collectPreviewImageUrls } from '../model/ThreadDetail';
+import { ContentPiece, SubPostItem, collectPreviewImageUrls, isolateInlineText } from '../model/ThreadDetail';
 import { PostContentInline } from './PostContentInline';
 import { openContentPiece } from '../navigation/ContentNavigation';
 import { DetailTheme } from '../theme/Theme';
@@ -78,7 +78,8 @@ export struct SubReplyPreviewItem {
 
   build() {
     Text() {
-      Span(this.sub.author.displayName)
+      // 段首 LRM 锚定整段 LTR 对齐，避免中性昵称接 RTL 字符触发整段右对齐。
+      Span(`\u200E${isolateInlineText(this.sub.author.displayName)}`)
         .fontColor(DetailTheme.SUB_REPLY_NAME)
       if (this.sub.isThreadAuthor) {
         ThreadAuthorBadgeInline({ badge: this.badge });
@@ -86,7 +87,7 @@ export struct SubReplyPreviewItem {
       if (this.sub.replyToName.length > 0) {
         Span(' 回复 ')
           .fontColor(DetailTheme.COMMENT_ACTION)
-        Span(this.sub.replyToName)
+        Span(isolateInlineText(this.sub.replyToName))
           .fontColor(DetailTheme.SUB_REPLY_NAME)
         if (this.sub.replyToIsThreadAuthor) {
           ThreadAuthorBadgeInline({ badge: this.badge });

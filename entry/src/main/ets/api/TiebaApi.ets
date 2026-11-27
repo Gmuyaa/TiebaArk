@@ -9,7 +9,7 @@ import { AddPostResult } from '../model/AddPostResult';
 import { ADD_THREAD_LOCAL, AddThreadResult, parseAddThreadResponse } from '../model/AddThreadResult';
 import { AtCandidateKind, AtCandidates, parseAtCandidates, validAtKind } from '../model/AtCandidates';
 import { parseAtMentions } from '../model/AtMentions';
-import { parseAuthorBlock } from '../model/AuthorBlock';
+import { AuthorBlockScope, parseAuthorBlock } from '../model/AuthorBlock';
 import {
   AvatarUploadInput, avatarUploadEnvelopeShape, avatarUploadInputError, parseAvatarUpload
 } from '../model/AvatarUpload';
@@ -39,13 +39,17 @@ import { parsePersonalizedErrorno, parsePersonalizedFeed } from '../model/Person
 import {
   PrivacyMarkField, PrivacyMarks, parsePrivacyMarks, privacyWriteConfirmed, validPrivacyMark
 } from '../model/PrivacyMarks';
+import {
+  AccountPrivacy, AccountPrivacyField, parseAccountPrivacy, validAccountPrivacy
+} from '../model/AccountPrivacy';
 import { SearchPostPage, searchScopeForum, searchPostAuthorAvatar } from '../model/SearchPost';
 import { parseSignStats } from '../model/SignStats';
 import { parseOfficialSign, parseOfficialSignCapability } from '../model/OfficialSign';
 import { OfficialSignResponse, OfficialSignCapabilityResponse } from './ApiResponses';
 import { TailChange, TailList, parseTailWrite, parseTails, tailChangeError } from '../model/Tails';
 import {
-  ReplySortType, SubPostPage, ThreadDetail, ThreadReplyPermission, replyPermissionWriteValue
+  PollVoteOutcome, ReplySortType, SubPostPage, ThreadDetail, ThreadReplyPermission, parsePollVoteBytes,
+  replyPermissionWriteValue
 } from '../model/ThreadDetail';
 import { ForumBrief, ForumTab, ThreadListResult } from '../model/ThreadList';
 import { UserProfileInfo, parseProtoErrorno, parseSelfProfileProto, parseUserInfo } from '../model/UserProfile';
@@ -55,12 +59,12 @@ import { voicePayloadError } from '../model/VoiceClip';
 import { AgreeTrace } from '../net/AgreeTrace';
 import { HttpClient, HttpResult } from '../net/HttpClient';
 import {
-  AddPostParams, AddPostTarget, AddThreadParams, AgreeMeParams, AgreeObjType, AgreeParams, AntiSpamParams,
+  AddPollPostParams, AddPostParams, AddPostTarget, AddThreadParams, AgreeMeParams, AgreeObjType, AgreeParams, AntiSpamParams,
   AtCandidatesParams,
   AtMentionsParams, AuthorBlockParams, AvatarUploadParams, BawuTeamParams, CancelForbiddenForumParams,
   CreateForumParams, FollowParams, ForbiddenForumsParams, ForumMemberParams, FrsHeadlineParams,
   ImageUploadParams, ImageWatermarkParams, MemeEmojiParams, MessageSettingsParams, OfficialMessagesParams,
-  MyThreadParams, NotifyUnreadParams, PersonalizedParams, PrivacyMarksParams, RemoveFanParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
+  MyThreadParams, NotifyUnreadParams, PersonalizedParams, PrivacyMarksParams, AccountPrivacyParams, RemoveFanParams, ReplyMeParams, SelfProfileParams, StoreParams, SubmitDislikeParams,
   TailsParams, TiebaCommonParams, TiebaDevice, TiebaHost, TiebaSession, TiebaVersion, UserPostParams,
   VideoFeedParams, VoiceAudioParams
 } from '../net/TiebaParams';
@@ -77,9 +81,10 @@ import { ApiResult } from './ApiResult';
 import {
   ThreadListResponse, ThreadDetailResponse, HotTopicCardResponse, SubPostResponse, StoredThreadsResponse, UserPostsResponse,
   PersonalizedFeedResponse, SearchPostResponse, ForumSearchResponse, HotTopicsResponse, FollowForumsResponse,
-  SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, MemeEmojiResponse, MemeCollectResponse,
+  SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, PollVoteResponse, MemeEmojiResponse, MemeCollectResponse,
   AddThreadResponse, ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse, ForumMemberResponse,
-  BawuTeamResponse, NotifyResponse, NotifyUnreadResponse, MessageSettingsResponse, PrivacyMarksResponse, AtCandidatesResponse,
+  BawuTeamResponse, NotifyResponse, NotifyUnreadResponse, MessageSettingsResponse, PrivacyMarksResponse,
+  AccountPrivacyResponse, AtCandidatesResponse,
   VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse, OfficialMessagesResponse,
   VideoFeedResponse, ForbiddenForumsResponse, ForumBlockResponse, TailsResponse, TailWriteResponse,
   AvatarUploadResponse, CreateForumChallengeResponse, UserSearchResponse
@@ -89,10 +94,10 @@ import {
 export {
   ApiResult, ThreadListResponse, ThreadDetailResponse, HotTopicCardResponse, SubPostResponse, StoredThreadsResponse,
   UserPostsResponse, PersonalizedFeedResponse, SearchPostResponse, ForumSearchResponse, HotTopicsResponse,
-  FollowForumsResponse, SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, MemeEmojiResponse,
+  FollowForumsResponse, SignForumResponse, TbsResponse, AgreeResponse, StoreOpResponse, PollVoteResponse, MemeEmojiResponse,
   MemeCollectResponse, ReplyResponse, DirectoryResponse, PublicProfileResponse, AuthorBlockResponse,
   ForumMemberResponse, BawuTeamResponse, NotifyResponse, NotifyUnreadResponse, MessageSettingsResponse, PrivacyMarksResponse,
-  AtCandidatesResponse, VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse,
+  AccountPrivacyResponse, AtCandidatesResponse, VoiceAudioResponse, ImageUploadChunkResponse, ImageWatermarkResponse,
   OfficialMessagesResponse, VideoFeedResponse, ForbiddenForumsResponse, ForumBlockResponse, TailsResponse,
   TailWriteResponse, AvatarUploadResponse, CreateForumChallengeResponse, UserSearchResponse
 };
@@ -443,6 +448,42 @@ export class TiebaApi {
     return response;
   }
 
+  /** 读取账号全局隐私设置（复用 GetPrivateInfo 303016）。 */
+  async fetchAccountPrivacy(device: TiebaDevice, session: TiebaSession, uid: number): Promise<AccountPrivacyResponse> {
+    const response: AccountPrivacyResponse = new AccountPrivacyResponse();
+    if (!session.hasBduss()) { response.failLocal('登录后才能读取隐私设置'); return response; }
+    const check: string = TiebaApi.checkDevice(device);
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
+    if (!Number.isSafeInteger(uid) || uid <= 0) { response.failLocal('隐私设置账号参数无效'); return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport = await client.postBinary(PrivacyMarksParams.url(), PrivacyMarksParams.build(device, session, uid),
+      SelfProfileParams.headers(session));
+    if (!transport.ok) { response.transportError = transport.error; return response; }
+    const data: AccountPrivacy = parseAccountPrivacy(transport.bytes);
+    if (data.code !== 0) { response.failBusiness(data.code, data.message || '隐私设置读取失败'); return response; }
+    response.data = data;
+    response.ok = true;
+    return response;
+  }
+
+  /** 修改单项账号全局隐私设置（/c/c/friend/setprivate，不带 tid）。 */
+  async setAccountPrivacy(device: TiebaDevice, session: TiebaSession,
+    field: AccountPrivacyField, value: number): Promise<ApiResult> {
+    const response: ApiResult = new ApiResult();
+    if (!session.hasBduss() || !validAccountPrivacy(field, value)) {
+      response.failLocal('登录凭据或隐私设置值无效'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const text: string | undefined = await this.postJsonText(client, AccountPrivacyParams.WRITE_PATH,
+      AccountPrivacyParams.buildWrite(device, session, field, value), response);
+    if (text === undefined) { return response; }
+    response.ok = privacyWriteConfirmed(text);
+    if (!response.ok) { response.failLocal('隐私设置提交结果未确认，请重新读取'); }
+    return response;
+  }
+
   /** 账号屏蔽吧读取；APK 静态契约已核对，服务端待验收。 */
   async fetchForbiddenForums(device: TiebaDevice, session: TiebaSession, uid: number,
     page: number): Promise<ForbiddenForumsResponse> {
@@ -668,6 +709,30 @@ export class TiebaApi {
     response.result = parseAuthorBlock(transport.bytes, blocked === undefined);
     if (response.result.code !== 0) {
       response.failBusiness(response.result.code, response.result.message || '拉黑状态请求失败'); return response;
+    }
+    response.ok = true;
+    return response;
+  }
+
+  /** 按关注/互动/私信三项分别设置单用户拉黑范围（309697）。 */
+  async setAuthorBlockScope(device: TiebaDevice, session: TiebaSession, uid: number,
+    scope: AuthorBlockScope): Promise<AuthorBlockResponse> {
+    const response: AuthorBlockResponse = new AuthorBlockResponse();
+    if (!session.hasBduss() || session.tbs.length === 0) {
+      response.failLocal('需要登录并取得有效验证信息'); return response;
+    }
+    if (!Number.isSafeInteger(uid) || uid <= 0) {
+      response.failLocal('用户身份无效'); return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (TiebaApi.failOnCheck(check, response)) { return response; }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const transport: HttpResult = await client.postBinary(AuthorBlockParams.url(true),
+      AuthorBlockParams.buildScope(device, session, uid, scope), SelfProfileParams.headers(session));
+    if (!transport.ok) { response.transportError = transport.error; return response; }
+    response.result = parseAuthorBlock(transport.bytes, false);
+    if (response.result.code !== 0) {
+      response.failBusiness(response.result.code, response.result.message || '拉黑范围设置失败'); return response;
     }
     response.ok = true;
     return response;
@@ -934,6 +999,45 @@ export class TiebaApi {
     return text;
   }
 
+  /** 与 `postJsonText` 同口径校验信封错误码，但只做一次 `JSON.parse`，供大载荷接口复用已解析对象。 */
+  private async postJsonObject<T>(client: HttpClient, path: string, params: SignParam[], out: ApiResult,
+    host: string = TiebaHost.APP,
+    extraHeaders?: Record<string, string>): Promise<T | undefined> {
+    const signed: SignParam[] = await CryptoUtil.appendSign(params, SignSalt.APP);
+    if (path === '/c/c/agree/opAgree') {
+      AgreeTrace.logOpAgree(signed);
+    }
+    const url: string = `https://${host}${path}`;
+    const transport: HttpResult =
+      await client.postForm(url, TiebaCommonParams.encodeForm(signed), extraHeaders);
+
+    if (!transport.ok) {
+      out.transportError = transport.error;
+      return undefined;
+    }
+
+    const text: string = decodeUtf8(transport.bytes);
+    let parsed: Object;
+    try {
+      parsed = JSON.parse(text) as Object;
+    } catch (err) {
+      const e: Error = err as Error;
+      TiebaApi.failNotJsonDetail(out, e.message);
+      return undefined;
+    }
+
+    const envelope: ApiEnvelope = parsed as ApiEnvelope;
+    const code: number = normalizeErrorCode(envelope.error_code);
+    if (code !== ERROR_OK) {
+      out.failBusiness(code, envelope.error_msg === undefined ? '' : envelope.error_msg);
+      hilog.info(0x0000, 'TiebaApi',
+        'postJsonObject business error: path=%{public}s error_code=%{public}s error_msg=%{public}s',
+        path, String(code), envelope.error_msg === undefined ? '(none)' : envelope.error_msg);
+      return undefined;
+    }
+    return parsed as T;
+  }
+
   /** 本地设备校验失败的统一出口：返回 true 表示已把失败写进结果，调用方直接 return。 */
   private static failOnCheck(check: string, response: ApiResult): boolean {
     if (check.length === 0) { return false; }
@@ -1111,7 +1215,8 @@ export class TiebaApi {
   }
 
   async fetchThreadList(device: TiebaDevice, session: TiebaSession, forumName: string,
-    page: number, pageSize: number, tabId: number = 0, sortType: number = -1): Promise<ThreadListResponse> {
+    page: number, pageSize: number, tabId: number = 0, sortType: number = -1,
+    allowTabFallback: boolean = false): Promise<ThreadListResponse> {
     const response: ThreadListResponse = new ThreadListResponse();
 
     if (sortType !== -1 && (tabId <= 0 || (sortType !== 0 && sortType !== 1))) {
@@ -1143,13 +1248,13 @@ export class TiebaApi {
     if (tabId === 301) { params.push(new SignParam('is_good', '1')); }
     if (sortType >= 0) { params.push(new SignParam('sort_type', String(sortType))); }
 
-    const text: string | undefined = await this.postJsonText(client, '/c/f/frs/page', params, response);
-    if (text === undefined) {
+    const raw: RawFrsPage | undefined =
+      await this.postJsonObject<RawFrsPage>(client, '/c/f/frs/page', params, response);
+    if (raw === undefined) {
       return response;
     }
 
-    const raw: RawFrsPage = JSON.parse(text) as RawFrsPage;
-    if (tabId > 0 && String(raw.page_data_tab_id) !== String(tabId)) {
+    if (!allowTabFallback && tabId > 0 && String(raw.page_data_tab_id) !== String(tabId)) {
       response.failLocal('服务端未确认请求分类'); return response;
     }
     if (sortType >= 0 && String(raw.sort_type) !== String(sortType)) {
@@ -1184,14 +1289,23 @@ export class TiebaApi {
       new SignParam('partition_type', String(partitionType)),
       new SignParam('pn', String(page)), new SignParam('rn', '20'), new SignParam('sort_type', String(sortType)));
     if (tab.isVideo) { params.push(new SignParam('is_video_doublerow', '1')); }
-    const text: string | undefined = await this.postJsonText(client, '/c/f/frs/generalTabList', params, response);
-    if (text === undefined) { return response; }
-    const raw: RawGeneralTabList = JSON.parse(text) as RawGeneralTabList;
+    const raw: RawGeneralTabList | undefined =
+      await this.postJsonObject<RawGeneralTabList>(client, '/c/f/frs/generalTabList', params, response);
+    if (raw === undefined) { return response; }
     if (!Array.isArray(raw.general_list) || (String(raw.has_more) !== '0' && String(raw.has_more) !== '1')) {
       response.failLocal('分类响应不完整'); return response;
     }
     if (String(raw.sort_type) !== String(sortType)) { response.failLocal('服务端未确认分类排序'); return response; }
     response.data = ThreadListResult.fromRaw({ thread_list: raw.general_list, user_list: raw.user_list });
+    if (tab.isGeneral && tab.type === 15 && !tab.isVideo && !tab.isHelp && tab.name.trim().length > 0) {
+      const sectionName: string = tab.name.trim();
+      for (const thread of response.data.threads) {
+        if (!thread.isHelp && thread.tabName.length === 0) {
+          if (thread.tabId <= 0) { thread.tabId = tab.id; }
+          thread.tabName = sectionName;
+        }
+      }
+    }
     response.data.forum = forum; response.data.selectedTabId = tab.id;
     response.data.page.currentPage = page; response.data.page.hasMore = String(raw.has_more) === '1';
     response.ok = true; return response;
@@ -1226,7 +1340,8 @@ export class TiebaApi {
   }
 
   async searchPosts(device: TiebaDevice, session: TiebaSession, word: string,
-    page: number, pageSize: number, forumName?: string): Promise<SearchPostResponse> {
+    page: number, pageSize: number, forumName?: string,
+    sortMode: number = 0, onlyThread: boolean = false): Promise<SearchPostResponse> {
     const response: SearchPostResponse = new SearchPostResponse();
 
     const clean: string = word.trim();
@@ -1247,6 +1362,12 @@ export class TiebaApi {
     params.push(new SignParam('word', clean));
     params.push(new SignParam('pn', String(page)));
     params.push(new SignParam('rn', String(pageSize)));
+    if (sortMode === 1) {
+      params.push(new SignParam('sm', '1'));
+    }
+    if (onlyThread) {
+      params.push(new SignParam('only_thread', '1'));
+    }
     // 吧内搜索只多这一个参数；空串不发，避免把空 kw 当成查询条件
     const scope: string = searchScopeForum(forumName);
     if (scope.length > 0) {
@@ -1325,15 +1446,19 @@ export class TiebaApi {
 
   async fetchSearchPostAuthorAvatar(device: TiebaDevice, session: TiebaSession,
     tid: number, pid: number,
-    onForumAvatar?: (forumName: string, avatarUrl: string) => void): Promise<string> {
+    onForumAvatar?: (forumName: string, avatarUrl: string) => void,
+    onMetrics?: (agreeCount: number, replyCount: number, shareCount: number) => void): Promise<string> {
     if (!Number.isSafeInteger(tid) || tid <= 0 || !Number.isSafeInteger(pid) || pid <= 0) { return ''; }
     const response: ThreadDetailResponse =
       await this.fetchThreadDetail(device, session, tid, 1, 1, ReplySortType.ASC, pid);
     if (!response.ok) { return ''; }
-    // 同一次精确楼层读取已带吧资料，调用方核对吧名与查询代次后可一起补图。
+    // 同一次精确楼层读取已带吧资料与主题计数，调用方核对吧名与查询代次后可一起回填。
     if (onForumAvatar !== undefined && response.data.forumName.length > 0
       && response.data.forumAvatar.length > 0) {
       onForumAvatar(response.data.forumName, response.data.forumAvatar);
+    }
+    if (onMetrics !== undefined && response.data.tid === tid) {
+      onMetrics(response.data.agreeCount, response.data.replyCount, response.data.shareCount);
     }
     return searchPostAuthorAvatar(response.data, tid, pid);
   }
@@ -2273,7 +2398,7 @@ export class TiebaApi {
    */
   async addThread(device: TiebaDevice, session: TiebaSession, title: string, content: string,
     fid: number, forumName: string, nickname: string, topicId: number,
-    isHide: string, contentStatement: string): Promise<AddThreadResponse> {
+    isHide: string, contentStatement: string, tabId: number = 0, tabName: string = ''): Promise<AddThreadResponse> {
     const response: AddThreadResponse = new AddThreadResponse();
     const trimmedTitle: string = title.trim();
     const trimmedContent: string = content.trim();
@@ -2310,13 +2435,13 @@ export class TiebaApi {
 
     const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
     const params: SignParam[] = AddThreadParams.build(device, session, trimmedTitle, trimmedContent,
-      fid, forum, nickname.trim(), topicId, isHide, contentStatement);
+      fid, forum, nickname.trim(), topicId, isHide, contentStatement, tabId, tabName);
     // 与关注、点赞同一条通道：form + APP 盐签名，BDUSS/STOKEN/tbs 由公共参数进 body。
     // 免签 web 表单会回 110001（见 AddThreadParams 注释），不要回退。
     const text: string | undefined = await this.postJsonText(client, AddThreadParams.PATH, params, response);
     if (text === undefined) {
-      hilog.warn(0x0000, 'TiebaApi', 'thread add not accepted fid=%{public}d code=%{public}d local=%{public}s',
-        fid, response.errorCode, response.localMessage);
+      hilog.warn(0x0000, 'TiebaApi', 'thread add not accepted fid=%{public}d tabId=%{public}d code=%{public}d local=%{public}s',
+        fid, tabId, response.errorCode, response.localMessage);
       return response;
     }
 
@@ -2329,15 +2454,58 @@ export class TiebaApi {
         response.failBusiness(parsed.code, parsed.message);
       }
       // 服务端文案对定位「参数校验失败」有用，且不含凭证；一并落到 hilog，界面只给一行。
-      hilog.warn(0x0000, 'TiebaApi', 'thread add rejected fid=%{public}d code=%{public}d msg=%{public}s',
-        fid, parsed.code, parsed.message);
+      hilog.warn(0x0000, 'TiebaApi', 'thread add rejected fid=%{public}d tabId=%{public}d code=%{public}d msg=%{public}s',
+        fid, tabId, parsed.code, parsed.message);
       return response;
     }
     // 拿到响应体且结果码为 0 才算受理；必须显式置位
     response.ok = true;
     hilog.info(0x0000, 'TiebaApi',
-      'thread add accepted fid=%{public}d titleLen=%{public}d contentLen=%{public}d tidKnown=%{public}s',
-      fid, trimmedTitle.length, trimmedContent.length, String(parsed.tid > 0));
+      'thread add accepted fid=%{public}d tabId=%{public}d titleLen=%{public}d contentLen=%{public}d tidKnown=%{public}s',
+      fid, tabId, trimmedTitle.length, trimmedContent.length, String(parsed.tid > 0));
+    return response;
+  }
+
+  /** 提交帖子投票，协议为 protobuf POST /c/c/post/addPollPost?cmd=309006。 */
+  async submitPoll(device: TiebaDevice, session: TiebaSession, tid: number, forumId: number,
+    optionIds: number[]): Promise<PollVoteResponse> {
+    const response: PollVoteResponse = new PollVoteResponse();
+    if (tid <= 0 || forumId <= 0) {
+      response.failLocal('帖子或贴吧信息缺失，无法投票');
+      return response;
+    }
+    if (optionIds.length === 0) {
+      response.failLocal('请先选择投票项');
+      return response;
+    }
+    if (!session.hasBduss()) {
+      response.failLocal('需要登录后才能投票');
+      return response;
+    }
+    if (session.tbs.length === 0) {
+      response.failLocal('缺少 tbs，无法投票');
+      return response;
+    }
+    const check: string = TiebaApi.checkDevice(device);
+    if (check.length > 0) {
+      response.failLocal(check);
+      return response;
+    }
+    const client: HttpClient = TiebaApi.requestClient(`bdtb for Android ${device.clientVersion}`);
+    const body: Uint8Array = AddPollPostParams.build(device, session, tid, forumId, optionIds);
+    const transport: HttpResult = await client.postBinary(
+      AddPollPostParams.url(), body, SelfProfileParams.headers(session));
+    if (!transport.ok) {
+      response.transportError = transport.error;
+      return response;
+    }
+    const outcome: PollVoteOutcome = parsePollVoteBytes(transport.bytes);
+    if (!outcome.accepted()) {
+      response.failBusiness(outcome.errorCode,
+        outcome.errorMsg.length > 0 ? outcome.errorMsg : `投票失败（错误码 ${outcome.errorCode}）`);
+      return response;
+    }
+    response.ok = true;
     return response;
   }
 }

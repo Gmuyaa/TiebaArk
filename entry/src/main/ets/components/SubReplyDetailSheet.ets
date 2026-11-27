@@ -11,8 +11,8 @@ import { DetailTheme } from '../theme/Theme';
 import { AnchorReplyCard } from './AnchorReplyCard';
 import { SubReplyDetailItem } from './SubReplyDetailItem';
 
-/** 悬浮胶囊高度：要求在 48~54 之间，取 52（与详情页底部胶囊同高） */
-const PILL_HEIGHT: number = 52;
+/** 与详情页底部评论工具栏同高（46vp） */
+const PILL_HEIGHT: number = 46;
 /** 圆角取高度的一半 → 两端正好是半圆 */
 const PILL_RADIUS: number = PILL_HEIGHT / 2;
 const PILL_GUTTER: number = 16;
@@ -90,11 +90,12 @@ export struct SubReplyDetailSheet {
   }
 
   aboutToAppear(): void {
-    // 与首页底栏同一口径：display 给的是 px，先 px2vp 转 vp 才能参与布局计算（Index.ets 同款）。
-    const screenVp: number = px2vp(display.getDefaultDisplaySync().width);
-    if (screenVp > PILL_GUTTER * 2) {
-      this.pillWidthVp = screenVp - PILL_GUTTER * 2;
-    }
+    try {
+      const screenVp: number = this.getUIContext().px2vp(display.getDefaultDisplaySync().width);
+      if (screenVp > PILL_GUTTER * 2) {
+        this.pillWidthVp = screenVp - PILL_GUTTER * 2;
+      }
+    } catch (_) {}
   }
 
   @Builder
@@ -217,7 +218,7 @@ export struct SubReplyDetailSheet {
 
     .width('100%')
 
-    .padding({ left: 14, right: 14 })
+    .padding({ left: PILL_RADIUS - 12, right: 14 })
     .accessibilityGroup(true)
     .accessibilityText(this.replyLabel())
     .id('subreply-reply-entry')

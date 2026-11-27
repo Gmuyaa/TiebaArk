@@ -7,6 +7,11 @@ export function forumDefaultTabLabel(value: ForumDefaultTab): string {
 
 export interface NamedForumTab { id: number; name: string; }
 
+/** 官方 FRS 标准默认分区 ID 提示（热门=1、最新=503），仅用于首包探测；最终以服务端返回为准。 */
+export function knownDefaultTabHint(value: ForumDefaultTab): number {
+  return value === ForumDefaultTab.LATEST ? 503 : 1;
+}
+
 /** 对应分区不存在时返回 0，调用方保留服务端实际默认分区。 */
 export function preferredForumTabId(tabs: NamedForumTab[], value: ForumDefaultTab): number {
   const name: string = forumDefaultTabLabel(value);

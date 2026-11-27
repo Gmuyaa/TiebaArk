@@ -28,7 +28,10 @@
 
 ## 致谢
 
-感谢 [aiotieba](https://github.com/Starry-OvO/aiotieba) 提供的协议与签名参考。
+- [aiotieba](https://github.com/Starry-OvO/aiotieba)（Unlicense）：提供贴吧接口端点、请求参数签名与数据结构等协议参考。
+- [tbclient.protobuf](https://github.com/clb-128258/tbclient.protobuf)：提供贴吧移动端 Protobuf 消息字段号与结构定义参考。
+- [TiebaLite](https://github.com/HuanCheng65/TiebaLite)（GPL-3.0）：提供第三方贴吧客户端功能组织与交互流程参考。
+- [@ohos/hypium](https://ohpm.openharmony.cn/#/cn/detail/@ohos%2Fhypium)（Apache-2.0）：HarmonyOS 原生单元测试框架，用于开发与测试阶段断言校验。
 
 ## 构建
 

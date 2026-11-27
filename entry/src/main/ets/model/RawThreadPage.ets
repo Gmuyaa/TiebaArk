@@ -169,6 +169,31 @@ export interface RawThreadHead {
    * 详情里是否为「部分可见（主页不可见）」待真机对照，暂按原样透出。
    */
   is_partial_visible?: number;
+  poll_info?: RawPollInfo;
+}
+
+export interface RawPollOption {
+  id?: number | string;
+  num?: number | string;
+  text?: string;
+  image?: string;
+  is_polled?: number | string;
+}
+
+export interface RawPollInfo {
+  type?: number | string;
+  is_multi?: number | string;
+  total_num?: number | string;
+  options_count?: number | string;
+  is_polled?: number | string;
+  polled_value?: string;
+  tips?: string;
+  end_time?: number | string;
+  status?: number | string;
+  total_poll?: number | string;
+  title?: string;
+  last_time?: number | string;
+  options?: RawPollOption[];
 }
 
 /** 当前 APK ThreadData.parseJson 的视频元数据；不能从 video_md5 猜下载地址。 */

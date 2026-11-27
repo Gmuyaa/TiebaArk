@@ -76,7 +76,7 @@ export async function prepareAvatarImage(uri: string, current: () => boolean, re
     if (!current()) { result.cancelled = true; return result; }
     if (decoded.size.width !== 960 || decoded.size.height !== 960) { result.message = '头像裁剪解码尺寸未确认'; return result; }
     packer = image.createImagePacker();
-    const packed: ArrayBuffer = await packer.packing(pixels, { format: 'image/jpeg', quality: 80 });
+    const packed: ArrayBuffer = await packer.packToData(pixels, { format: 'image/jpeg', quality: 80 });
     if (!current()) { result.cancelled = true; return result; }
     const input: AvatarUploadInput = new AvatarUploadInput();
     input.bytes = new Uint8Array(packed); input.width = decoded.size.width; input.height = decoded.size.height;

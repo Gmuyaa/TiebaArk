@@ -46,7 +46,7 @@ export struct FollowButton {
     this.vm.load(this.context());
   }
   private async activate(): Promise<void> {
-    if (!authSession.isLoggedIn()) { router.pushUrl({ url: 'pages/Login' }); return; }
+    if (!authSession.isLoggedIn()) { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); return; }
     if (this.vm.loading || this.vm.pending || (this.vm.verifying && !this.vm.known)) { return; }
     if (this.vm.known && this.vm.following) {
       const confirm = await this.getUIContext().getPromptAction().showDialog({

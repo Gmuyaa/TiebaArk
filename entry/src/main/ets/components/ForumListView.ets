@@ -5,7 +5,7 @@ import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { ThreadCardLayout } from '../common/appearance/ThreadCardLayout';
 import { PageState, ListFooter } from './PageState';
-import { followChanges } from '../viewmodel/FollowActionVM';
+import { FollowChanges, followChanges } from '../viewmodel/FollowActionVM';
 
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { common } from '@kit.AbilityKit';
@@ -26,6 +26,7 @@ import { HotTopicVM } from '../viewmodel/HotTopicVM';
 import { HotTopicItem, hotDiscussLabel } from '../model/HotTopic';
 import { ViewerImage, viewerImagesForFeed } from '../model/ImageLoadPolicy';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { NavigationService } from '../navigation/AppNavigation';
 import { LoginEmptyView } from './LoginEmptyView';
 import { RefreshSpinner, HOME_REFRESH_OFFSET } from './RefreshSpinner';
@@ -64,7 +65,7 @@ const REFRESH_OFFSET_VP: number = HOME_REFRESH_OFFSET;
 @ComponentV2
 export struct ForumListView {
   @Local cardActions: ThreadCardActionsVM = new ThreadCardActionsVM();
-  private changes = followChanges;
+  @Local changes: FollowChanges = followChanges;
   private relationshipRefreshPending: boolean = false;
   @Monitor('changes.forums')
   refreshRelationships(): void {
@@ -294,7 +295,7 @@ export struct ForumListView {
   private openForum(name: string): void {
     const target: string = name.trim();
     if (target.length === 0) {
-      promptAction.showToast({ message: '请输入吧名', duration: 1600 });
+      this.getUIContext().getPromptAction().showToast({ message: '请输入吧名', duration: 1600 });
       return;
     }
     this.selectedChannel = '';
@@ -454,7 +455,7 @@ export struct ForumListView {
         }
         if (same) {
           hilog.info(0x0000, 'ForumListView', 'refresh done, content unchanged -> toast');
-          promptAction.showToast({ message: '推荐内容暂无更新', duration: 1600 });
+          this.getUIContext().getPromptAction().showToast({ message: '推荐内容暂无更新', duration: 1600 });
         }
       }
     } finally {
@@ -487,7 +488,7 @@ export struct ForumListView {
       await this.followVm.load(this.hostContext(), true);
       if (seq === this.followRefreshSeq && this.followVm.errorText.length > 0 &&
         this.followVm.threads.length > 0) {
-        promptAction.showToast({ message: this.followVm.errorText, duration: 2000 });
+        this.getUIContext().getPromptAction().showToast({ message: this.followVm.errorText, duration: 2000 });
       }
     } finally {
       // 旧请求完成时不能结束新手势的动画。
@@ -509,7 +510,7 @@ export struct ForumListView {
     try {
       await this.hotVm.load(true);
       if (this.hotVm.errorText.length > 0 && this.hotVm.items.length > 0) {
-        promptAction.showToast({ message: this.hotVm.errorText, duration: 2000 });
+        this.getUIContext().getPromptAction().showToast({ message: this.hotVm.errorText, duration: 2000 });
       }
     } finally {
       this.lastHotDoneMs = Date.now();
@@ -758,6 +759,9 @@ export struct ForumListView {
       }
     }
     .width('100%')
+    .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+    .alignSelf(ItemAlign.Center)
+    .cachedCount(3)
     .scrollBar(BarState.Off)
 
     .onReachEnd(() => {
@@ -907,7 +911,7 @@ export struct ForumListView {
         title: '登录后查看推荐内容',
         subtitle: '推荐流来自贴吧的个性化推荐，需要登录后使用',
         onLogin: (): void => {
-          router.pushUrl({ url: 'pages/Login' });
+          void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
         }
       })
     }
@@ -981,7 +985,7 @@ export struct ForumListView {
         title: '登录后查看关注内容',
         subtitle: '这里只显示你关注的吧的帖子',
         onLogin: (): void => {
-          router.pushUrl({ url: 'pages/Login' });
+          void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
         }
       })
     }

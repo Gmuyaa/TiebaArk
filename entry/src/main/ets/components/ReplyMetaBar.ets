@@ -29,18 +29,19 @@ export struct ReplyMetaBar {
 
   @Builder
   LikeEntry() {
-    Row({ space: 2 }) {
+    Row({ space: 4 }) {
 
       SymbolGlyph(this.agreeState.liked() ? $r('sys.symbol.hand_thumbsup_fill')
         : $r('sys.symbol.hand_thumbsup'))
-        .fontSize(15)
+        .fontSize(18)
         .fontColor([this.agreeState.liked() ? DetailTheme.ACCENT : DetailTheme.COMMENT_ACTION])
       if (this.agreeState.displayCount() > 0) {
         Text(`${this.agreeState.displayCount()}`)
-          .fontSize(12)
+          .fontSize(13)
           .fontColor(this.agreeState.liked() ? DetailTheme.ACCENT : DetailTheme.COMMENT_ACTION)
       }
     }
+    .alignItems(VerticalAlign.Center)
     .constraintSize({ minWidth: this.detailLayout ? 44 : 40, minHeight: this.detailLayout ? 32 : 0 })
     .justifyContent(FlexAlign.Center)
     .responseRegion(this.detailLayout
@@ -81,6 +82,7 @@ export struct ReplyMetaBar {
       this.LikeEntry()
     }
     // 外层保持内容高度，详情点击区扩展不撑大视觉行。
+    .alignItems(VerticalAlign.Center)
     .width('100%')
   }
 }

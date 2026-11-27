@@ -121,7 +121,26 @@ export class ForumTab {
   isLatest: boolean = false;
   /** 当前吧的官方导航明确提供回复(0)/发布(1)菜单。 */
   supportsPostOrder: boolean = false;
+  /** 服务端标记不在发帖器中展示（tbclient.FrsTabInfo tag 17）。 */
+  noShowInPublisher: boolean = false;
+  /** 服务端标记不可向此分区发帖（tbclient.FrsTabInfo tag 23）。 */
+  noCanPost: boolean = false;
   type: number = 0;
+}
+
+/** 筛出可在发帖页作为「版块分区」选择的吧内自定义分区，排除热门/最新/精华/视频/互助及服务端禁发项。 */
+export function postableForumTabs(tabs: ForumTab[]): ForumTab[] {
+  const result: ForumTab[] = [];
+  const seen: Set<number> = new Set<number>();
+  for (const tab of tabs) {
+    const name: string = tab.name.trim();
+    if (tab.id <= 0 || name.length === 0 || seen.has(tab.id)) { continue; }
+    if (!tab.isGeneral || tab.type !== 15 || tab.isVideo || tab.isHelp) { continue; }
+    if (tab.noShowInPublisher || tab.noCanPost) { continue; }
+    seen.add(tab.id);
+    result.push(tab);
+  }
+  return result;
 }
 
 export class ThreadBrief {
@@ -138,6 +157,9 @@ export class ThreadBrief {
   video: VideoClip | undefined = undefined;
   tid: number = 0;
   title: string = '';
+  /** 帖子所属的吧内独立分区（仅吧内卡片标题前缀展示；无分区为空串）。 */
+  tabId: number = 0;
+  tabName: string = '';
   /**
    * 作者 uid。
    * 旧格式帖子对象只返回 uid，昵称与头像需要从响应顶层 `user_list` 关联；
@@ -254,6 +276,8 @@ export class ThreadListResult {
       tab.isVideo = tabType === 3 && num(rawTab.tab_type) === 100;
       tab.type = num(rawTab.tab_type);
       tab.isGeneral = tabType === 3 && flag(rawTab.is_general_tab);
+      tab.noShowInPublisher = flag(rawTab.is_no_show_in_publisher);
+      tab.noCanPost = flag(rawTab.no_can_post);
       const sortMenu: RawFrsMenu[] = Array.isArray(rawTab.sort_menu) ? rawTab.sort_menu : [];
       tab.supportsPostOrder = sortMenu.some((menu: RawFrsMenu): boolean => menu?.text === '回复' &&
         (menu.source_id === undefined || menu.source_id === 0 || menu.source_id === '0')) &&
@@ -310,20 +334,41 @@ export class ThreadListResult {
     const list: RawThread[] | undefined = raw.thread_list;
     if (list !== undefined && list.length > 0) {
       const users: RawListUser[] = raw.user_list === undefined ? [] : raw.user_list;
+      const userMap: Map<number, RawListUser> = ThreadListResult.indexUsers(users);
       for (let i = 0; i < list.length; i++) {
         const rawThread: RawThread = list[i];
         if (rawThread !== undefined && rawThread !== null) {
-          result.threads.push(ThreadListResult.threadFromRaw(rawThread, users));
+          result.threads.push(ThreadListResult.threadFromRaw(rawThread, userMap));
         }
       }
     } else {
       result.threads = ThreadListResult.threadsFromFeed(raw);
     }
 
+    if (result.tabs.length > 0 && result.threads.length > 0) {
+      const sectionById: Map<number, string> = new Map<number, string>();
+      const nonSectionIds: Set<number> = new Set<number>();
+      for (const tab of result.tabs) {
+        if (tab.id <= 0) { continue; }
+        if (tab.isGeneral && tab.type === 15 && !tab.isVideo && !tab.isHelp && tab.name.trim().length > 0) {
+          sectionById.set(tab.id, tab.name.trim());
+        } else {
+          nonSectionIds.add(tab.id);
+        }
+      }
+      for (const thread of result.threads) {
+        if (thread.isHelp || (thread.tabId > 0 && nonSectionIds.has(thread.tabId))) {
+          thread.tabName = '';
+        } else if (thread.tabName.length === 0 && thread.tabId > 0) {
+          thread.tabName = sectionById.get(thread.tabId) ?? '';
+        }
+      }
+    }
+
     return result;
   }
 
-  private static threadFromRaw(raw: RawThread, users: RawListUser[]): ThreadBrief {
+  private static threadFromRaw(raw: RawThread, users: Map<number, RawListUser>): ThreadBrief {
     const t: ThreadBrief = new ThreadBrief();
     t.video = parseVideoClip(raw.video_info);
     t.isVideo = raw.video_info !== undefined && raw.video_info !== null || num(raw.thread_type) === 40;
@@ -357,9 +402,11 @@ export class ThreadListResult {
     t.tid = tid === 0 ? num(raw.id) : tid;
 
     t.title = wireString(raw.title);
+    t.tabId = num(raw.tab_id);
+    t.tabName = t.isHelp ? '' : wireString(raw.tab_name).trim();
     t.authorId = num(raw.author_id);
     if (t.authorId === 0) { t.authorId = num(raw.author?.id); }
-    const author: RawListUser | undefined = ThreadListResult.userById(users, t.authorId);
+    const author: RawListUser | undefined = t.authorId > 0 ? users.get(t.authorId) : undefined;
     t.authorName = wireString(raw.author?.name_show) || wireString(author?.name_show) || wireString(raw.author?.name) || wireString(author?.name);
     t.authorAvatar = listPortraitUrl(wireString(raw.author?.portrait) || wireString(author?.portrait));
     // reply_num 是本端点的真值；万一服务端哪天改成只给 comment_num，这里兜住
@@ -389,18 +436,18 @@ export class ThreadListResult {
     return t;
   }
 
-  /** 旧格式的作者信息位于顶层用户表，按 thread.author_id 关联。 */
-  private static userById(users: RawListUser[], authorId: number): RawListUser | undefined {
-    if (authorId === 0) {
-      return undefined;
-    }
+  /** 顶层用户表按 id 索引，避免每条帖子线性扫描。 */
+  private static indexUsers(users: RawListUser[]): Map<number, RawListUser> {
+    const out: Map<number, RawListUser> = new Map<number, RawListUser>();
     for (let i = 0; i < users.length; i++) {
       const user: RawListUser = users[i];
-      if (user !== undefined && user !== null && num(user.id) === authorId) {
-        return user;
+      if (user === undefined || user === null) { continue; }
+      const id: number = num(user.id);
+      if (id > 0 && !out.has(id)) {
+        out.set(id, user);
       }
     }
-    return undefined;
+    return out;
   }
 
   /* ==========================================================================
@@ -478,6 +525,8 @@ export class ThreadListResult {
     const map: RawFeedBizMap | undefined = feed.business_info_map;
     t.viewCount = ThreadListResult.bizNumber(feed.business_info, 'view_num', map);
     t.isHelp = ThreadListResult.bizNumber(feed.business_info, 'thread_type', map) === 71;
+    t.tabId = ThreadListResult.bizNumber(feed.business_info, 'tab_id', map);
+    t.tabName = t.isHelp ? '' : ThreadListResult.bizText(feed.business_info, 'tab_name', map).trim();
     // 新版卡片不带这些标记，保持默认值而不是猜
     t.isGood = false;
     t.isTop = false;
@@ -568,6 +617,8 @@ export class ThreadListResult {
     if (key === 'create_time') { return wireString(map.create_time); }
     if (key === 'view_num') { return wireString(map.view_num); }
     if (key === 'thread_type') { return wireString(map.thread_type); }
+    if (key === 'tab_id') { return wireString(map.tab_id); }
+    if (key === 'tab_name') { return wireString(map.tab_name); }
     return '';
   }
 

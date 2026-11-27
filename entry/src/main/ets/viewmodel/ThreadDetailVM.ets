@@ -3,13 +3,13 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  ApiResult, ReplyResponse, StoreOpResponse, SubPostResponse,
+  ApiResult, PollVoteResponse, ReplyResponse, StoreOpResponse, SubPostResponse,
   ThreadDetailResponse, TiebaApi
 } from '../api/TiebaApi';
 import {
-  copyPostItem, PostItem, ReplySortType,
-  resolveForumName, SubPostItem, SubPostPage, SubPostThreadState, ThreadDetail, ThreadReplyPermission,
-  replyPermissionWriteValue, syncSubPostThreadStates
+  applyLocalPollVote, copyPostItem, markSubPostThreadAuthor, PostItem, ReplySortType,
+  resolveForumName, SubPostItem, SubPostPage, SubPostThreadState, ThreadDetail, ThreadPollInfo,
+  ThreadReplyPermission, replyPermissionWriteValue, syncSubPostThreadStates
 } from '../model/ThreadDetail';
 import { MemePicItem } from '../model/MemeEmoji';
 import { FloorDataSource } from '../model/FloorDataSource';
@@ -94,6 +94,8 @@ export class ThreadDetailVM {
   @Trace threadDeleted: boolean = false;
   @Trace replyPermission: ThreadReplyPermission = ThreadReplyPermission.UNKNOWN;
   @Trace replyPermissionPending: boolean = false;
+  @Trace poll: ThreadPollInfo | undefined = undefined;
+  @Trace pollPending: boolean = false;
   /**
    * 最近一次**发表成功**的楼层 pid（0 = 还没有），只用于发表成功后跳到该层；
    * 刷新是整页替换，页面无法自行反推位置，VM 直接递出 pid，找不到就留在原地不猜。
@@ -173,6 +175,7 @@ export class ThreadDetailVM {
   private absorbDetail(source: ThreadDetail): ThreadDetail {
     source.forumName = resolveForumName(source.forumName, this.forumNameHint);
     source.posts = this.filterDeletedPosts(source.posts);
+    this.poll = source.poll;
     return source;
   }
 
@@ -414,6 +417,10 @@ export class ThreadDetailVM {
       this.collected = response.data.isStored;
       if (this.sortType === ReplySortType.ASC || response.data.replyPermission !== ThreadReplyPermission.UNKNOWN) {
         this.replyPermission = response.data.replyPermission;
+      }
+      if (response.data.poll !== undefined) {
+        this.poll = response.data.poll;
+        this.detail.poll = response.data.poll;
       }
       this.loadedFromBoundary = true;
       this.updatePaging(response.data.page.currentPage, response.data.page.totalPage,
@@ -1119,6 +1126,58 @@ export class ThreadDetailVM {
       return '评论权限设置结果未确认，请刷新核对';
     } finally {
       if (operation === this.replyPermissionOperation) { this.replyPermissionPending = false; }
+    }
+  }
+
+  async submitPoll(context: common.UIAbilityContext, optionIds: number[]): Promise<string> {
+    if (this.pollPending) { return '投票提交中，请稍候'; }
+    const poll: ThreadPollInfo | undefined = this.poll;
+    if (poll === undefined) { return '当前帖子没有投票'; }
+    if (poll.isPolled) { return '你已经投过票了'; }
+    if (poll.isEnded()) { return '投票已结束'; }
+    if (!authSession.isLoggedIn()) { return '请先登录后再投票'; }
+    const validSet: Set<number> = new Set<number>();
+    for (let i: number = 0; i < poll.options.length; i++) {
+      validSet.add(poll.options[i].id);
+    }
+    const chosen: number[] = [];
+    for (let i: number = 0; i < optionIds.length; i++) {
+      const id: number = optionIds[i];
+      if (validSet.has(id) && chosen.indexOf(id) < 0) {
+        chosen.push(id);
+      }
+    }
+    if (chosen.length === 0) { return '请先选择投票项'; }
+    if (!poll.isMulti && chosen.length > 1) { return '当前投票仅支持单选'; }
+    const tid: number = this.tid;
+    const fid: number = this.detail.forumId;
+    if (tid <= 0 || fid <= 0) { return '帖子信息不完整，请刷新后重试'; }
+
+    const owner: string = authSession.sessionKey();
+    const session: TiebaSession = this.currentSession();
+    const seq: number = this.requestSeq;
+    const current: () => boolean = (): boolean => !this.disposed && !this.threadDeleted && this.tid === tid &&
+      this.requestSeq === seq && authSession.matchesSession(session, owner);
+
+    this.pollPending = true;
+    try {
+      const device: TiebaDevice = await DeviceIdentity.ensure(context);
+      if (!current()) { return '账号或页面已变化，未提交投票'; }
+      if (this.currentSession().tbs.length === 0) {
+        await authSession.refreshTbs(context).catch((): void => {});
+        if (!current()) { return '账号或页面已变化，未提交投票'; }
+      }
+      const res: PollVoteResponse = await this.api.submitPoll(device, this.currentSession(), tid, fid, chosen);
+      if (!current()) { return '账号或页面已变化，请刷新核对投票结果'; }
+      if (!res.ok) { return res.describeFailure(); }
+      const updated: ThreadPollInfo = applyLocalPollVote(poll, chosen);
+      this.poll = updated;
+      this.detail.poll = updated;
+      return '';
+    } catch (_) {
+      return '投票提交异常，请刷新核对';
+    } finally {
+      this.pollPending = false;
     }
   }
 
@@ -1882,11 +1941,9 @@ export class ThreadDetailVM {
     state.previewOnly = false;
     state.errorText = '';
     const authorId: number = this.detail.author.id;
+    markSubPostThreadAuthor(page.subPosts, authorId, authorId > 0 ? this.detail.author.displayName : '');
     for (let i = 0; i < page.subPosts.length; i++) {
       const sub: SubPostItem = page.subPosts[i];
-      if (authorId > 0) {
-        sub.isThreadAuthor = sub.author.id === authorId;
-      }
       this.subPostPages.set(sub.pid, page.currentPage);
       this.subPostParents.set(sub.pid, parentPid);
       const observed: AgreeState = this.subAgreeState(sub);
@@ -1961,6 +2018,9 @@ export class ThreadDetailVM {
       const post: PostItem | undefined = byPid.get(state.pid);
       if (post === undefined || post.inlineSubPosts.length === 0) {
         continue;
+      }
+      if (this.detail.author.id > 0) {
+        markSubPostThreadAuthor(post.inlineSubPosts, this.detail.author.id, this.detail.author.displayName);
       }
       state.subPosts = post.inlineSubPosts;
       state.previewOnly = true;

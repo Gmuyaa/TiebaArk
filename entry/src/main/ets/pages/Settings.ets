@@ -27,6 +27,10 @@ import { GlassCircleButton } from '../components/GlassCircleButton';
 import { GlassPillButton } from '../components/GlassPillButton';
 import { ForbiddenForumsVM } from '../viewmodel/ForbiddenForumsVM';
 import { BlacklistVM } from '../viewmodel/BlacklistVM';
+import { PrivacySettingsVM } from '../viewmodel/PrivacySettingsVM';
+import {
+  AccountPrivacyField, accountPrivacyOptionIndex, accountPrivacyOptionLabels, accountPrivacyOptionValue
+} from '../model/AccountPrivacy';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { SearchTopMaterial } from '../components/SearchTopMaterial';
 import { materialManager } from '../common/material/MaterialManager';
@@ -44,6 +48,7 @@ import { BlockManagePane } from '../components/BlockManagePane';
 import { ImageWatermarkPane } from '../components/ImageWatermarkPane';
 import { PrivacyMarksPane } from '../components/PrivacyMarksPane';
 import { AppPermissionsPane } from '../components/AppPermissionsPane';
+import { AccountSwitcherCard } from '../components/AccountSwitcherPane';
 import { ALL_MODES, MaterialMode, MaterialSlot, modeLabel } from '../common/material/MaterialConfig';
 
 import {
@@ -68,6 +73,7 @@ import { ImageLayoutMode, imageLayoutLabel } from '../model/ImageLayout';
 import { voicePlayerStyleStore } from '../common/appearance/VoicePlayerStyleStore';
 import { ALL_VOICE_PLAYER_STYLES, VoicePlayerStyle, voicePlayerStyleLabel } from '../model/VoicePlayerStyle';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
+import { longImageMinimapStore } from '../common/appearance/LongImageMinimapStore';
 import { smartReachStore, SmartReachStore, ForumTabsStyle } from '../common/appearance/SmartReachStore';
 import { signStrategyStore } from '../common/appearance/SignStrategyStore';
 // 系统总量与注册缓存根内的可清理文件量分别读取。
@@ -90,8 +96,18 @@ import {
   ALL_FONT_SIZE_PREFS, FONT_SIZE_MAX, FONT_SIZE_MIN, FontSizePref, fontSizeLabel
 } from '../common/appearance/FontSizeScale';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
+import { appIconLabel } from '../model/AppIcon';
+import { appIconPreviewResource, appIconStore } from '../common/appearance/AppIconStore';
+import { AppIconPane } from '../components/AppIconPane';
 
 import { SettingsLayout } from '../common/appearance/SettingsLayout';
+import {
+  SettingsDataUsePane, SettingsDisclaimerPane, SettingsFeedbackSection,
+  SettingsThirdPartyLibsPane, SettingsVersionPane
+} from '../components/SettingsAboutPanes';
+import { GITHUB_ISSUES_URL, GITHUB_REPO_URL, SupportGroup, ThirdPartyLibrary } from '../model/AboutInfo';
+import { SettingsFontSizeSheet, SettingsTopNavPreview } from '../components/SettingsPreviewPanes';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { portraitUrl } from '../model/ThreadDetail';
 import {
   SettingsActionRow, SettingsActionTone, SettingsCard, SettingsEntryRow, SettingsGroupTitle,
@@ -142,6 +158,7 @@ struct SettingsPage {
   private paneMotionVersion: number = 0;
 
   @Local avatarVm: AvatarEditVM = new AvatarEditVM();
+  @Local privacyVm: PrivacySettingsVM = new PrivacySettingsVM();
 
   /** 裁剪页是否盖在本页之上（`AvatarCropPage` 自持手势状态，本页只开关它）。 */
   @Local cropOpen: boolean = false;
@@ -189,6 +206,9 @@ struct SettingsPage {
     if (this.pane === SettingsPane.APP_PERMISSIONS) {
       this.paneRefreshSeq += 1;
     }
+    if (this.pane === SettingsPane.PRIVACY_SETTINGS) {
+      void this.privacyVm.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    }
   }
 
   /**
@@ -201,6 +221,7 @@ struct SettingsPage {
     this.cacheStats.dispose();
     this.forbiddenVm.dispose();
     this.blacklistVm.dispose();
+    this.privacyVm.dispose();
   }
 
   onPageHide(): void {
@@ -259,6 +280,7 @@ struct SettingsPage {
       topNavLabel: homeTopNavStyleLabel(homeTopNavStore.style),
       darkModeLabel: themeModeLabel(themeModeStore.pref),
       fontLabel: fontSizeLabel(fontScaleStore.pref),
+      appIconLabel: appIconLabel(appIconStore.currentName),
       forumDefaultTabLabel: forumDefaultTabLabel(forumDefaultTabStore.value),
       imageLayoutLabel: imageLayoutLabel(imageLayoutStore.mode),
       hideStatusBar: homeNavigationHideStore.hideStatusBar,
@@ -269,6 +291,7 @@ struct SettingsPage {
       gifAutoPlayLabel: gifAutoPlayLabel(imageLoadStore.gif),
       voicePlayerStyleLabel: voicePlayerStyleLabel(voicePlayerStyleStore.style),
       superResolution: superResolutionStore.enabled,
+      longImageMinimap: longImageMinimapStore.enabled,
       smartReach: this.smartReach.enabled,
       homeComposeSmartReach: this.smartReach.homeComposeEnabled,
       homeComposeVisible: this.smartReach.homeComposeVisible,
@@ -278,6 +301,9 @@ struct SettingsPage {
       forumTabsStyle: this.smartReach.forumTabsStyle,
       forumTabsStyleLabel: FORUM_TABS_STYLE_LABELS[this.smartReach.forumTabsStyle],
       forumTabsFloating: this.smartReach.forumTabsFloating,
+      privacyFollowLabel: this.privacyVm.valueLabel('follow'),
+      privacyLikeLabel: this.privacyVm.valueLabel('like'),
+      privacyReplyLabel: this.privacyVm.valueLabel('reply'),
       // 入口显示系统应用缓存总量，不再用导出目录大小冒充总量。
       cacheLabel: this.cacheStats.label(),
     };
@@ -369,6 +395,13 @@ struct SettingsPage {
     if (next === SettingsPane.BLOCK_MANAGE && this.pane !== next) {
       this.blacklistVm = new BlacklistVM(); this.blacklistUnblockSeq = 0;
     }
+    if (next === SettingsPane.PRIVACY_SETTINGS && this.pane !== next) {
+      void this.privacyVm.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    }
+    if ((next === SettingsPane.APPEARANCE || next === SettingsPane.APP_ICON || next === SettingsPane.ABOUT)
+      && this.pane !== next) {
+      void appIconStore.refresh();
+    }
     const from: SettingsPane = this.pane;
     if (from !== next) {
       this.rememberScroll(from);
@@ -410,7 +443,7 @@ struct SettingsPage {
       this.leaveToParent();
       return;
     }
-    router.back();
+    this.getUIContext().getRouter().back();
   }
 
   /**
@@ -465,7 +498,7 @@ struct SettingsPage {
    */
   private onEntry(entry: SettingsEntry): void {
     if (!entry.enabled) {
-      promptAction.showToast({ message: '该设置项开发中', duration: 2000 });
+      try { this.getUIContext().getPromptAction().showToast({ message: '该设置项开发中', duration: 2000 }); } catch (_) {}
       return;
     }
     switch (entry.kind) {
@@ -483,7 +516,7 @@ struct SettingsPage {
         return;
       case SettingsEntryKind.ACTION:
         if (entry.action === SETTINGS_ACTION_LOGIN) {
-          router.pushUrl({ url: 'pages/Login' });
+          try { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); } catch (_) {}
         } else if (entry.action === SETTINGS_ACTION_LOGOUT) {
           this.confirmLogout();
         }
@@ -547,6 +580,18 @@ struct SettingsPage {
       return buildOptions(
         ALL_VOICE_PLAYER_STYLES.map((style: VoicePlayerStyle): string => voicePlayerStyleLabel(style)),
         ALL_VOICE_PLAYER_STYLES.indexOf(voicePlayerStyleStore.style), 'voice_player_style');
+    }
+    if (pane === SettingsPane.PRIVACY_FOLLOW_LIST) {
+      return buildOptions(accountPrivacyOptionLabels('follow'),
+        accountPrivacyOptionIndex('follow', this.privacyVm.fieldValue('follow')), 'privacy_follow');
+    }
+    if (pane === SettingsPane.PRIVACY_LIKED_FORUMS) {
+      return buildOptions(accountPrivacyOptionLabels('like'),
+        accountPrivacyOptionIndex('like', this.privacyVm.fieldValue('like')), 'privacy_like');
+    }
+    if (pane === SettingsPane.PRIVACY_REPLY_WHO) {
+      return buildOptions(accountPrivacyOptionLabels('reply'),
+        accountPrivacyOptionIndex('reply', this.privacyVm.fieldValue('reply')), 'privacy_reply');
     }
     if (pane === SettingsPane.MATERIAL) {
       return buildOptions(
@@ -612,6 +657,16 @@ struct SettingsPage {
         this.getUIContext().getHostContext() as common.UIAbilityContext);
       this.closePopup(); return;
     }
+    if (pane === SettingsPane.PRIVACY_FOLLOW_LIST || pane === SettingsPane.PRIVACY_LIKED_FORUMS
+      || pane === SettingsPane.PRIVACY_REPLY_WHO) {
+      const field: AccountPrivacyField = pane === SettingsPane.PRIVACY_FOLLOW_LIST ? 'follow'
+        : pane === SettingsPane.PRIVACY_LIKED_FORUMS ? 'like' : 'reply';
+      const nextValue: number = accountPrivacyOptionValue(field, index);
+      this.closePopup();
+      if (nextValue < 0) { return; }
+      void this.applyAccountPrivacy(field, nextValue);
+      return;
+    }
     if (pane === SettingsPane.SIGN_SETTINGS) {
       if (index !== 0 && index !== 1 && index !== 2) { return; }
       void signStrategyStore.setStrategy(index, this.getUIContext().getHostContext() as common.UIAbilityContext)
@@ -627,13 +682,13 @@ struct SettingsPage {
       if (index < 0 || index > 2) { return; }
       void this.smartReach.setForumTabsStyle(index as ForumTabsStyle,
         this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       this.closePopup(); return;
     }
     if (pane === SettingsPane.IMAGE_MENU) {
       if (index !== 0 && index !== 1) { return; }
       this.smartReach.setImageMenuLongPress(index === 1, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       this.closePopup(); return;
     }
     if (pane === SettingsPane.FORUM_DEFAULT_TAB) {
@@ -701,36 +756,45 @@ struct SettingsPage {
     void superResolutionStore.setEnabled(checked, context);
   }
 
+  private setLongImageMinimap(checked: boolean): void {
+    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    void longImageMinimapStore.setEnabled(checked, context);
+  }
+
   /** 旧行渲染器里的开关分发（按稳定 action 串，不比较中文文案）。 */
   private applySwitchEntry(entry: SettingsEntry, checked: boolean): void {
     if (!entry.enabled) { return; }
     if (entry.action === 'home_compose_smart_reach') {
       this.smartReach.setHomeComposeEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'home_compose_visible') {
       this.smartReach.setHomeComposeVisible(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'forum_tabs_smart_reach') {
       this.smartReach.setForumTabsEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'image_menu_smart_reach') {
       this.smartReach.setImageMenuEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'smart_reach') {
       this.smartReach.setEnabled(checked, this.getUIContext().getHostContext() as common.UIAbilityContext)
-        .catch((error: Error): void => { promptAction.showToast({ message: error.message }); });
+        .catch((error: Error): void => { this.getUIContext().getPromptAction().showToast({ message: error.message }); });
       return;
     }
     if (entry.action === 'super_resolution') {
       this.setSuperResolution(checked);
+      return;
+    }
+    if (entry.action === 'long_image_minimap') {
+      this.setLongImageMinimap(checked);
       return;
     }
     if (entry.action === 'hide_status_bar') {
@@ -763,7 +827,7 @@ struct SettingsPage {
   private async confirmLogout(): Promise<void> {
     let confirmed: boolean = false;
     try {
-      const answer: promptAction.ShowDialogSuccessResponse = await promptAction.showDialog({
+      const answer: promptAction.ShowDialogSuccessResponse = await this.getUIContext().getPromptAction().showDialog({
         title: '退出登录',
         message: '退出后点赞等需要登录的操作将不可用，浏览不受影响。',
         buttons: [
@@ -784,12 +848,14 @@ struct SettingsPage {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const result: StoreResult = await authSession.logout(context);
     if (result.ok) {
-      promptAction.showToast({ message: '已退出登录', duration: 1800 });
+      try { this.getUIContext().getPromptAction().showToast({ message: '已退出登录', duration: 1800 }); } catch (_) {}
     } else {
-      promptAction.showToast({
-        message: `已退出，但本机凭据未清理干净（重启后可能仍是登录态）：${result.message}`,
-        duration: 2600
-      });
+      try {
+        this.getUIContext().getPromptAction().showToast({
+          message: `已退出，但本机凭据未清理干净（重启后可能仍是登录态）：${result.message}`,
+          duration: 2600
+        });
+      } catch (_) {}
     }
   }
 
@@ -810,7 +876,7 @@ struct SettingsPage {
     }
     let confirmed: boolean = false;
     try {
-      const answer: promptAction.ShowDialogSuccessResponse = await promptAction.showDialog({
+      const answer: promptAction.ShowDialogSuccessResponse = await this.getUIContext().getPromptAction().showDialog({
         title: '清理缓存',
         message: '将清理图片、导出临时文件及其他应用文件缓存，并停止当前音视频播放。'
           + '不会退出登录，不删除设置、浏览历史和已保存到相册的图片。缓存可在使用时重新生成。',
@@ -966,6 +1032,7 @@ struct SettingsPage {
             }
           }
           .width('100%')
+          .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
           .padding({ left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER })
           // 内容布局变化 = 真正就绪的信号（不用 setTimeout 猜）
           .onAreaChange((_o: Area, _n: Area) => {
@@ -983,7 +1050,7 @@ struct SettingsPage {
       .opacity(motionStore.isOn(MotionEffect.FADE) ? this.paneOpacity : 1)
       .align(Alignment.Top)
       // 顶栏玻璃层跟随滚动渐显（阈值集中定义，见 updateNavGlass）
-      .onScroll(() => {
+      .onDidScroll(() => {
         this.updateNavGlass();
       })
       }
@@ -1095,42 +1162,7 @@ struct SettingsPage {
 
   @Builder
   FontSizeSheet() {
-    Column() {
-      Row() {
-        Text('字体大小')
-          .fontSize(18)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .layoutWeight(1)
-        Text(`${fontScaleStore.customSize} fp`)
-          .fontSize(18)
-          .fontColor(AppTheme.TEXT_MAIN)
-      }
-      .width('100%')
-      .margin({ bottom: 28 })
-
-      Row() {
-        Text('A').fontSize(18).fontColor(AppTheme.TEXT_MAIN)
-        Slider({ value: fontScaleStore.customSize, min: FONT_SIZE_MIN, max: FONT_SIZE_MAX, step: 1,
-          style: SliderStyle.InSet })
-          .systemMaterial(sliderMaterial())
-          .layoutWeight(1)
-          .selectedColor(AppTheme.ACCENT)
-          .onChange((value: number, mode: SliderChangeMode): void => {
-            const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-            fontScaleStore.setCustomSize(value, context,
-              mode !== SliderChangeMode.Begin && mode !== SliderChangeMode.Moving);
-            if (mode !== SliderChangeMode.Begin && mode !== SliderChangeMode.Moving &&
-              fontScaleStore.saveError.length > 0) {
-              this.getUIContext().getPromptAction().showToast({ message: fontScaleStore.saveError });
-            }
-          })
-          .margin({ left: 12, right: 12 })
-        Text('A').fontSize(30).fontColor(AppTheme.TEXT_MAIN)
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding({ left: 24, right: 24, top: 26 })
+    SettingsFontSizeSheet()
   }
 
   // ── 入口列表 ────────────────────────────────────────────────────────────
@@ -1264,6 +1296,8 @@ struct SettingsPage {
       this.AboutPane()
     } else if (this.pane === SettingsPane.DISCLAIMER) {
       this.DisclaimerPane()
+    } else if (this.pane === SettingsPane.THIRD_PARTY_LIBS) {
+      this.ThirdPartyLibsPane()
     } else if (this.pane === SettingsPane.VERSION) {
       this.VersionPane()
     } else if (this.pane === SettingsPane.ACCOUNT) {
@@ -1319,6 +1353,8 @@ struct SettingsPage {
         (context: common.UIAbilityContext): void => { void voicePlayerStyleStore.retrySave(context); });
       this.SaveErrorLine(superResolutionStore.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void superResolutionStore.retrySave(context); });
+      this.SaveErrorLine(longImageMinimapStore.saveError, '重试保存',
+        (context: common.UIAbilityContext): void => { void longImageMinimapStore.retrySave(context); });
     } else if (this.pane === SettingsPane.MATERIAL_EFFECTS) {
       this.SaveErrorLine(materialManager.saveError, '重试保存',
         (context: common.UIAbilityContext): void => { void materialManager.retrySave(context); });
@@ -1359,6 +1395,8 @@ struct SettingsPage {
       AppPermissionsPane({ refreshSeq: this.paneRefreshSeq })
     } else if (this.pane === SettingsPane.APPEARANCE) {
       this.AppearancePane()
+    } else if (this.pane === SettingsPane.APP_ICON) {
+      AppIconPane()
     } else if (this.pane === SettingsPane.CACHE) {
       this.CachePane()
     } else {
@@ -1387,8 +1425,33 @@ struct SettingsPage {
     })
   }
 
+  private async applyAccountPrivacy(field: AccountPrivacyField, value: number): Promise<void> {
+    const err: string = await this.privacyVm.set(
+      this.getUIContext().getHostContext() as common.UIAbilityContext, field, value);
+    if (err.length > 0) {
+      try { this.getUIContext().getPromptAction().showToast({ message: err }); } catch (_) {}
+    } else if (this.privacyVm.notice.length > 0) {
+      try { this.getUIContext().getPromptAction().showToast({ message: this.privacyVm.notice }); } catch (_) {}
+    }
+  }
+
   /** 打开某一组选项弹层（按稳定 key 标记是哪一行，保证同时只有一层）。 */
   private openPanePopup(key: string, pane: SettingsPane): void {
+    if (pane === SettingsPane.PRIVACY_FOLLOW_LIST || pane === SettingsPane.PRIVACY_LIKED_FORUMS
+      || pane === SettingsPane.PRIVACY_REPLY_WHO) {
+      const field: AccountPrivacyField = pane === SettingsPane.PRIVACY_FOLLOW_LIST ? 'follow'
+        : pane === SettingsPane.PRIVACY_LIKED_FORUMS ? 'like' : 'reply';
+      if (!authSession.isLoggedIn()) {
+        try { this.getUIContext().getPromptAction().showToast({ message: '登录后才能修改隐私设置' }); } catch (_) {}
+        return;
+      }
+      if (this.privacyVm.loading || this.privacyVm.pending) { return; }
+      if (!this.privacyVm.loaded || this.privacyVm.fieldValue(field) < 0) {
+        void this.privacyVm.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
+        try { this.getUIContext().getPromptAction().showToast({ message: '正在读取隐私设置，请稍候' }); } catch (_) {}
+        return;
+      }
+    }
     this.popupPane = pane;
     this.popupKey = key;
   }
@@ -1405,7 +1468,7 @@ struct SettingsPage {
     SettingsCard({
       marginTop: SettingsLayout.GROUP_GAP,
       content: (): void => {
-        this.CategoryRows(SettingsPane.APPEARANCE, ['navigation_layout', 'material_effects'])
+        this.CategoryRows(SettingsPane.APPEARANCE, ['app_icon', 'navigation_layout', 'material_effects'])
       }
     })
   }
@@ -1473,6 +1536,14 @@ struct SettingsPage {
       SettingsCard({
         content: (): void => { this.AccountLoginRow() }
       })
+      if (authSession.savedAccounts.length > 0) {
+        AccountSwitcherCard({
+          marginTop: SettingsLayout.GROUP_GAP,
+          onAddAccount: (): void => {
+            try { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); } catch (_) {}
+          }
+        })
+      }
     } else {
       SettingsCard({
         content: (): void => { this.AccountAvatarRows() }
@@ -1483,6 +1554,12 @@ struct SettingsPage {
       SettingsCard({
         marginTop: SettingsLayout.GROUP_GAP,
         content: (): void => { this.AccountInfoRows() }
+      })
+      AccountSwitcherCard({
+        marginTop: SettingsLayout.GROUP_GAP,
+        onAddAccount: (): void => {
+          try { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); } catch (_) {}
+        }
       })
       SettingsCard({
         marginTop: SettingsLayout.GROUP_GAP,
@@ -1575,7 +1652,7 @@ struct SettingsPage {
     SettingsActionRow({
       label: '登录贴吧账号',
       onTap: (): void => {
-        router.pushUrl({ url: 'pages/Login' });
+        void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
       }
     })
   }
@@ -1666,11 +1743,12 @@ struct SettingsPage {
   AboutPane() {
     Column() {
       Column({ space: 12 }) {
-        Image($r('app.media.app_icon'))
+        Image(appIconPreviewResource(appIconStore.currentName))
           .width(72)
           .height(72)
           .borderRadius(18)
           .objectFit(ImageFit.Cover)
+          .border({ width: 0.5, color: AppTheme.DIVIDER })
         Text($r('app.string.app_name'))
           .fontSize(SettingsLayout.TITLE_SIZE)
           .fontWeight(FontWeight.Bold)
@@ -1683,6 +1761,16 @@ struct SettingsPage {
       SettingsCard({
         content: (): void => { this.AboutRows() }
       })
+
+      SettingsFeedbackSection({
+        onTapIssues: (): void => {
+          void this.confirmOpenExternalLink('前往 GitHub Issues', '即将前往浏览器打开 GitHub Issues 页面。',
+            GITHUB_ISSUES_URL, '无法打开反馈页面');
+        },
+        onOpenGroup: (group: SupportGroup): void => {
+          void this.openSupportGroup(group);
+        }
+      })
     }
     .width('100%')
   }
@@ -1691,6 +1779,12 @@ struct SettingsPage {
   AboutRows() {
     SettingsInfoRow({ label: '版本', value: SETTINGS_APP_VERSION })
     SettingsInfoRow({ label: 'VersionCode', value: SETTINGS_VERSION_CODE })
+    SettingsEntryRow({
+      label: '第三方库',
+      onTap: (): void => {
+        this.navigateTo(SettingsPane.THIRD_PARTY_LIBS);
+      }
+    })
     SettingsEntryRow({
       label: '免责声明',
       onTap: (): void => {
@@ -1701,50 +1795,35 @@ struct SettingsPage {
       label: 'GitHub',
       showDivider: false,
       onTap: (): void => {
-        this.confirmOpenGitHub();
+        void this.confirmOpenExternalLink('前往 GitHub', '即将前往浏览器打开项目主页。',
+          GITHUB_REPO_URL, '无法打开项目主页');
+      }
+    })
+  }
+
+  @Builder
+  ThirdPartyLibsPane() {
+    SettingsThirdPartyLibsPane({
+      onOpenLibrary: (lib: ThirdPartyLibrary): void => {
+        void this.confirmOpenExternalLink(`前往 ${lib.name}`, '即将前往浏览器打开该开源项目主页。',
+          lib.url, '无法打开项目主页');
       }
     })
   }
 
   @Builder
   DisclaimerPane() {
-    SettingsCard({
-      content: (): void => { this.DisclaimerRows() }
-    })
+    SettingsDisclaimerPane()
   }
 
-  @Builder
-  DisclaimerRows() {
-    Column({ space: 16 }) {
-      ForEach(disclaimerSections(), (section: DisclaimerSection, secIndex: number) => {
-        Column({ space: 8 }) {
-          Text(section.title)
-            .fontSize(SettingsLayout.VALUE_SIZE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppTheme.TEXT_MAIN)
-            .width('100%')
-          ForEach(section.paragraphs, (paragraph: string, pIndex: number) => {
-            Text(paragraph)
-              .fontSize(SettingsLayout.SUB_SIZE)
-              .fontColor(AppTheme.NOTE_TEXT)
-              .lineHeight(20)
-              .width('100%')
-          }, (_p: string, pIndex: number) => `disclaimer_${secIndex}_${pIndex}`)
-        }
-        .width('100%')
-      }, (section: DisclaimerSection, secIndex: number) => `disclaimer_sec_${secIndex}`)
-    }
-    .width('100%')
-    .padding(SettingsLayout.ROW_PAD_L)
-  }
-
-  /** 用户确认后才离开应用打开项目主页；取消或弹窗失败时保持在本页。 */
-  private async confirmOpenGitHub(): Promise<void> {
+  /** 用户确认后才离开应用打开外部链接；取消或弹窗失败时保持在本页。 */
+  private async confirmOpenExternalLink(title: string, message: string, url: string,
+    failMessage: string): Promise<void> {
     let confirmed: boolean = false;
     try {
-      const answer: promptAction.ShowDialogSuccessResponse = await promptAction.showDialog({
-        title: '前往 GitHub',
-        message: '即将前往浏览器打开项目主页。',
+      const answer: promptAction.ShowDialogSuccessResponse = await this.getUIContext().getPromptAction().showDialog({
+        title: title,
+        message: message,
         buttons: [
           { text: '取消', color: AppTheme.TEXT_SUB },
           { text: '确定', color: AppTheme.ACCENT_DARK }
@@ -1757,50 +1836,30 @@ struct SettingsPage {
     if (!confirmed) { return; }
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
-    context.openLink('https://github.com/Gm0201/TiebaArk').catch(() => {
-      promptAction.showToast({ message: '无法打开项目主页', duration: 1800 });
+    context.openLink(url).catch(() => {
+      this.getUIContext().getPromptAction().showToast({ message: failMessage, duration: 1800 });
     });
+  }
+
+  private async openSupportGroup(group: SupportGroup): Promise<void> {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try {
+      await context.openLink(group.url, { appLinkingOnly: false });
+    } catch (_) {
+      this.getUIContext().getPromptAction().showToast({ message: '无法打开 QQ 群链接', duration: 1800 });
+    }
   }
 
   @Builder
   DataUsePane() {
-    SettingsCard({
-      content: (): void => { this.DataUseRows() }
-    })
-  }
-
-  @Builder
-  DataUseRows() {
-    Column({ space: 14 }) {
-      ForEach(aboutNotes(), (note: string, index: number) => {
-        Text(note)
-          .fontSize(SettingsLayout.SUB_SIZE)
-          .fontColor(AppTheme.NOTE_TEXT)
-          .lineHeight(20)
-          .width('100%')
-      }, (note: string, index: number) => `data_use_${index}`)
-    }
-    .width('100%')
-    .padding(SettingsLayout.ROW_PAD_L)
+    SettingsDataUsePane()
   }
 
   /** 「版本详情」：版本 / 版本代码 / 目标平台（关于首页只留版本号）。 */
   @Builder
   VersionPane() {
-    SettingsCard({
-      content: (): void => { this.VersionRows() }
-    })
-  }
-
-  @Builder
-  VersionRows() {
-    ForEach(aboutItems(), (item: SettingsAboutItem, index: number) => {
-      SettingsInfoRow({
-        label: item.label,
-        value: item.value,
-        showDivider: index < aboutItems().length - 1
-      })
-    }, (item: SettingsAboutItem) => `version_${item.label}`)
+    SettingsVersionPane()
   }
 
   @Builder
@@ -1817,7 +1876,7 @@ struct SettingsPage {
     SettingsGroupTitle({ title: '看图' })
     SettingsCard({
       content: (): void => {
-        this.CategoryRows(SettingsPane.BROWSING, ['image_menu', 'super_resolution'])
+        this.CategoryRows(SettingsPane.BROWSING, ['image_menu', 'super_resolution', 'long_image_minimap'])
       }
     })
   }
@@ -1904,6 +1963,22 @@ struct SettingsPage {
         this.CategoryRows(SettingsPane.PRIVACY_SETTINGS, ['forbidden_forums', 'block_manage', 'hidden_threads'])
       }
     })
+    SettingsGroupTitle({ title: '主页与互动' })
+    SettingsCard({
+      content: (): void => {
+        this.CategoryRows(SettingsPane.PRIVACY_SETTINGS, ['privacy_follow', 'privacy_like', 'privacy_reply'])
+      }
+    })
+    if (this.privacyVm.error.length > 0) {
+      SettingsStatusLine({
+        kind: SettingsStatusKind.ERROR,
+        message: this.privacyVm.error,
+        retryLabel: '重试',
+        onRetry: (): void => {
+          void this.privacyVm.load(this.getUIContext().getHostContext() as common.UIAbilityContext);
+        }
+      })
+    }
     SettingsGroupTitle({ title: '权限与数据' })
     SettingsCard({
       content: (): void => {
@@ -1914,72 +1989,7 @@ struct SettingsPage {
 
   @Builder
   HomeTopNavPreview() {
-    Column() {
-      Text('顶栏预览')
-        .fontSize(SettingsLayout.SUB_SIZE)
-        .fontColor(AppTheme.NOTE_TEXT)
-        .width('100%')
-        .margin({ bottom: 8 })
-      Stack({ alignContent: Alignment.TopStart }) {
-        // 示意色块：只用于观察玻璃层次，不代表任何真实内容。
-        // ⚠️ 刻意**不用** ACCENT_LIGHT：它与选中底的浅蓝同色，会让人误以为那是选中态。
-        // 整层再压到 55% 不透明度：深灰块原色（#B7B7BC）会让压在上面的未选中频道文字
-        // 掉到约 2.4:1 对比度（真机截图实测），压淡后既能看出玻璃、文字也还读得清。
-        Row({ space: 8 }) {
-          Column()
-            .width(72).height(72).borderRadius(10)
-            .backgroundColor(AppTheme.TEXT_MUTED)
-          Column()
-            .width(96).height(56).borderRadius(10)
-            .backgroundColor(AppTheme.CARD)
-          Column()
-            .width(56).height(88).borderRadius(10)
-            .backgroundColor(AppTheme.SURFACE_MUTED)
-          Blank()
-        }
-        .width('100%')
-        .opacity(0.55)
-        .padding({ left: 12, right: 12, top: 6 })
-        if (visualThemeStore.isPaper || homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW) {
-
-          HomeDualRowTopBar({
-            statusBarHeight: 0,
-            selectedChannel: this.previewChannel,
-            onSelectChannel: (label: string): void => { this.previewChannel = label; },
-            onSearch: (): void => {}
-          })
-          .width('100%')
-          .padding({ top: 6 })
-        } else {
-          HomeTopNav({
-            style: homeTopNavStore.style,
-            selectedChannel: this.previewChannel,
-            onRowHeightChanged: (height: number): void => { this.previewNavRowH = height; },
-            hidden: false,
-            onSelectChannel: (label: string): void => { this.previewChannel = label; },
-            onSearch: (): void => {}
-          })
-          // 预览卡片自己收边：左右边距交给外层 padding，顶栏行贴卡片上沿（top = 0）
-          .width('100%')
-          .padding({ left: 0, right: 0 })
-        }
-      }
-      .width('100%')
-      .height(visualThemeStore.isPaper
-        ? TOP_NAV_PREVIEW_DUAL_H + PaperLayout.BRAND_HEIGHT
-        : homeTopNavStore.style === HomeTopNavStyle.OFFICIAL_DUAL_ROW
-        ? TOP_NAV_PREVIEW_DUAL_H + homeDualRowHeight(fontSizeScaleOf(fontScaleStore.pref,
-          fontScaleStore.systemScale, fontScaleStore.customSize)) - OFFICIAL_DUAL_ROW_HEIGHT
-        : Math.max(TOP_NAV_PREVIEW_H, this.previewNavRowH + 28))
-      .clip(true)
-      .borderRadius(SettingsLayout.CARD_RADIUS - 6)
-      .backgroundColor(AppTheme.BG)
-    }
-    .width('100%')
-    .padding(12)
-    .margin({ top: SettingsLayout.GROUP_TITLE_GAP })
-    .backgroundColor(AppTheme.SURFACE_MUTED)
-    .borderRadius(SettingsLayout.CARD_RADIUS)
+    SettingsTopNavPreview()
   }
 
   /** 以稳定 key 选择页内分组，值和开关仍读取模型，避免迁移后依赖旧数组下标。 */

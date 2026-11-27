@@ -10,7 +10,7 @@ import { SearchPostItem } from '../model/SearchPost';
 import { TiebaDevice } from '../net/TiebaParams';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { addSearchHistory } from '../utils/SearchHistory';
-import { SearchForumAvatarDone, SearchPostAvatarsVM } from './SearchPostAvatarsVM';
+import { SearchForumAvatarDone, SearchPostAvatarsVM, SearchPostMetricsDone } from './SearchPostAvatarsVM';
 import { SearchUsersVM } from './SearchUsersVM';
 
 /** 搜帖结果每页条数；搜吧与搜人沿用各自接口的分页规格。 */
@@ -21,6 +21,8 @@ const SEARCH_PAGE_SIZE: number = 30;
 export class SearchResultVM {
   @Trace word: string = '';
   @Trace items: SearchPostItem[] = [];
+  @Trace sortMode: number = 0;
+  @Trace onlyThread: boolean = false;
   @Trace loading: boolean = false;
   @Trace loadingMore: boolean = false;
   @Trace hasMore: boolean = false;
@@ -50,7 +52,7 @@ export class SearchResultVM {
   private prepareAvatars(context: common.UIAbilityContext, epoch: number): void {
     const owner: string = authSession.sessionKey();
     this.postAvatars.reset(async (name: string, forum: boolean, tid: number, pid: number,
-      onForumAvatar: SearchForumAvatarDone): Promise<string> => {
+      onForumAvatar: SearchForumAvatarDone, onMetrics?: SearchPostMetricsDone): Promise<string> => {
       if (!this.currentOwner(epoch, owner)) { return ''; }
       const avatarApi: TiebaApi = new TiebaApi();
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
@@ -62,6 +64,10 @@ export class SearchResultVM {
             putForumAvatar(name, avatar);
             markForumAvatarFetched(name);
             onForumAvatar(name, avatar);
+          },
+          (agreeCount: number, replyCount: number, shareCount: number): void => {
+            if (!this.currentOwner(epoch, owner) || onMetrics === undefined) { return; }
+            onMetrics(agreeCount, replyCount, shareCount);
           });
         return this.currentOwner(epoch, owner) ? url : '';
       }
@@ -139,6 +145,24 @@ export class SearchResultVM {
     }
   }
 
+  async applyPostFilter(context: common.UIAbilityContext, sortMode: number, onlyThread: boolean): Promise<void> {
+    if (this.disposed || this.word.length === 0) { return; }
+    if (this.sortMode === sortMode && this.onlyThread === onlyThread) { return; }
+    this.sortMode = sortMode;
+    this.onlyThread = onlyThread;
+    const epoch: number = ++this.requestEpoch;
+    this.prepareAvatars(context, epoch);
+    this.loading = true;
+    this.loadingMore = false;
+    this.errorText = '';
+    this.pagingError = '';
+    this.page = 0;
+    this.items = [];
+    this.hasMore = false;
+    await this.fetchPage(context, this.word, epoch);
+    if (this.current(epoch)) { this.loading = false; }
+  }
+
   async loadMore(context: common.UIAbilityContext, retry: boolean = false): Promise<void> {
     if (this.disposed || this.loading || this.loadingMore || !this.hasMore || (this.pagingError.length > 0 && !retry)) {
       return;
@@ -156,7 +180,8 @@ export class SearchResultVM {
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (!this.currentOwner(epoch, owner)) { return; }
       const response = await this.api.searchPosts(
-        device, authSession.session(), word, requested, SEARCH_PAGE_SIZE, this.scopeForum);
+        device, authSession.session(), word, requested, SEARCH_PAGE_SIZE, this.scopeForum,
+        this.sortMode, this.onlyThread);
       if (!this.currentOwner(epoch, owner)) { return; }
       if (!response.ok) { this.setPageError(requested, response.describeFailure()); return; }
       if (response.data.page !== requested) { this.setPageError(requested, '返回页码不一致，请重试'); return; }

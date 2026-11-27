@@ -6,10 +6,11 @@ import { common } from '@kit.AbilityKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { FollowForumItem } from '../model/FollowForum';
+import { getForumAvatar } from '../model/ForumAvatarStore';
 import { ForumSearchItem } from '../model/ForumSearch';
 import { HotTopicItem } from '../model/HotTopic';
 import { BrowseItem, loadBrowseHistory } from '../utils/BrowseHistory';
-import { readFollowForumsShared } from './ForumReadCache';
+import { cachedForumId, readFollowForumsShared } from './ForumReadCache';
 
 export class ComposeForumOption {
   id: number = 0;
@@ -39,10 +40,28 @@ export function composeRecentOptions(items: BrowseItem[], followed: ComposeForum
     seen.add(name);
     const match = followed.find((value: ComposeForumOption): boolean => value.name === name);
     const option = new ComposeForumOption();
-    option.id = match?.id ?? 0; option.name = name; option.avatar = match?.avatar || item.forumAvatar;
+    option.id = match?.id ?? 0; option.name = name; option.avatar = match?.avatar || item.forumAvatar || '';
     option.level = match?.level ?? 0; option.followers = match?.followers ?? ''; option.posts = match?.posts ?? '';
     option.source = '最近在逛'; result.push(option);
   }
+  return result;
+}
+
+export function composeQuickForumOptions(recent: ComposeForumOption[], followed: ComposeForumOption[],
+  limit: number = 12): ComposeForumOption[] {
+  const result: ComposeForumOption[] = [];
+  const seen: Set<string> = new Set<string>();
+  const append = (list: ComposeForumOption[]): void => {
+    for (const item of list) {
+      const name: string = item.name.trim();
+      if (name.length === 0 || seen.has(name)) { continue; }
+      seen.add(name);
+      result.push(item);
+      if (result.length >= limit) { return; }
+    }
+  };
+  append(recent);
+  if (result.length < limit) { append(followed); }
   return result;
 }
 
@@ -50,6 +69,7 @@ export function composeRecentOptions(items: BrowseItem[], followed: ComposeForum
 export class ComposeOptionsVM {
   @Trace recent: ComposeForumOption[] = [];
   @Trace followed: ComposeForumOption[] = [];
+  @Trace quickForums: ComposeForumOption[] = [];
   @Trace forumsLoading: boolean = false;
   @Trace forumError: string = '';
   @Trace forumTab: number = 0;
@@ -78,15 +98,21 @@ export class ComposeOptionsVM {
     if (!this.alive) { return; }
     const epoch: number = ++this.forumEpoch;
     const owner: string = authSession.sessionKey();
-    this.forumsLoading = true; this.forumError = ''; this.recent = []; this.followed = [];
+    this.forumsLoading = true; this.forumError = ''; this.recent = []; this.followed = []; this.quickForums = [];
     let history: BrowseItem[] = [];
     const current = (): boolean => this.alive && epoch === this.forumEpoch;
     const publish = (): void => {
       if (!current()) { return; }
       if (owner !== authSession.sessionKey()) {
-        this.recent = []; this.followed = []; this.forumError = '登录状态已变化，请重新打开'; return;
+        this.recent = []; this.followed = []; this.quickForums = []; this.forumError = '登录状态已变化，请重新打开'; return;
       }
-      this.recent = composeRecentOptions(history, this.followed);
+      const mergedRecent: ComposeForumOption[] = composeRecentOptions(history, this.followed);
+      for (const item of mergedRecent) {
+        if (item.id <= 0) { item.id = cachedForumId(item.name); }
+        if ((item.avatar ?? '').length === 0) { item.avatar = getForumAvatar(item.name); }
+      }
+      this.recent = mergedRecent;
+      this.quickForums = composeQuickForumOptions(this.recent, this.followed);
     };
     const recentRead: Promise<void> = loadBrowseHistory(context).then((items: BrowseItem[]): void => {
       history = items; publish();

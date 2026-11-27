@@ -158,11 +158,13 @@ export struct VoicePlayer {
 
   private innerWavePath(): string {
     // Path 命令坐标使用物理像素，按当前密度换算成 16vp 声波弧线。
-    return `M ${vp2px(6.5)} ${vp2px(5.0)} A ${vp2px(4.2)} ${vp2px(4.2)} 0 0 1 ${vp2px(6.5)} ${vp2px(11.0)}`;
+    const ui = this.getUIContext();
+    return `M ${ui.vp2px(6.5)} ${ui.vp2px(5.0)} A ${ui.vp2px(4.2)} ${ui.vp2px(4.2)} 0 0 1 ${ui.vp2px(6.5)} ${ui.vp2px(11.0)}`;
   }
 
   private outerWavePath(): string {
-    return `M ${vp2px(9.6)} ${vp2px(2.6)} A ${vp2px(7.2)} ${vp2px(7.2)} 0 0 1 ${vp2px(9.6)} ${vp2px(13.4)}`;
+    const ui = this.getUIContext();
+    return `M ${ui.vp2px(9.6)} ${ui.vp2px(2.6)} A ${ui.vp2px(7.2)} ${ui.vp2px(7.2)} 0 0 1 ${ui.vp2px(9.6)} ${ui.vp2px(13.4)}`;
   }
 
   @Builder

@@ -201,10 +201,23 @@ struct ThreadPreviewImage {
     return feedImageBox(feedPreviewInfo(this.url), this.contentWidth, this.multiple, this.density);
   }
 
+  private classicTopCropScale(frame: FeedImageBox): number {
+    if (!frame.long || !(frame.width > 0) || !(frame.height > 0)) { return 1; }
+    const drawn: FeedImageInfo = this.actual.width > 0 && this.actual.height > 0 ? this.actual : feedPreviewInfo(this.url);
+    if (!(drawn.width > 0) || !(drawn.height > 0)) { return 1; }
+    const srcRatio: number = drawn.width / drawn.height;
+    const boxRatio: number = frame.width / frame.height;
+    if (!(srcRatio > 0) || srcRatio >= boxRatio) { return 1; }
+    const scale: number = boxRatio / srcRatio;
+    return Number.isFinite(scale) && scale > 1 ? scale : 1;
+  }
+
   /**
    * 容器比例与本次实际绘制的资源比例不一致时 `Cover` 裁切填满，一致时沿用 `Contain`（此时等价，不会裁掉内容）。
+   * 长图在已知尺寸时改用 `Contain` + 顶部中心等比缩放，保证露出顶部而非居中裁切。
    */
   private imageFit(frame: FeedImageBox): ImageFit {
+    if (this.classicTopCropScale(frame) > 1) { return ImageFit.Contain; }
     if (frame.long) { return ImageFit.Cover; }
     const drawn: FeedImageInfo = this.actual;
     if (!(drawn.width > 0) || !(drawn.height > 0)) { return ImageFit.Contain; }
@@ -212,6 +225,11 @@ struct ThreadPreviewImage {
     const srcRatio: number = drawn.width / drawn.height;
     const drift: number = Math.abs(boxRatio - srcRatio) / Math.max(boxRatio, srcRatio);
     return drift > 0.05 ? ImageFit.Cover : ImageFit.Contain;
+  }
+
+  private classicImageScale(frame: FeedImageBox): ScaleOptions {
+    const scale: number = this.classicTopCropScale(frame);
+    return scale > 1 ? { x: scale, y: scale, centerX: '50%', centerY: 0 } : { x: 1, y: 1 };
   }
 
   private applyLoaded(event: PreviewImageComplete | undefined): void {
@@ -275,6 +293,7 @@ struct ThreadPreviewImage {
                   .height('100%')
                   .objectFit(this.imageFit(this.frame()))
                   .objectRepeat(ImageRepeat.NoRepeat)
+                  .scale(this.classicImageScale(this.frame()))
                   .opacity(this.loaded ? 1 : 0)
                   .onComplete(this.completeHandler(this.url))
                   .onError(this.errorHandler(this.url))
@@ -287,6 +306,7 @@ struct ThreadPreviewImage {
                   .height('100%')
                   .objectFit(this.imageFit(this.frame()))
                   .objectRepeat(ImageRepeat.NoRepeat)
+                  .scale(this.classicImageScale(this.frame()))
                   .opacity(this.loaded ? 1 : 0)
                   .onComplete(this.completeHandler(this.url))
                   .onError(this.errorHandler(this.url))
@@ -543,9 +563,20 @@ export struct ModernThreadPreviewImage {
     });
   }
 
+  private declaredInfo(): FeedImageInfo {
+    if (this.bodyImage !== undefined && this.bodyImage.width > 0 && this.bodyImage.height > 0) {
+      const declared: FeedImageInfo = new FeedImageInfo();
+      declared.width = this.bodyImage.width;
+      declared.height = this.bodyImage.height;
+      declared.origin = this.bodyImage.originImageUrl;
+      return declared;
+    }
+    return feedPreviewInfo(this.url);
+  }
+
   private info(): FeedImageInfo {
     const actual: FeedImageInfo = this.actual.width > 0 && this.actual.height > 0 ? this.actual : feedImageInfo(this.url);
-    return readingImageInfo(feedPreviewInfo(this.url), actual);
+    return readingImageInfo(this.declaredInfo(), actual);
   }
 
   private frame(): FeedImageBox {
@@ -556,9 +587,10 @@ export struct ModernThreadPreviewImage {
   }
 
   private drawing(): FeedImageTransform {
-    // 单图外框已是完整图片比例；明确使用单位变换，避免浮点微小偏移使共享配对失效。
-    if (this.total < 2) { return new FeedImageTransform(); }
-    return modernFeedImageTransform(this.info(), this.frame(), this.density);
+    const box: FeedImageBox = this.frame();
+    // 普通单图外框已是完整图片比例；多图方格与顶部裁切单张长图走裁切变换。
+    if (this.total < 2 && !box.long) { return new FeedImageTransform(); }
+    return modernFeedImageTransform(this.info(), box, this.density);
   }
 
   private resetSharedCrop(): void {

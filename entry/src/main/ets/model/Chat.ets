@@ -17,7 +17,97 @@ import { ProtoReader, WireType } from '../proto/ProtoWire';
 export const GROUP_TYPE_PRIVATE: number = 6;
 /** 消息类型：1 = 文本，22 = 已读回执（content 是 JSON），其余暂按占位文本展示。 */
 export const MSG_TYPE_TEXT: number = 1;
+export const MSG_TYPE_IMAGE: number = 2;
 export const MSG_TYPE_READED: number = 22;
+
+export class ChatImageContent {
+  src: string = '';
+  bigSrc: string = '';
+  width: number = 0;
+  height: number = 0;
+}
+
+interface RawChatPicPayload {
+  src?: string;
+  big_src?: string;
+  bsize?: string;
+  type?: string;
+}
+
+function validChatImageUrl(raw: string | undefined): string {
+  if (typeof raw !== 'string') { return ''; }
+  const trimmed: string = raw.trim();
+  return /^https?:\/\/[^\s/?#@\\]+(?:[/?#][^\s\\]*)?$/i.test(trimmed) ? trimmed : '';
+}
+
+function parseRawChatPicItem(raw: RawChatPicPayload | null | undefined): ChatImageContent | undefined {
+  if (raw === undefined || raw === null) { return undefined; }
+  const src: string = validChatImageUrl(raw.src);
+  const bigSrc: string = validChatImageUrl(raw.big_src);
+  const usableSrc: string = src.length > 0 ? src : bigSrc;
+  if (usableSrc.length === 0) { return undefined; }
+  const out: ChatImageContent = new ChatImageContent();
+  out.src = usableSrc;
+  out.bigSrc = bigSrc.length > 0 ? bigSrc : usableSrc;
+  if (typeof raw.bsize === 'string') {
+    const parts: string[] = raw.bsize.split(',');
+    if (parts.length >= 2) {
+      const w: number = Number(parts[0]);
+      const h: number = Number(parts[1]);
+      if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+        out.width = Math.round(w);
+        out.height = Math.round(h);
+      }
+    }
+  }
+  return out;
+}
+
+/** 解析私信图片消息（msgType=2，官方 PicMessageData JSON 数组 `[{src, big_src, bsize, type:"3"}]`，兼容单对象）。 */
+export function parseChatImageContent(content: string): ChatImageContent | undefined {
+  const trimmed: string = content.trim();
+  if (trimmed.length === 0) { return undefined; }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    const direct: string = validChatImageUrl(trimmed);
+    if (direct.length === 0) { return undefined; }
+    const out: ChatImageContent = new ChatImageContent();
+    out.src = direct;
+    out.bigSrc = direct;
+    return out;
+  }
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) { return undefined; }
+  try {
+    const parsed: Object = JSON.parse(trimmed) as Object;
+    if (Array.isArray(parsed)) {
+      for (let i: number = 0; i < parsed.length; i++) {
+        const hit: ChatImageContent | undefined = parseRawChatPicItem(parsed[i] as RawChatPicPayload);
+        if (hit !== undefined) { return hit; }
+      }
+      return undefined;
+    }
+    return parseRawChatPicItem(parsed as RawChatPicPayload);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+/** 构造官方私信图片消息 JSON 数组（APK `ie7.g`：`[{src, big_src, bsize, type:"3"}]`）。 */
+export function encodeChatImageContent(url: string, width: number, height: number, bigUrl: string = ''): string {
+  const safeSrc: string = validChatImageUrl(url);
+  const safeBig: string = validChatImageUrl(bigUrl);
+  const effectiveSrc: string = safeSrc.length > 0 ? safeSrc : safeBig;
+  if (effectiveSrc.length === 0) { return ''; }
+  const effectiveBig: string = safeBig.length > 0 ? safeBig : effectiveSrc;
+  const w: number = Number.isFinite(width) && width > 0 ? Math.round(width) : 0;
+  const h: number = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
+  const bsize: string = w > 0 && h > 0 ? `${w},${h}` : '';
+  return JSON.stringify([{
+    src: effectiveSrc,
+    big_src: effectiveBig,
+    bsize: bsize,
+    type: '3'
+  }]);
+}
 
 /** 置顶会话的排序偏移：远大于消息时间戳（~1e12），保证置顶永远排最前。 */
 const PINNED_OFFSET: number = 1e15;
@@ -75,11 +165,16 @@ export class ChatMessage {
   /** 气泡展示文本；未知类型保留位置，不丢消息。 */
   text(): string {
     if (this.msgType === MSG_TYPE_TEXT) { return this.content; }
+    if (this.msgType === MSG_TYPE_IMAGE) { return '[图片]'; }
     if (this.msgType === MSG_TYPE_READED) { return '已读'; }
     if (this.msgType === 3) { return '[语音]'; }
     if (this.msgType === 33) { return this.content.length > 0 ? `[分享吧] ${this.content}` : '[分享吧]'; }
     if (this.msgType === 34) { return this.structuredCardText(); }
     return '[暂不支持的消息]';
+  }
+
+  imageContent(): ChatImageContent | undefined {
+    return this.msgType === MSG_TYPE_IMAGE ? parseChatImageContent(this.content) : undefined;
   }
 
   /** 结构卡 content 形如 `[文本, 类型]`（JSON 数组）；取不到文本就退占位。 */

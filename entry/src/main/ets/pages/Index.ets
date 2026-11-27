@@ -12,6 +12,8 @@ import { AnimatorResult, curves, display, window } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { authSession, AuthSession } from '../auth/AuthSession';
 import { NotifyUnreadVM, notifyUnreadVM } from '../viewmodel/NotifyUnreadVM';
+import { ChatListVM, chatListVM } from '../viewmodel/ChatListVM';
+import { chatStore } from '../viewmodel/ChatStore';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { hdsEffect } from '@kit.UIDesignKit';
 
@@ -27,6 +29,7 @@ import { VideoFeedPage } from './VideoFeedPage';
 import { ComposePage } from './ComposePage';
 import { HomeComposeButton } from '../components/HomeComposeButton';
 import { smartReachStore, SmartReachStore } from '../common/appearance/SmartReachStore';
+import { WindowBreakpoint, windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { MyListPage } from './MyListPage';
 import { HotTopicPage } from './HotTopicPage';
 import { UserPage } from './UserPage';
@@ -35,7 +38,7 @@ import { ForumMemberPage } from './ForumMemberPage';
 import { NotifyListPage } from './NotifyListPage';
 import { ChatPage } from './ChatPage';
 import {
-  AppRoute, ChatPageParams, ForumPageParams, HotTopicParams, MyListParams, NavigationService,
+  AppRoute, ChatPageParams, ComposePageParams, ForumPageParams, HotTopicParams, MyListParams, NavigationService,
   NotifyListParams, SearchResultParams, ThreadDetailParams, UserPageParams, DirectoryPageParams,
   ForumMemberPageParams
 } from '../navigation/AppNavigation';
@@ -69,6 +72,7 @@ import { avatarTrace } from '../utils/AvatarTrace';
 import { ForegroundRefresh, foregroundRefresh } from '../viewmodel/ForegroundRefresh';
 import { LaunchDisclaimerStore, launchDisclaimerStore } from '../utils/LaunchDisclaimerStore';
 import { startPostConsentServices } from '../viewmodel/AppStartup';
+import { prepareForumPage } from '../viewmodel/ForumPageStore';
 import {
   LaunchDisclaimerContent, launchDisclaimerBodyMaxHeight, launchDisclaimerDialogOptions,
   launchDisclaimerDialogWidth
@@ -119,6 +123,7 @@ struct Index {
   @Local motionPreferences: MotionStore = motionStore;
   @Local foreground: ForegroundRefresh = foregroundRefresh;
   @Local unread: NotifyUnreadVM = notifyUnreadVM;
+  @Local chatList: ChatListVM = chatListVM;
   @Local unreadAuth: AuthSession = authSession;
   @Local private disclaimer: LaunchDisclaimerStore = launchDisclaimerStore;
   @Local private disclaimerBusy: boolean = false;
@@ -150,7 +155,9 @@ struct Index {
   }
 
   private async reloadUnread(): Promise<void> {
-    await this.unread.refresh(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    await this.unread.refresh(context);
+    void chatStore.syncOnForeground(context);
   }
 
   @Monitor('foreground.revision', 'pageVisible', 'homeNavVisible')
@@ -195,6 +202,8 @@ struct Index {
   @Local homeNavVisible: boolean = true;
   private statusBarRequestVersion: number = 0;
   private lastHomeTapMs: number = 0;
+  private pendingTabClickIndex: number = -1;
+  private pendingTabClickTimer: number = -1;
   private homeScrollToTop: () => void = (): void => {};
   private homeRefresh: () => void = (): void => {};
   private homeChangeChannel: (label: string) => void = (_label: string): void => {};
@@ -267,20 +276,28 @@ struct Index {
     NavigationService.setStack(this.appNavStack);
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
+    NavigationService.setForumPrefetcher(context, (ctx: common.UIAbilityContext, name: string): void => {
+      prepareForumPage(ctx, name);
+    });
     readStatusBarVp(context).then((vp: number) => { this.homeStatusBarH = vp; }).catch(() => {});
 
-    const screen: display.Display = display.getDefaultDisplaySync();
-    const widthVp: number = px2vp(screen.width);
-    const heightVp: number = px2vp(screen.height);
-    if (this.homeViewportWidth <= 0) { this.homeViewportWidth = widthVp; }
-    if (this.homeViewportHeight <= 0) { this.homeViewportHeight = heightVp; }
-    this.barSideMargin = bottomBarSideMarginVp(widthVp);
+    try {
+      const screen: display.Display = display.getDefaultDisplaySync();
+      const ui = this.getUIContext();
+      const widthVp: number = ui.px2vp(screen.width);
+      const heightVp: number = ui.px2vp(screen.height);
+      if (this.homeViewportWidth <= 0) { this.homeViewportWidth = widthVp; }
+      if (this.homeViewportHeight <= 0) { this.homeViewportHeight = heightVp; }
+      this.barSideMargin = bottomBarSideMarginVp(widthVp);
+    } catch (_) {}
     if (this.disclaimer.accepted) {
       this.syncUnreadRefresh();
     }
   }
 
   aboutToDisappear(): void {
+    this.clearPendingTabClick();
+    NavigationService.setForumPrefetcher(null, null);
     if (this.disclaimerDialogId) {
       this.closeDisclaimerDialog();
     }
@@ -343,10 +360,12 @@ struct Index {
     const saved: boolean = launchDisclaimerStore.accept(context);
     if (!saved) {
       this.disclaimerBusy = false;
-      this.getUIContext().getPromptAction().showToast({
-        message: '保存确认状态失败，请重试',
-        duration: 2000
-      });
+      try {
+        this.getUIContext().getPromptAction().showToast({
+          message: '保存确认状态失败，请重试',
+          duration: 2000
+        });
+      } catch (_) {}
       return;
     }
     this.disclaimerDialogFallback = false;
@@ -382,6 +401,7 @@ struct Index {
   }
 
   onPageHide(): void {
+    this.clearPendingTabClick();
     this.pageVisible = false;
     this.setHomeScrollHidden(false);
     this.resetMainTabTransition();
@@ -402,13 +422,21 @@ struct Index {
     this.homeTabSlideOffsetX = 0;
   }
 
+  private clearPendingTabClick(): void {
+    if (this.pendingTabClickTimer !== -1) {
+      clearTimeout(this.pendingTabClickTimer);
+      this.pendingTabClickTimer = -1;
+    }
+    this.pendingTabClickIndex = -1;
+  }
+
   private handleMainTabAnimationStart(from: number, to: number): void {
+    this.clearPendingTabClick();
     // Tabs 原生 TabBar 接管点击时不会经过自定义 Column.onClick，必须在此第 0ms 同步底栏高亮与图标动效。
     if (this.currentIndex !== to) {
       this.lastHomeTapMs = 0;
       this.currentIndex = to;
-      this.tabEffectTriggers = this.tabEffectTriggers.map((count: number, i: number): number =>
-        i === to ? count + 1 : count);
+      this.tabEffectTriggers[to] = this.tabEffectTriggers[to] + 1;
       if (to !== 0) {
         this.setHomeScrollHidden(false);
       }
@@ -444,18 +472,58 @@ struct Index {
     this.resetMainTabTransition();
   }
 
-  private tabSymbolEffect(slot: TabSlot): SymbolEffect {
-    if (slot.icon !== slot.iconFill) {
-      return motionStore.isOn(MotionEffect.FADE)
-        ? new ReplaceSymbolEffect(EffectScope.WHOLE, ReplaceEffectType.CROSS_FADE)
-        : new SymbolEffect();
+  private readonly tabBounceEffect: SymbolEffect = new BounceSymbolEffect(EffectScope.WHOLE, EffectDirection.UP);
+  private readonly tabScaleEffect: SymbolEffect = new ScaleSymbolEffect(EffectScope.WHOLE, EffectDirection.UP);
+  private readonly tabNoEffect: SymbolEffect = new SymbolEffect();
+
+  private handleMainTabBarClick(index: number): void {
+    // ArkUI barFloatingStyle 单次点击任意底栏项会在同帧先补发一次 index=0 再发真实目标，
+    // 合并 16ms 内的末次回调，避免切去他页或切回首页时误触首页重按回顶。
+    this.pendingTabClickIndex = index;
+    if (this.pendingTabClickTimer !== -1) {
+      clearTimeout(this.pendingTabClickTimer);
     }
+    this.pendingTabClickTimer = setTimeout((): void => {
+      const target: number = this.pendingTabClickIndex;
+      this.pendingTabClickTimer = -1;
+      this.pendingTabClickIndex = -1;
+      if (target >= 0) {
+        this.commitMainTabBarClick(target);
+      }
+    }, 16);
+  }
+
+  private commitMainTabBarClick(index: number): void {
+    if (index === this.currentIndex) {
+      if (index === 0) {
+        this.handleHomeRetap();
+      }
+      return;
+    }
+    const prev: number = this.currentIndex;
+    this.lastHomeTapMs = 0;
+    this.currentIndex = index;
+    this.tabEffectTriggers[index] = this.tabEffectTriggers[index] + 1;
+    if (index !== 0) {
+      this.setHomeScrollHidden(false);
+    }
+    if (materialManager.useArkUI && this.mainTabAnimationDuration() > 0 && (prev === 0 || index === 0)) {
+      const wasTransitioning: boolean = this.tabTransitioning;
+      this.tabTransitioning = true;
+      this.homeOverlayActiveInTransition = true;
+      if (!wasTransitioning) {
+        this.homeTabSlideOffsetX = index === 0 && this.homeViewportWidth > 0 ? -this.homeViewportWidth : 0;
+      }
+    }
+  }
+
+  private tabSymbolEffect(): SymbolEffect {
     if (!motionStore.isOn(MotionEffect.SCALE)) {
-      return new SymbolEffect();
+      return this.tabNoEffect;
     }
     return motionStore.isOn(MotionEffect.SPRING)
-      ? new BounceSymbolEffect(EffectScope.WHOLE, EffectDirection.UP)
-      : new ScaleSymbolEffect(EffectScope.WHOLE, EffectDirection.UP);
+      ? this.tabBounceEffect
+      : this.tabScaleEffect;
   }
 
   private statusBarHidden(): boolean {
@@ -542,6 +610,40 @@ struct Index {
     alphaAnimator.play();
   }
 
+  private syncSystemStatusBar(hidden: boolean, version: number): void {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    window.getLastWindow(context).then(async (win: window.Window): Promise<void> => {
+      if (version !== this.statusBarRequestVersion) {
+        return;
+      }
+      await win.setSpecificSystemBarEnabled('status', !hidden, motionStore.isOn(MotionEffect.MOVE));
+      if (!hidden) {
+        let contentColor: string;
+        try {
+          const color: number = context.resourceManager
+            .getColorSync($r('app.color.app_status_bar_content').id);
+          contentColor = `#${(color & 0xFFFFFF).toString(16).padStart(6, '0').toUpperCase()}`;
+        } catch (e) {
+          contentColor = themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B';
+        }
+        await win.setWindowSystemBarProperties({
+          statusBarColor: '#00000000',
+          statusBarContentColor: contentColor
+        });
+      }
+      if (version !== this.statusBarRequestVersion) {
+        const expectedHidden: boolean = this.homeNavVisible && this.statusBarHidden();
+        await win.setSpecificSystemBarEnabled('status', !expectedHidden, motionStore.isOn(MotionEffect.MOVE));
+      }
+    }).catch((e: Error) => {
+      hilog.warn(0x0, 'TiebaTop', 'status bar visibility failed: %{public}s', e.message);
+      if (version === this.statusBarRequestVersion) {
+        this.homeScrollHidden = false;
+      }
+    });
+  }
+
   /** 首页滚动共用一个方向信号，三处区域分别按设置决定是否隐藏。 */
   private setHomeScrollHidden(hidden: boolean): void {
     const target: boolean = hidden && this.currentIndex === 0 && this.homeNavVisible;
@@ -549,7 +651,7 @@ struct Index {
       return;
     }
     const version: number = ++this.statusBarRequestVersion;
-    animateTo({
+    this.getUIContext().animateTo({
       duration: motionDuration(target ? 300 : 440),
       curve: target || !motionStore.isOn(MotionEffect.MOVE) || !motionStore.isOn(MotionEffect.SPRING)
         ? Curve.EaseIn : curves.springMotion(0.38, 0.64)
@@ -568,37 +670,7 @@ struct Index {
         }
       }, motionDuration(120));
     }
-    const targetStatusHidden: boolean = target && homeNavigationHideStore.hideStatusBar;
-    const context: common.UIAbilityContext =
-      this.getUIContext().getHostContext() as common.UIAbilityContext;
-    window.getLastWindow(context).then(async (win: window.Window): Promise<void> => {
-      if (version !== this.statusBarRequestVersion) {
-        return;
-      }
-      await win.setSpecificSystemBarEnabled('status', !targetStatusHidden, motionStore.isOn(MotionEffect.MOVE));
-      if (!targetStatusHidden) {
-        let contentColor: string;
-        try {
-          const color: number = context.resourceManager
-            .getColorSync($r('app.color.app_status_bar_content').id);
-          contentColor = `#${(color & 0xFFFFFF).toString(16).padStart(6, '0').toUpperCase()}`;
-        } catch (e) {
-          contentColor = themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B';
-        }
-        await win.setWindowSystemBarProperties({
-          statusBarColor: '#00000000',
-          statusBarContentColor: contentColor
-        });
-      }
-      if (version !== this.statusBarRequestVersion) {
-        await win.setSpecificSystemBarEnabled('status', !this.statusBarHidden(), motionStore.isOn(MotionEffect.MOVE));
-      }
-    }).catch((e: Error) => {
-      hilog.warn(0x0, 'TiebaTop', 'status bar visibility failed: %{public}s', e.message);
-      if (version === this.statusBarRequestVersion) {
-        this.homeScrollHidden = false;
-      }
-    });
+    this.syncSystemStatusBar(target && homeNavigationHideStore.hideStatusBar, version);
   }
 
   build() {
@@ -641,6 +713,9 @@ struct Index {
       animationMode: motionStore.isOn(MotionEffect.MOVE)
         ? AnimationMode.CONTENT_FIRST_WITH_JUMP : AnimationMode.NO_ANIMATION,
       pages: (): void => { this.HomePages(); },
+      onTabBarClick: (index: number): void => {
+        this.handleMainTabBarClick(index);
+      },
       onAnimationStart: (index: number, targetIndex: number): void => {
         this.handleMainTabAnimationStart(index, targetIndex);
       },
@@ -651,7 +726,11 @@ struct Index {
         this.handleMainTabContentScroll(selectedIndex, index, position, mainAxisLength);
       },
       onChange: (index: number): void => {
-        this.currentIndex = index;
+        this.clearPendingTabClick();
+        if (this.currentIndex !== index) {
+          this.currentIndex = index;
+          this.tabEffectTriggers[index] = this.tabEffectTriggers[index] + 1;
+        }
         this.refreshMyProfile();
         if (index !== 0) { this.lastHomeTapMs = 0; this.setHomeScrollHidden(false); }
         if (!materialManager.useArkUI || this.mainTabAnimationDuration() === 0) {
@@ -686,8 +765,13 @@ struct Index {
     .navDestination(this.PageMap)
     .onNavBarStateChange((isVisible: boolean) => {
       this.homeNavVisible = isVisible;
+      // 进入子页时不展开已收起的底栏，避免推入转场瞬间弹出；仅恢复子页所需的系统状态栏。
       if (!isVisible) {
-        this.setHomeScrollHidden(false);
+        if (this.statusBarHidden()) {
+          this.syncSystemStatusBar(false, ++this.statusBarRequestVersion);
+        }
+      } else if (this.statusBarHidden()) {
+        this.syncSystemStatusBar(true, ++this.statusBarRequestVersion);
       }
     })
 
@@ -719,7 +803,10 @@ struct Index {
       { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' },
       { statusBarContentColor: this.viewerUrls.length > 0 || themeModeStore.isDark ? '#F2F3F4' : '#1B1B1B' }
     )
-    .mode(NavigationMode.Stack)
+    .mode(windowBreakpoint.breakpoint === WindowBreakpoint.LG ? NavigationMode.Split : NavigationMode.Stack)
+    .navBarWidth('42%')
+    .navBarWidthRange({ minWidth: 340, maxWidth: 480 })
+    .minContentWidth(360)
 
       if (this.homeTopNavStyle === HomeTopNavStyle.OFFICIAL_DUAL_ROW && this.viewerUrls.length === 0) {
         this.HomeDualRowOverlay()
@@ -893,7 +980,7 @@ struct Index {
     } else if (name === AppRoute.SCAN_PAGE) {
       ScanPage()
     } else if (name === AppRoute.COMPOSE_PAGE) {
-      ComposePage()
+      ComposePage({ routeParams: pageInfos !== null && pageInfos !== undefined ? pageInfos as ComposePageParams : undefined })
     } else if (name === AppRoute.VIDEO_FEED_PAGE) {
       VideoFeedPage()
     } else if (name === AppRoute.MY_LIST_PAGE) {
@@ -926,39 +1013,59 @@ struct Index {
   }
 
   @Builder
-  tabBuilder(label: string, index: number, slot: TabSlot) {
-
-    Column({ space: 2 * this.bottomBarScaleFactor() }) {
-      if (index === 2 && this.unread.counts.total() > 0) {
-        Badge({ count: this.unread.counts.total(), maxCount: 99,
-          position: { x: 17 * this.bottomBarScaleFactor(), y: -4 * this.bottomBarScaleFactor() },
-          style: { badgeSize: 16 * this.bottomBarScaleFactor(), fontSize: 10 * this.bottomBarScaleFactor(),
-            fontWeight: FontWeight.Medium,
-            badgeColor: AppTheme.NOTIFY_BADGE_BACKGROUND, color: AppTheme.NOTIFY_BADGE_TEXT } }) {
-          this.TabIcon(index, slot)
-        }.width(24 * this.bottomBarScaleFactor()).height(24 * this.bottomBarScaleFactor())
-        .accessibilityLevel('no')
-      } else {
+  TabSlotContent(label: string, index: number, slot: TabSlot) {
+    if (index === 2 && (this.unread.counts.total() + (this.chatList ? this.chatList.unreadTotal : 0)) > 0) {
+      Badge({ count: this.unread.counts.total() + (this.chatList ? this.chatList.unreadTotal : 0), maxCount: 99,
+        position: { x: 17 * this.bottomBarScaleFactor(), y: -4 * this.bottomBarScaleFactor() },
+        style: { badgeSize: 16 * this.bottomBarScaleFactor(), fontSize: 10 * this.bottomBarScaleFactor(),
+          fontWeight: FontWeight.Medium,
+          badgeColor: AppTheme.NOTIFY_BADGE_BACKGROUND, color: AppTheme.NOTIFY_BADGE_TEXT } }) {
         this.TabIcon(index, slot)
-      }
-      Text(label)
-        .fontSize(10 * this.bottomBarScaleFactor())
-        .fontWeight(visualThemeStore.isPaper ? (index === this.currentIndex ? FontWeight.Bold : FontWeight.Medium) : FontWeight.Normal)
-        .maxFontScale(1)
-        .fontColor(this.slotColor(index))
+      }.width(24 * this.bottomBarScaleFactor()).height(24 * this.bottomBarScaleFactor())
+      .accessibilityLevel('no')
+    } else {
+      this.TabIcon(index, slot)
     }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .id(`main-tab-${index}`)
-    .accessibilityGroup(true)
-    .accessibilityText(this.tabAccessibility(label, index))
-    .accessibilitySelected(this.currentIndex === index)
-    .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
-    .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
-    .onClick(() => {
-      this.switchTo(index);
-    })
+    Text(label)
+      .fontSize(10 * this.bottomBarScaleFactor())
+      .fontWeight(visualThemeStore.isPaper ? (index === this.currentIndex ? FontWeight.Bold : FontWeight.Medium) : FontWeight.Normal)
+      .maxFontScale(1)
+      .fontColor(this.slotColor(index))
+  }
+
+  @Builder
+  tabBuilder(label: string, index: number, slot: TabSlot) {
+    if (materialManager.useArkUI) {
+      // ArkUI 原生 TabBar 负责切页并触发 onTabBarClick；子容器不挂 onClick，避免手势竞争导致延迟或卡页。
+      Column({ space: 2 * this.bottomBarScaleFactor() }) {
+        this.TabSlotContent(label, index, slot)
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .id(`main-tab-${index}`)
+      .accessibilityGroup(true)
+      .accessibilityText(this.tabAccessibility(label, index))
+      .accessibilitySelected(this.currentIndex === index)
+      .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
+      .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
+    } else {
+      Column({ space: 2 * this.bottomBarScaleFactor() }) {
+        this.TabSlotContent(label, index, slot)
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .id(`main-tab-${index}`)
+      .accessibilityGroup(true)
+      .accessibilityText(this.tabAccessibility(label, index))
+      .accessibilitySelected(this.currentIndex === index)
+      .visibility(this.bottomBarCollapsed ? Visibility.Hidden : Visibility.Visible)
+      .hitTestBehavior(this.bottomNavigationHidden() ? HitTestMode.None : HitTestMode.Default)
+      .onClick(() => {
+        this.switchTo(index);
+      })
+    }
   }
 
   @Builder
@@ -966,14 +1073,17 @@ struct Index {
     SymbolGlyph(index === this.currentIndex ? slot.iconFill : slot.icon)
       .fontSize(24 * this.bottomBarScaleFactor()).maxFontScale(1)
       .fontColor([this.slotColor(index)])
-      .symbolEffect(this.tabSymbolEffect(slot), this.tabEffectTriggers[index])
+      .symbolEffect(this.tabSymbolEffect(), this.tabEffectTriggers[index])
       .accessibilityLevel('no')
   }
 
   private tabAccessibility(label: string, index: number): string {
     if (index !== 2) { return label; }
-    if (!this.unread.loaded) { return `${label}，未读数${this.unread.error.length > 0 ? '读取失败' : '尚未读取'}`; }
-    const count: number = this.unread.counts.total();
+    const chatUnread: number = this.chatList ? this.chatList.unreadTotal : 0;
+    if (!this.unread.loaded && chatUnread === 0) {
+      return `${label}，未读数${this.unread.error.length > 0 ? '读取失败' : '尚未读取'}`;
+    }
+    const count: number = this.unread.counts.total() + chatUnread;
     return `${label}，${count > 0 ? `${count}条未读` : '没有未读消息'}` +
       (this.unread.error.length > 0 ? '，上次结果，刷新失败' : '');
   }

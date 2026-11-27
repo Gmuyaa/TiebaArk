@@ -16,7 +16,7 @@ export struct LoginEmptyView {
   @Param subtitle: string = '';
   /** 点"去登录"时的行为；不传则退化为 toast 提示 */
   @Param onLogin: () => void = () => {
-    promptAction.showToast({ message: '登录功能暂未开放', duration: 2000 });
+    this.getUIContext().getPromptAction().showToast({ message: '登录功能暂未开放', duration: 2000 });
   };
 
   build() {

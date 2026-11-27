@@ -85,7 +85,7 @@ export struct SubReplyPreviewBox {
               canDelete: this.canDeleteSub(sub), deletePending: this.deletePending,
               onDelete: (): void => { this.onDeleteSub(sub); },
               content: (): void => { this.PreviewContent(sub); } })
-          }, (sub: SubPostItem) => `${sub.pid}`)
+          }, (sub: SubPostItem) => `${sub.pid}:${sub.isThreadAuthor ? 1 : 0}:${sub.replyToIsThreadAuthor ? 1 : 0}:${sub.author.displayName}:${sub.replyToName}`)
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)

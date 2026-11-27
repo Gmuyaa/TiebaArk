@@ -5,9 +5,14 @@ import { SettingsEntryRow } from './SettingsComponents';
 import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
-import { AuthSnapshot } from '../auth/AuthModel';
+import { AuthSnapshot, LoginResult } from '../auth/AuthModel';
 import { AppTheme } from '../theme/Theme';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
+import {
+  AccountSwitcherDialogContent, AccountSwitcherEntry, accountSwitcherDialogOptions,
+  accountSwitcherListMaxHeight
+} from './AccountSwitcherDialog';
 import { AvatarComponent } from './AvatarComponent';
 import { GlassCircleButton } from './GlassCircleButton';
 import { ThemeModeIcon } from './ThemeModeIcon';
@@ -140,13 +145,118 @@ export struct ProfileView {
     ThemeModeIcon({ mode: themeModeStore.pref, isDark: themeModeStore.isDark, iconSize: HEADER_ICON })
   }
 
+  @Local switchingAccountUid: number = 0;
+  private accountDialogId: number = 0;
+  private accountDialogSeq: number = 0;
+  private accountDialogOpening: boolean = false;
+
+  aboutToDisappear(): void {
+    this.closeAccountSwitcher();
+  }
+
+  private hostContext(): common.UIAbilityContext {
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
+  }
+
+  private showToast(message: string): void {
+    try { this.getUIContext().getPromptAction().showToast({ message }); } catch (_) {}
+  }
+
   private cycleThemeMode(): void {
-    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    themeModeStore.setMode(nextThemeModePref(themeModeStore.pref), context);
+    themeModeStore.setMode(nextThemeModePref(themeModeStore.pref), this.hostContext());
+  }
+
+  private openAccountSwitcher(): void {
+    authSession.refreshSavedAccounts(this.hostContext());
+    if (this.accountDialogOpening || this.accountDialogId !== 0) {
+      return;
+    }
+    this.accountDialogOpening = true;
+    const seq: number = ++this.accountDialogSeq;
+    this.getUIContext().getPromptAction().openCustomDialog(
+      accountSwitcherDialogOptions(
+        (): void => { this.AccountSwitcherDialog(); },
+        windowBreakpoint.widthVp,
+        (): boolean => this.switchingAccountUid === 0 && !authSession.switchingAccount,
+        (): void => {
+          if (this.accountDialogSeq === seq) {
+            this.accountDialogId = 0;
+            this.accountDialogOpening = false;
+          }
+        }
+      )
+    ).then((id: number): void => {
+      if (this.accountDialogSeq !== seq) {
+        try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) {}
+        return;
+      }
+      this.accountDialogId = id;
+      this.accountDialogOpening = false;
+    }).catch((): void => {
+      if (this.accountDialogSeq === seq) {
+        this.accountDialogId = 0;
+        this.accountDialogOpening = false;
+      }
+    });
+  }
+
+  private closeAccountSwitcher(): void {
+    this.accountDialogSeq++;
+    this.accountDialogOpening = false;
+    const id: number = this.accountDialogId;
+    this.accountDialogId = 0;
+    if (id !== 0) {
+      try {
+        this.getUIContext().getPromptAction().closeCustomDialog(id);
+      } catch (_) {}
+    }
+  }
+
+  private async handleSwitchAccount(entry: AccountSwitcherEntry): Promise<void> {
+    if (this.switchingAccountUid > 0 || authSession.switchingAccount || entry.isCurrent || entry.uid <= 0) {
+      return;
+    }
+    this.switchingAccountUid = entry.uid;
+    try {
+      const result: LoginResult = await authSession.switchAccount(this.hostContext(), entry.uid);
+      if (!result.ok) {
+        this.showToast(result.message);
+        return;
+      }
+      this.closeAccountSwitcher();
+      this.showToast(`已切换到 ${entry.displayName}`);
+    } finally {
+      this.switchingAccountUid = 0;
+    }
+  }
+
+  private handleAddAccount(): void {
+    this.closeAccountSwitcher();
+    try {
+      void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
+    } catch (_) {}
+  }
+
+  @Builder
+  AccountSwitcherDialog() {
+    AccountSwitcherDialogContent({
+      maxListHeight: accountSwitcherListMaxHeight(windowBreakpoint.heightVp),
+      switchingUid: this.switchingAccountUid,
+      onSelectAccount: (entry: AccountSwitcherEntry): void => { void this.handleSwitchAccount(entry); },
+      onAddAccount: (): void => { this.handleAddAccount(); }
+    })
   }
 
   @Builder
   HeaderActions() {
+          GlassCircleButton({
+            symbol: $r('sys.symbol.person_2'),
+            diameter: HEADER_BUTTON,
+            iconSize: HEADER_ICON,
+            onTap: (): void => { this.openAccountSwitcher(); }
+          })
+            .accessibilityText('切换账号')
+
           GlassCircleButton({
             diameter: HEADER_BUTTON,
             iconSize: HEADER_ICON,
@@ -160,7 +270,7 @@ export struct ProfileView {
             symbol: $r('sys.symbol.gearshape'),
             diameter: HEADER_BUTTON,
             iconSize: HEADER_ICON,
-            onTap: (): void => { router.pushUrl({ url: 'pages/Settings' }); }
+            onTap: (): void => { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Settings' }); }
           })
             .accessibilityText('设置')
   }
@@ -208,7 +318,7 @@ export struct ProfileView {
               .borderRadius(AppTheme.PILL_RADIUS)
               .backgroundColor(AppTheme.ACCENT)
               .fontColor(AppTheme.ON_ACCENT)
-              .onClick(() => { router.pushUrl({ url: 'pages/Login' }); })
+              .onClick(() => { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); })
           } else {
             SymbolGlyph($r('sys.symbol.chevron_right'))
               .fontSize(SettingsLayout.CHEVRON_SIZE).maxFontScale(1)
@@ -261,7 +371,7 @@ export struct ProfileView {
         .margin({ top: SettingsLayout.ROW_GAP })
 
         SettingsEntryRow({ label: '设置', icon: $r('sys.symbol.gearshape'), showDivider: false,
-          onTap: (): void => { router.pushUrl({ url: 'pages/Settings' }); } })
+          onTap: (): void => { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Settings' }); } })
           .backgroundColor(AppTheme.CARD).borderRadius(SettingsLayout.CARD_RADIUS)
           .clip(true)
           .margin({ top: SettingsLayout.ROW_GAP })

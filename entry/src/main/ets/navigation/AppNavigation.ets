@@ -1,7 +1,9 @@
 /** 共享导航入口。业务组件通过 NavigationService 使用根 NavPathStack。 */
 
+import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { DirectoryKind } from '../model/PageDirectory';
+import { ForumTab } from '../model/ThreadList';
 
 /** 路由名注册表。只登记真实有 Shared 消费者的页面；测试页继续用 debug 常量 */
 export class AppRoute {
@@ -113,11 +115,26 @@ export interface ForumMemberPageParams {
   title?: string;
 }
 
+export interface ComposePageParams {
+  forumName?: string;
+  forumId?: number;
+  forumAvatar?: string;
+  tabs?: ForumTab[];
+}
+
 const TAG: string = 'NavigationService';
 
 export class NavigationService {
   /** Root 共享导航栈。由 Index 在 aboutToAppear 注入一次 */
   private static stack: NavPathStack | null = null;
+  private static hostContext: common.UIAbilityContext | null = null;
+  private static forumPrefetcher: ((context: common.UIAbilityContext, forumName: string) => void) | null = null;
+
+  static setForumPrefetcher(context: common.UIAbilityContext | null,
+    handler: ((context: common.UIAbilityContext, forumName: string) => void) | null): void {
+    NavigationService.hostContext = context;
+    NavigationService.forumPrefetcher = handler;
+  }
 
   static openUser(params: UserPageParams): void {
     if (NavigationService.stack === null) {
@@ -152,6 +169,10 @@ export class NavigationService {
     if (stack === null) {
       hilog.error(0x0, TAG, 'openForum failed: stack not set');
       return;
+    }
+    const name: string = params.forumName !== undefined ? params.forumName.trim() : '';
+    if (name.length > 0 && NavigationService.hostContext !== null && NavigationService.forumPrefetcher !== null) {
+      NavigationService.forumPrefetcher(NavigationService.hostContext, name);
     }
     stack.pushPathByName(AppRoute.FORUM_PAGE, params);
   }
@@ -199,12 +220,12 @@ export class NavigationService {
     stack.pushPathByName(AppRoute.VIDEO_FEED_PAGE, null);
   }
 
-  static openCompose(): void {
+  static openCompose(params?: ComposePageParams): void {
     const stack: NavPathStack | null = NavigationService.stack;
     if (stack === null) {
       hilog.error(0x0, TAG, 'openCompose failed: stack not set'); return;
     }
-    stack.pushPathByName(AppRoute.COMPOSE_PAGE, null);
+    stack.pushPathByName(AppRoute.COMPOSE_PAGE, params ?? null);
   }
 
   static openMyList(params: MyListParams): void {

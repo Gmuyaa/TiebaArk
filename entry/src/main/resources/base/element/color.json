@@ -696,6 +696,8 @@
     { "name": "follow_level_signed_bg", "value": "#64BB5C" },
     { "name": "follow_level_unsigned_bg", "value": "#8E939E" },
     { "name": "paper_follow_level_signed_bg", "value": "#6AA566" },
-    { "name": "paper_follow_level_unsigned_bg", "value": "#948B7E" }
+    { "name": "paper_follow_level_unsigned_bg", "value": "#948B7E" },
+    { "name": "detail_float_bar_fg", "value": "#66686B" },
+    { "name": "paper_detail_float_bar_fg", "value": "#625747" }
   ]
 }

@@ -11,13 +11,15 @@
 
 import {
   RawAgree, RawContentItem, RawDetailForum, RawDetailPage, RawInlineSubPost, RawInlineSubPostHolder,
-  RawPost, RawSubPost, RawSubPostPage, RawSubPostPageResponse, RawThreadHead, RawThreadPage, RawUser
+  RawPollInfo, RawPollOption, RawPost, RawSubPost, RawSubPostPage, RawSubPostPageResponse, RawThreadHead, RawThreadPage, RawUser
 } from './RawThreadPage';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { formatTimeText } from './TimeText';
 import { VoiceClip, parseVoiceClip, voiceClipLabel } from './VoiceClip';
 import { VideoClip, parseVideoClip } from './VideoClip';
 import { BodyImageSource, ViewerImage, viewerImagesForBody } from './ImageLoadPolicy';
+import { PREVIEW_LONG_RATIO } from './HomeFeedPresentation';
+import { ProtoReader } from '../proto/ProtoWire';
 
 const FLOW_TAG: string = 'AgreeFlow';
 const FLOW_DOMAIN: number = 0x0000;
@@ -600,6 +602,7 @@ export class ContentImage implements BodyImageSource {
   /** 原图字节数 */
   originBytes: number = 0;
   isGif: boolean = false;
+  isLong: boolean = false;
   /** 原始宽高；0 表示服务端没给，由 UI 用默认比例兜底 */
   width: number = 0;
   height: number = 0;
@@ -782,6 +785,7 @@ export function collectViewerImages(pieces: ContentPiece[]): ViewerImage[] {
     img.bigImageUrl = piece.bigImageUrl;
     img.originImageUrl = piece.originImageUrl;
     img.originBytes = piece.originBytes;
+    img.isLong = piece.width > 0 && piece.height > 0 && piece.width / piece.height < PREVIEW_LONG_RATIO;
     sources.push(img);
   }
   return viewerImagesForBody(sources);
@@ -1188,10 +1192,181 @@ export class SubPostItem {
   isAgreed: boolean = false;
 }
 
+export class ThreadPollOption {
+  id: number = 0;
+  num: number = 0;
+  text: string = '';
+  image: string = '';
+  isPolled: boolean = false;
+}
+
+export class ThreadPollInfo {
+  title: string = '';
+  isMulti: boolean = false;
+  isPolled: boolean = false;
+  totalNum: number = 0;
+  totalPoll: number = 0;
+  endTimeSec: number = 0;
+  lastTimeSec: number = 0;
+  status: number = 0;
+  tips: string = '';
+  polledIds: number[] = [];
+  options: ThreadPollOption[] = [];
+
+  isEnded(nowSec: number = Math.floor(Date.now() / 1000)): boolean {
+    if (this.status === 2 || this.lastTimeSec === -1) { return true; }
+    return this.endTimeSec > 0 && this.endTimeSec <= nowSec;
+  }
+}
+
+function pollInt(value: number | string | undefined): number {
+  if (typeof value === 'number') { return Number.isFinite(value) ? Math.trunc(value) : 0; }
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed: number = Number(value.trim());
+    return Number.isSafeInteger(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+export function parsePollInfo(raw: RawPollInfo | undefined): ThreadPollInfo | undefined {
+  if (raw === undefined || raw.options === undefined || raw.options.length === 0) {
+    return undefined;
+  }
+  const info: ThreadPollInfo = new ThreadPollInfo();
+  info.title = toStr(raw.title).trim();
+  info.isMulti = pollInt(raw.is_multi) === 1;
+  info.isPolled = pollInt(raw.is_polled) === 1;
+  info.totalNum = Math.max(0, pollInt(raw.total_num));
+  info.totalPoll = Math.max(0, pollInt(raw.total_poll));
+  info.endTimeSec = Math.max(0, pollInt(raw.end_time));
+  info.lastTimeSec = pollInt(raw.last_time);
+  info.status = pollInt(raw.status);
+  info.tips = toStr(raw.tips).trim();
+
+  const polledSet: Set<number> = new Set<number>();
+  const polledRaw: string = toStr(raw.polled_value).trim();
+  if (polledRaw.length > 0) {
+    const parts: string[] = polledRaw.split(',');
+    for (let i: number = 0; i < parts.length; i++) {
+      const id: number = pollInt(parts[i]);
+      if (id > 0) { polledSet.add(id); }
+    }
+  }
+  for (let i: number = 0; i < raw.options.length; i++) {
+    const src: RawPollOption = raw.options[i];
+    const id: number = pollInt(src.id);
+    if (id <= 0) { continue; }
+    const opt: ThreadPollOption = new ThreadPollOption();
+    opt.id = id;
+    opt.num = Math.max(0, pollInt(src.num));
+    opt.text = toStr(src.text).trim();
+    opt.image = toStr(src.image).trim();
+    opt.isPolled = pollInt(src.is_polled) === 1 || polledSet.has(id);
+    if (opt.isPolled) {
+      polledSet.add(id);
+      info.isPolled = true;
+    }
+    info.options.push(opt);
+  }
+  if (info.options.length === 0) { return undefined; }
+  polledSet.forEach((id: number): void => { info.polledIds.push(id); });
+  return info;
+}
+
+export function applyLocalPollVote(poll: ThreadPollInfo, optionIds: number[]): ThreadPollInfo {
+  const chosen: Set<number> = new Set<number>(optionIds);
+  const next: ThreadPollInfo = new ThreadPollInfo();
+  next.title = poll.title;
+  next.isMulti = poll.isMulti;
+  next.isPolled = true;
+  next.totalNum = poll.totalNum + 1;
+  next.totalPoll = poll.totalPoll + chosen.size;
+  next.endTimeSec = poll.endTimeSec;
+  next.lastTimeSec = poll.lastTimeSec;
+  next.status = poll.status;
+  next.tips = poll.tips;
+  next.polledIds = Array.from(chosen);
+  next.options = poll.options.map((opt: ThreadPollOption): ThreadPollOption => {
+    const copy: ThreadPollOption = new ThreadPollOption();
+    copy.id = opt.id;
+    copy.text = opt.text;
+    copy.image = opt.image;
+    copy.isPolled = opt.isPolled || chosen.has(opt.id);
+    copy.num = chosen.has(opt.id) ? opt.num + 1 : opt.num;
+    return copy;
+  });
+  return next;
+}
+
+export class PollVoteOutcome {
+  errorCode: number = -1;
+  errorMsg: string = '';
+
+  accepted(): boolean {
+    return this.errorCode === 0;
+  }
+}
+
+/** AddPollPostResIdl: tag 1 = DataRes{1:error_code, 2:error_msg}, tag 2 = Error{1:errorno, 2:errmsg, 3:usermsg}. */
+export function parsePollVoteBytes(bytes: Uint8Array): PollVoteOutcome {
+  const out: PollVoteOutcome = new PollVoteOutcome();
+  if (bytes.length === 0) { return out; }
+  let hasData: boolean = false;
+  let dataCode: number = 0;
+  let dataMsg: string = '';
+  let hasError: boolean = false;
+  let errCode: number = 0;
+  let errMsg: string = '';
+  let errUserMsg: string = '';
+  try {
+    const reader: ProtoReader = new ProtoReader(bytes);
+    while (reader.hasMore()) {
+      const field: number = reader.readTag();
+      if (field === 1 && reader.wireType === 2) {
+        hasData = true;
+        const dataView: ProtoReader = reader.readMessageView();
+        while (dataView.hasMore()) {
+          const df: number = dataView.readTag();
+          if (df === 1) { dataCode = dataView.readInt32(); }
+          else if (df === 2) { dataMsg = dataView.readString(); }
+          else { dataView.skipField(); }
+        }
+      } else if (field === 2 && reader.wireType === 2) {
+        hasError = true;
+        const errView: ProtoReader = reader.readMessageView();
+        while (errView.hasMore()) {
+          const ef: number = errView.readTag();
+          if (ef === 1) { errCode = errView.readInt32(); }
+          else if (ef === 2) { errMsg = errView.readString(); }
+          else if (ef === 3) { errUserMsg = errView.readString(); }
+          else { errView.skipField(); }
+        }
+      } else {
+        reader.skipField();
+      }
+    }
+  } catch (_) {
+    return out;
+  }
+  const topMsg: string = errUserMsg.length > 0 ? errUserMsg : errMsg;
+  if (hasError && errCode !== 0) {
+    out.errorCode = errCode;
+    out.errorMsg = topMsg;
+  } else if (hasData && dataCode !== 0) {
+    out.errorCode = dataCode;
+    out.errorMsg = dataMsg.length > 0 ? dataMsg : topMsg;
+  } else if (hasData || hasError) {
+    out.errorCode = 0;
+    out.errorMsg = dataMsg.length > 0 ? dataMsg : topMsg;
+  }
+  return out;
+}
+
 /** 一次详情请求的完整结果 */
 export class ThreadDetail {
   isHelp: boolean = false;
   video: VideoClip | undefined = undefined;
+  poll: ThreadPollInfo | undefined = undefined;
   tid: number = 0;
   title: string = '';
   replyCount: number = 0;
@@ -1263,6 +1438,7 @@ export class ThreadDetail {
     let threadAgree: RawAgree | undefined = undefined;
     if (thread !== undefined) {
       d.video = parseVideoClip(thread.video_info);
+      d.poll = parsePollInfo(thread.poll_info);
       d.title = toStr(thread.title);
       d.isHelp = thread.thread_type === 71 || thread.thread_type === '71';
       // `/c/f/pb/page` 的 thread.reply_num 包含 1 楼主帖，列表页 reply_num 不包含。
@@ -1323,6 +1499,13 @@ export class ThreadDetail {
       fallback = d.posts[0].author;
     }
     d.author = mergeAuthorFallback(d.author, fallback);
+
+    if (d.author.id > 0) {
+      const authorName: string = d.author.displayName !== '匿名用户' ? d.author.displayName : '';
+      for (let i = 0; i < d.posts.length; i++) {
+        markSubPostThreadAuthor(d.posts[i].inlineSubPosts, d.author.id, authorName);
+      }
+    }
 
     // 首楼标题为空时用主题标题补：首楼 title 与 thread.title 相同，
     // 但服务端若只给一个，界面也不该空着
@@ -1546,6 +1729,23 @@ export class SubPostThreadState {
  * 而不是"这条回复的作者是楼主"（后者看 `PostItem.author.id`）。
  * 纯函数，便于用固定输入断言。
  */
+export function markSubPostThreadAuthor(subPosts: SubPostItem[], threadAuthorId: number,
+  threadAuthorName: string): void {
+  if (threadAuthorId <= 0 && threadAuthorName.length === 0) {
+    return;
+  }
+  const matchName: string = threadAuthorName !== '匿名用户' ? threadAuthorName : '';
+  for (let i: number = 0; i < subPosts.length; i++) {
+    const s: SubPostItem = subPosts[i];
+    if (threadAuthorId > 0) {
+      s.isThreadAuthor = s.author.id === threadAuthorId;
+    }
+    if (matchName.length > 0 && s.replyToName.length > 0) {
+      s.replyToIsThreadAuthor = s.replyToName === matchName;
+    }
+  }
+}
+
 export function subPostsHaveThreadAuthor(subPosts: SubPostItem[]): boolean {
   for (let i = 0; i < subPosts.length; i++) {
     if (subPosts[i].isThreadAuthor) {
@@ -1737,4 +1937,23 @@ export function emojiTokenFromUrl(url: string): string {
 export function emojiCodeFromReplyToken(token: string): string {
   const index: number = REPLY_EMOTICON_TOKENS.indexOf(token);
   return index < 0 ? '' : `image_emoticon${REPLY_EMOTICON_CODES[index]}`;
+}
+
+const BIDI_CONTROL_RE: RegExp = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+/** 剥离 Unicode 双向控制符，避免未闭合的 RLO/LRE/RLM 污染同段混排的后续文本；保留 ZWJ/ZWNJ 以免拆散复合 emoji。 */
+export function stripBidiControls(text: string): string {
+  if (text.length === 0) {
+    return '';
+  }
+  return text.replace(BIDI_CONTROL_RE, '');
+}
+
+/** 剥离双向控制符并用 FSI/PDI 隔离片段方向，防止 RTL 昵称或控制符翻转整段对齐与语序。 */
+export function isolateInlineText(text: string): string {
+  const cleaned: string = stripBidiControls(text);
+  if (cleaned.length === 0) {
+    return '';
+  }
+  return `\u2068${cleaned}\u2069`;
 }

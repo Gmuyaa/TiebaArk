@@ -2,10 +2,32 @@
   "app": {
     "bundleName": "com.Gmuyaa.TiebaArk",
     "vendor": "example",
-    "versionCode": 2611125,
-    "versionName": "1.0.273",
+    "versionCode": 2611126,
+    "versionName": "1.0.274",
     "buildVersion": "1",
     "icon": "$media:layered_image",
+    "alternateIcons": [
+      {
+        "name": "icon_script_green",
+        "icon": "$media:layered_script_green"
+      },
+      {
+        "name": "icon_italic_green",
+        "icon": "$media:layered_italic_green"
+      },
+      {
+        "name": "icon_clean_green",
+        "icon": "$media:layered_clean_green"
+      },
+      {
+        "name": "icon_pine_white",
+        "icon": "$media:layered_pine_white"
+      },
+      {
+        "name": "icon_azure_white",
+        "icon": "$media:layered_azure_white"
+      }
+    ],
     "label": "$string:app_name",
     "configuration": "$profile:configuration"
   }

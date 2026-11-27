@@ -17,13 +17,16 @@ import { homeTopNavStore } from '../common/appearance/HomeTopNavStore';
 import { homeNavigationHideStore } from '../common/appearance/HomeNavigationHideStore';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
 import { fontScaleStore } from '../common/appearance/FontSizeScaleStore';
+import { appIconStore } from '../common/appearance/AppIconStore';
 import { imageLoadStore } from '../common/appearance/ImageLoadStore';
 import { imageLayoutStore } from '../common/appearance/ImageLayoutStore';
 import { voicePlayerStyleStore } from '../common/appearance/VoicePlayerStyleStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { superResolutionStore } from '../common/appearance/SuperResolutionStore';
+import { longImageMinimapStore } from '../common/appearance/LongImageMinimapStore';
 import { smartReachStore } from '../common/appearance/SmartReachStore';
 import { motionStore } from '../common/appearance/MotionStore';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
 import { threadBlockScope } from '../viewmodel/SessionOwner';
@@ -34,6 +37,7 @@ import { IMAGE_DISK_CACHE_BYTES } from '../model/CachePolicy';
 import { trimExportCache } from '../utils/ExportCachePolicy';
 import { flushForumAvatarCache } from '../utils/ForumAvatarPrefs';
 import { launchDisclaimerStore } from '../utils/LaunchDisclaimerStore';
+import { closeSharedHttpSession } from '../net/HttpClient';
 import { startPostConsentServices, stopPostConsentServices } from '../viewmodel/AppStartup';
 
 const DOMAIN = 0x0000;
@@ -57,6 +61,7 @@ export default class EntryAbility extends UIAbility {
     motionStore.startSystemTracking();
 
     fontScaleStore.load(this.context);
+    appIconStore.refresh().catch(() => {});
 
     imageLoadStore.load(this.context).catch(() => {});
     imageLayoutStore.load(this.context).catch(() => {});
@@ -64,6 +69,7 @@ export default class EntryAbility extends UIAbility {
     forumDefaultTabStore.load(this.context).catch(() => {});
 
     superResolutionStore.load(this.context).catch(() => {});
+    longImageMinimapStore.load(this.context).catch(() => {});
 
     if (launchDisclaimerStore.accepted) {
       startPostConsentServices(this.context);
@@ -95,6 +101,7 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     motionStore.stopSystemTracking();
     stopPostConsentServices();
+    closeSharedHttpSession();
     hilog.info(DOMAIN, 'TiebaArk', '%{public}s', 'Ability onDestroy');
   }
 
@@ -114,6 +121,7 @@ export default class EntryAbility extends UIAbility {
     });
 
     windowStage.getMainWindow().then((win: window.Window) => {
+      windowBreakpoint.attachWindow(win);
 
       win.setWindowLayoutFullScreen(true).catch((e: Error) => {
         hilog.warn(DOMAIN, 'TiebaArk', 'setWindowLayoutFullScreen failed: %{public}s', e.message);
@@ -129,6 +137,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    windowBreakpoint.detachWindow();
     visualThemeStore.setThemeRefresher(undefined);
     themeModeStore.setPaletteRefresher(undefined);
     // 系统栏回调持有 mainWindow：窗口销毁后必须撤销，否则主题变化会对着已销毁的 Window 调用

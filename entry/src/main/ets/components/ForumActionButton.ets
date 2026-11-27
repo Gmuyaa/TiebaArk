@@ -4,6 +4,7 @@ import { MaterialSlot } from '../common/material/MaterialConfig';
 import { materialManager } from '../common/material/MaterialManager';
 import { visualThemeStore } from '../common/appearance/VisualThemeStore';
 import { VisualTheme } from '../common/appearance/VisualTheme';
+import { themeModeStore } from '../common/appearance/ThemeModeStore';
 
 /** 关注/签到等按钮统一宽度：这类按钮常成对出现在同一行，等宽比贴合文字整齐。72 是「已签到」+ 图标能完整放下的
  *  最小宽度，更长的文案由单行省略兜底。不要再加大 —— 关注列表行内空间有限，超过 72 会把按钮挤出屏幕。 */
@@ -23,6 +24,8 @@ export struct ForumActionButton {
   /** 布局最小高度。默认 44（视觉 32 + 上下各 6 触控余量）；吧头身份行按几何约束传 32，
    *  触控则用 responseRegion 补回 44，避免牺牲可点区域。 */
   @Param minTouchHeight: number = 44;
+  /** 长列表滚动期间暂撤实时沉浸材质，避免同屏十余颗按钮每帧触发 TakeSnapshot 击穿 120Hz 预算；静止态保持完全透明不叠自绘。 */
+  @Param deferMaterial: boolean = false;
   @Event onTap: () => void = (): void => {};
 
   private foreground(): ResourceColor {
@@ -53,6 +56,13 @@ export struct ForumActionButton {
     }.width('100%').height('100%')
       .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
       .padding({ left: 8, right: 8 })
+      .borderRadius(ACTION_HEIGHT / 2)
+      .backgroundColor(this.deferMaterial
+        ? (themeModeStore.isDark ? '#18181A' : '#FCFCFD') : Color.Transparent)
+      .border(this.deferMaterial ? {
+        width: 0.7,
+        color: themeModeStore.isDark ? '#2BFFFFFF' : '#18000000'
+      } : { width: 0, color: Color.Transparent })
       .accessibilityGroup(true).accessibilityText(this.accessibilityLabel || this.label)
       .accessibilityDescription(this.busy ? '正在处理' : (this.disabled ? '不可操作' : ''))
   }
@@ -66,7 +76,7 @@ export struct ForumActionButton {
       }
       .width(ACTION_WIDTH).height(ACTION_HEIGHT).margin(0).padding(0)
       .backgroundColor(Color.Transparent)
-      .systemMaterial(materialManager.officialOf(MaterialSlot.FORUM_ACTION_BUTTON))
+      .systemMaterial(this.deferMaterial ? undefined : materialManager.officialOf(MaterialSlot.FORUM_ACTION_BUTTON))
       .accessibilityLevel('no')
       // 点击必须由按钮自己消费：统一按钮一律关掉点击穿透。
       .onClick((): void => { this.activate(); })

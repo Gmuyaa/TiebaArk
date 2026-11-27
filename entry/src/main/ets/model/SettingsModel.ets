@@ -64,7 +64,12 @@ export enum SettingsPane {
   IMAGE_QUALITY_MOBILE = 42,
   GIF_AUTOPLAY = 43,
   DISCLAIMER = 44,
-  VOICE_PLAYER_STYLE = 45
+  VOICE_PLAYER_STYLE = 45,
+  PRIVACY_FOLLOW_LIST = 46,
+  PRIVACY_LIKED_FORUMS = 47,
+  PRIVACY_REPLY_WHO = 48,
+  THIRD_PARTY_LIBS = 49,
+  APP_ICON = 50
 }
 
 /** 行的三种性质。渲染与点击分发都只看这个字段，不看 key。 */
@@ -126,6 +131,8 @@ export interface SettingsState {
   darkModeLabel: string;
 
   fontLabel: string;
+  /** 当前应用桌面图标名称（默认 / 备用图标中文名）。 */
+  appIconLabel?: string;
   /** 新进入吧页默认显示的分区 */
   forumDefaultTabLabel: string;
   /** 内容图片排布（新版或旧版），本机偏好。 */
@@ -139,6 +146,8 @@ export interface SettingsState {
   voicePlayerStyleLabel?: string;
 
   superResolution: boolean;
+  /** 全屏看图右侧长图定位条显隐（默认开）。 */
+  longImageMinimap?: boolean;
   /** 全应用统一智感握姿偏好，默认开。 */
   smartReach?: boolean;
   homeComposeSmartReach?: boolean;
@@ -152,6 +161,10 @@ export interface SettingsState {
   forumTabsStyle?: number;
   forumTabsStyleLabel?: string;
 
+  privacyFollowLabel?: string;
+  privacyLikeLabel?: string;
+  privacyReplyLabel?: string;
+
   cacheLabel: string;
 }
 
@@ -160,8 +173,8 @@ export interface SettingsAboutItem {
   value: string;
 }
 
-export const SETTINGS_APP_VERSION: string = '1.0.273';
-export const SETTINGS_VERSION_CODE: string = '2611125';
+export const SETTINGS_APP_VERSION: string = '1.0.274';
+export const SETTINGS_VERSION_CODE: string = '2611126';
 /** 目标平台（与 `build-profile.json5` 的 compatibleSdkVersion 对齐） */
 export const SETTINGS_TARGET_PLATFORM: string = 'HarmonyOS API 26';
 
@@ -230,8 +243,9 @@ export function buildSettingsGroups(state: SettingsState): SettingsGroup[] {
 export function buildSettingsCategoryEntries(pane: SettingsPane, state: SettingsState): SettingsEntry[] {
   switch (pane) {
     case SettingsPane.APPEARANCE:
-      // 基础外观四项由页面直接渲染；这里仅提供有独立内容的两个子页。
+      // 基础外观四项由页面直接渲染；这里提供有独立内容的子页入口。
       return [
+        paneEntry('app_icon', '应用图标', state.appIconLabel ?? '默认', SettingsPane.APP_ICON),
         paneEntry('navigation_layout', '导航布局', '', SettingsPane.NAVIGATION_LAYOUT),
         paneEntry('material_effects', '材质效果', '', SettingsPane.MATERIAL_EFFECTS)
       ];
@@ -248,7 +262,8 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
         paneEntry('voice_player_style', '语音样式', state.voicePlayerStyleLabel ?? '滑块条',
           SettingsPane.VOICE_PLAYER_STYLE),
         paneEntry('image_menu', '看图菜单显示方式', state.imageMenuLongPress ? '长按显示' : '常显胶囊', SettingsPane.IMAGE_MENU),
-        switchEntry('super_resolution', '显示超分按钮', state.superResolution)
+        switchEntry('super_resolution', '显示超分按钮', state.superResolution),
+        switchEntry('long_image_minimap', '显示长图定位条', state.longImageMinimap ?? true)
       ];
     case SettingsPane.MATERIAL_EFFECTS:
       return [
@@ -288,6 +303,9 @@ export function buildSettingsCategoryEntries(pane: SettingsPane, state: Settings
 
         paneEntry('block_manage', '黑名单', '', SettingsPane.BLOCK_MANAGE),
         paneEntry('hidden_threads', '隐藏的帖子', '', SettingsPane.HIDDEN_THREADS),
+        paneEntry('privacy_follow', '关注与粉丝列表', state.privacyFollowLabel ?? '', SettingsPane.PRIVACY_FOLLOW_LIST),
+        paneEntry('privacy_like', '关注的吧', state.privacyLikeLabel ?? '', SettingsPane.PRIVACY_LIKED_FORUMS),
+        paneEntry('privacy_reply', '谁可以评论我的贴子', state.privacyReplyLabel ?? '', SettingsPane.PRIVACY_REPLY_WHO),
         paneEntry('app_permissions', '系统权限', '', SettingsPane.APP_PERMISSIONS),
         paneEntry('data_use', '数据使用说明', '', SettingsPane.DATA_USE)
       ];
@@ -375,6 +393,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '关于贴吧Ark';
     case SettingsPane.DISCLAIMER:
       return '免责声明';
+    case SettingsPane.THIRD_PARTY_LIBS:
+      return '第三方库';
     case SettingsPane.ACCOUNT:
       return '账号与资料';
     case SettingsPane.APPEARANCE:
@@ -389,6 +409,8 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '导航布局';
     case SettingsPane.MATERIAL_EFFECTS:
       return '材质效果';
+    case SettingsPane.APP_ICON:
+      return '应用图标';
     case SettingsPane.HARMONY_FEATURES:
       return '鸿蒙特性设置';
     case SettingsPane.MOTION:
@@ -419,6 +441,12 @@ export function settingsPaneTitle(pane: SettingsPane): string {
       return '系统权限';
     case SettingsPane.PRIVACY_SETTINGS:
       return '屏蔽与隐私';
+    case SettingsPane.PRIVACY_FOLLOW_LIST:
+      return '关注与粉丝列表';
+    case SettingsPane.PRIVACY_LIKED_FORUMS:
+      return '关注的吧';
+    case SettingsPane.PRIVACY_REPLY_WHO:
+      return '谁可以评论我的贴子';
     case SettingsPane.DATA_USE:
       return '数据使用说明';
     case SettingsPane.VERSION:
@@ -436,6 +464,7 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
   switch (pane) {
     case SettingsPane.NAVIGATION_LAYOUT:
     case SettingsPane.MATERIAL_EFFECTS:
+    case SettingsPane.APP_ICON:
     case SettingsPane.DARK_MODE:
     case SettingsPane.FONT_SIZE:
     case SettingsPane.FORUM_LEVEL:
@@ -467,11 +496,15 @@ export function settingsParentPane(pane: SettingsPane): SettingsPane {
     case SettingsPane.FORBIDDEN_FORUMS:
     case SettingsPane.BLOCK_MANAGE:
     case SettingsPane.HIDDEN_THREADS:
+    case SettingsPane.PRIVACY_FOLLOW_LIST:
+    case SettingsPane.PRIVACY_LIKED_FORUMS:
+    case SettingsPane.PRIVACY_REPLY_WHO:
     case SettingsPane.APP_PERMISSIONS:
     case SettingsPane.DATA_USE:
       return SettingsPane.PRIVACY_SETTINGS;
     case SettingsPane.VERSION:
     case SettingsPane.DISCLAIMER:
+    case SettingsPane.THIRD_PARTY_LIBS:
       return SettingsPane.ABOUT;
     default:
       return SettingsPane.NONE;
@@ -514,6 +547,9 @@ export function settingsPanePresentation(pane: SettingsPane): SettingsPanePresen
     case SettingsPane.IMAGE_QUALITY_MOBILE:
     case SettingsPane.GIF_AUTOPLAY:
     case SettingsPane.VOICE_PLAYER_STYLE:
+    case SettingsPane.PRIVACY_FOLLOW_LIST:
+    case SettingsPane.PRIVACY_LIKED_FORUMS:
+    case SettingsPane.PRIVACY_REPLY_WHO:
       return SettingsPanePresentation.POPUP;
     case SettingsPane.ABOUT:
     case SettingsPane.NONE:

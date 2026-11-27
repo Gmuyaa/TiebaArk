@@ -24,6 +24,7 @@ import { OfficialSignResult, OfficialSignCapability } from '../model/OfficialSig
 import { DirectoryData } from '../model/PageDirectory';
 import { PersonalizedThread } from '../model/PersonalizedFeed';
 import { PrivacyMarks } from '../model/PrivacyMarks';
+import { AccountPrivacy } from '../model/AccountPrivacy';
 import { SearchPostPage } from '../model/SearchPost';
 import { SignStats } from '../model/SignStats';
 import { TailList } from '../model/Tails';
@@ -123,6 +124,9 @@ export class AgreeResponse extends ApiResult {
 export class StoreOpResponse extends ApiResult {
 }
 
+export class PollVoteResponse extends ApiResult {
+}
+
 export class MemeEmojiResponse extends ApiResult {
   data: MemeEmojiData = new MemeEmojiData();
 }
@@ -179,6 +183,10 @@ export class MessageSettingsResponse extends ApiResult {
 
 export class PrivacyMarksResponse extends ApiResult {
   data: PrivacyMarks = new PrivacyMarks();
+}
+
+export class AccountPrivacyResponse extends ApiResult {
+  data: AccountPrivacy = new AccountPrivacy();
 }
 
 export class AtCandidatesResponse extends ApiResult {

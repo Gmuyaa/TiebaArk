@@ -70,6 +70,8 @@ export interface RawFrsTab {
   tab_type?: number;
   net_tab_type?: number;
   is_general_tab?: number | string;
+  is_no_show_in_publisher?: number | string;
+  no_can_post?: number | string;
   sort_menu?: RawFrsMenu[];
   partition_menu?: RawFrsMenu[];
   tab_url?: string;
@@ -119,6 +121,8 @@ export interface RawThread {
   /** 新版帖子标识，字符串形式 */
   nid?: string;
   title?: string;
+  tab_id?: number | string;
+  tab_name?: string;
   author_id?: number;
   /** 真实回帖数（与 `comment_num` 相反） */
   reply_num?: number;
@@ -316,6 +320,8 @@ export interface RawFeedBizItem {
 /** business_info_map 为卡片业务信息的对象形态，forum_avatar 为完整吧头像 URL；数组形态使用 business_info 键值对。 */
 export interface RawFeedBizMap {
   thread_type?: string;
+  tab_id?: string;
+  tab_name?: string;
   forum_avatar?: string;
   forum_name?: string;
   create_time?: string;

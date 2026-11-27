@@ -37,7 +37,7 @@ export struct ForumFollowButton {
     void ensureForumIdentity(this.context(), this.targetId, name);
   }
   private async activate(): Promise<void> {
-    if (!authSession.isLoggedIn()) { router.pushUrl({ url: 'pages/Login' }); return; }
+    if (!authSession.isLoggedIn()) { void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' }); return; }
     if (this.busy()) { return; }
     if (this.identity.known() && this.identity.follows()) {
       const confirm = await this.getUIContext().getPromptAction().showDialog({

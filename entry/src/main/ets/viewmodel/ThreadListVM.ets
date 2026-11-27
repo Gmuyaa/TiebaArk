@@ -1,4 +1,4 @@
-import { ForumCacheGuard, publishForumRead } from './ForumReadCache';
+import { cachedForumTabs, cachedFreshThreadList, ForumCacheGuard, publishForumRead } from './ForumReadCache';
 /**
  * 帖子列表的状态与行为。`@Trace` 对数组只跟踪**整体替换**，不跟踪元素增删——本类每次都赋新数组，
  * 不做 `push`。
@@ -14,7 +14,7 @@ import { getForumHeadline, putForumHeadline } from '../model/ForumHeadline';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { applyForumRead, clearFirstPageRead, markFirstPageRead } from './ForumStateStore';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
-import { preferredForumTabId } from '../model/ForumDefaultTab';
+import { knownDefaultTabHint, preferredForumTabId } from '../model/ForumDefaultTab';
 
 /** 只是请求意图：服务端有自己的 page_size，真实条数以响应的 `page.pageSize` 为准。 */
 const REQUEST_PAGE_SIZE: number = 30;
@@ -66,7 +66,8 @@ export class ThreadListVM {
   isLatestTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isLatest); }
   isVideoTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isVideo); }
   isHelpTab(): boolean { return this.tabs.some((tab: ForumTab): boolean => tab.id === this.selectedTabId && tab.isHelp); }
-  private fetchCategory(device: TiebaDevice, name: string, page: number, tabId: number): Promise<ThreadListResponse> {
+  private fetchCategory(device: TiebaDevice, name: string, page: number, tabId: number,
+    allowTabFallback: boolean = false): Promise<ThreadListResponse> {
     const tab: ForumTab | undefined = this.tabs.find((value: ForumTab): boolean => value.id === tabId);
     if (tab?.isVideo && this.forum.id > 0 && this.forum.name.toLowerCase() === name.toLowerCase()) {
       return this.api.fetchForumVideos(device, authSession.session(), this.forum, tab, page, this.sortForTab(tabId));
@@ -76,7 +77,7 @@ export class ThreadListVM {
         this.sortForTab(tabId), tab.isHelp ? this.helpPartition : 0);
     }
     return this.api.fetchThreadList(device, authSession.session(), name, page, REQUEST_PAGE_SIZE, tabId,
-      tab?.supportsPostOrder ? this.sortForTab(tabId) : -1);
+      tab?.supportsPostOrder ? this.sortForTab(tabId) : -1, allowTabFallback);
   }
   async changeSort(context: common.UIAbilityContext, sort: number): Promise<boolean> {
     if (!this.hasPostOrder() || this.loading || this.isLoadingMore || this.switchingTab ||
@@ -123,31 +124,75 @@ export class ThreadListVM {
   private tabVersion: number = 0;
   /** 切换分类使旧分页、旧切换回包及其 finally 一起失效。 */
   private contentVersion: number = 0;
+  /** 首包到达后延迟启动相邻分类预读，避免与首屏卡片布局和图片解码争抢资源。 */
+  prefetchDelayMs: number = 400;
+  private prefetchTimer: number = -1;
 
   private ownerKey(): string { return `${authSession.sessionKey()}:${this.forumName}`; }
 
+  /** 首包到达前用本地已知资料预填吧头展示字段，不置 loadedOnce。 */
+  seedHeader(name: string, forumId: number, avatar: string, heroColor: string, headline: string,
+    tabs?: ForumTab[]): void {
+    if (this.loadedOnce) { return; }
+    const trimmed: string = name.trim();
+    if (trimmed.length === 0) { return; }
+    if (this.forumName.length === 0) { this.forumName = trimmed; }
+    const nextForum: ForumBrief = new ForumBrief();
+    nextForum.id = this.forum.id > 0 ? this.forum.id : forumId;
+    nextForum.name = this.forum.name.length > 0 ? this.forum.name : trimmed;
+    nextForum.avatar = this.forum.avatar.length > 0 ? this.forum.avatar : avatar;
+    nextForum.heroColor = this.forum.heroColor.length > 0 ? this.forum.heroColor : heroColor;
+    nextForum.heroImage = this.forum.heroImage;
+    nextForum.memberCount = this.forum.memberCount;
+    nextForum.threadCount = this.forum.threadCount;
+    nextForum.postCount = this.forum.postCount;
+    nextForum.followed = this.forum.followed;
+    nextForum.category = this.forum.category;
+    nextForum.slogan = this.forum.slogan;
+    this.forum = nextForum;
+    if (this.heroHeadline.length === 0 && headline.length > 0) {
+      this.heroHeadline = headline;
+      this.heroHeadlineSettled = true;
+    }
+    if (this.tabs.length === 0 && tabs !== undefined && tabs.length > 0) {
+      this.tabs = tabs.slice();
+    }
+  }
+
+  cancelPrefetch(): void {
+    if (this.prefetchTimer >= 0) {
+      clearTimeout(this.prefetchTimer);
+      this.prefetchTimer = -1;
+    }
+  }
+
   hasTabSnapshot(tabId: number): boolean {
+    void this.tabSnapshotRevision;
     return this.ownerKey() === this.tabOwner && this.tabSnapshots.has(tabId);
   }
 
   threadsForTab(tabId: number): ThreadBrief[] {
+    void this.tabSnapshotRevision;
     if (tabId <= 0 || tabId === this.selectedTabId) { return this.threads; }
     const snapshot: ThreadListTabSnapshot | undefined = this.tabSnapshots.get(tabId);
     return snapshot !== undefined ? snapshot.threads : [];
   }
 
   pageForTab(tabId: number): PageInfo {
+    void this.tabSnapshotRevision;
     if (tabId <= 0 || tabId === this.selectedTabId) { return this.page; }
     const snapshot: ThreadListTabSnapshot | undefined = this.tabSnapshots.get(tabId);
     return snapshot !== undefined ? snapshot.page : new PageInfo();
   }
 
   isTabCached(tabId: number): boolean {
+    void this.tabSnapshotRevision;
     if (tabId <= 0 || tabId === this.selectedTabId) { return this.loadedOnce; }
     return this.hasTabSnapshot(tabId);
   }
 
   isTabReading(tabId: number): boolean {
+    void this.tabSnapshotRevision;
     if (tabId <= 0 || tabId === this.selectedTabId) { return this.loading && !this.loadedOnce; }
     return this.tabReads.has(tabId) || (this.switchingTab && this.pendingTabId === tabId);
   }
@@ -204,12 +249,31 @@ export class ThreadListVM {
     void Promise.all([warm(), warm()]).finally(() => { if (this.warmingOwner === warmKey) { this.warmingOwner = ''; } });
   }
 
+  private schedulePrefetchAdjacent(context: common.UIAbilityContext): void {
+    this.cancelPrefetch();
+    if (this.prefetchDelayMs <= 0) {
+      this.prefetchAdjacent(context);
+      return;
+    }
+    const owner: string = this.ownerKey();
+    const version: number = this.tabVersion;
+    this.prefetchTimer = setTimeout((): void => {
+      this.prefetchTimer = -1;
+      if (owner === this.ownerKey() && owner === this.tabOwner && version === this.tabVersion) {
+        this.prefetchAdjacent(context);
+      }
+    }, this.prefetchDelayMs) as number;
+  }
+
   /** 拉取第一页。失败时保留 errorText 供界面展示，不抛异常。 */
   async refresh(context: common.UIAbilityContext, forumName: string, currentCategoryOnly: boolean = false): Promise<void> {
     if (this.loading || this.isLoadingMore || this.switchingTab) {
       return;
     }
+    const startedAt: number = Date.now();
+    this.cancelPrefetch();
     const name: string = forumName.trim();
+    const wasLoaded: boolean = this.loadedOnce;
     this.forumName = name;
     const owner: string = this.ownerKey();
     const selected: number = this.selectedTabId;
@@ -232,20 +296,64 @@ export class ThreadListVM {
     try {
       // 首次打开吧页先读本机偏好，避免启动时默认值抢在持久化值前发请求。
       if (!currentCategoryOnly) { await forumDefaultTabStore.load(context); }
+      if (owner !== this.ownerKey()) { return; }
+      const prefMs: number = Date.now() - startedAt;
+
+      if (!currentCategoryOnly && !wasLoaded) {
+        const freshCached: ThreadListResponse | undefined = cachedFreshThreadList(name);
+        if (freshCached !== undefined) {
+          const preferredCached: number = preferredForumTabId(freshCached.data.tabs, forumDefaultTabStore.value);
+          if (preferredCached === 0 || preferredCached === freshCached.data.selectedTabId) {
+            void this.loadHeroHeadline(context, name);
+            applyForumRead(freshCached);
+            this.forum = freshCached.data.forum;
+            this.page = freshCached.data.page;
+            this.tabs = freshCached.data.tabs;
+            this.selectedTabId = freshCached.data.selectedTabId;
+            this.threads = mergeThreadPages([], freshCached.data.threads);
+            this.tagSourceForum(this.threads, name, this.forum.id);
+            if (this.selectedTabId > 0) { this.saveTabSnapshot(); }
+            this.loadedOnce = true;
+            this.schedulePrefetchAdjacent(context);
+            hilog.info(0x0000, 'ForumPerf',
+              'forum=%{public}s cacheHit=true rttCount=0 prefMs=%{public}d totalMs=%{public}d threads=%{public}d',
+              name, prefMs, Date.now() - startedAt, this.threads.length);
+            return;
+          }
+        }
+      }
+
       const device: TiebaDevice = await DeviceIdentity.ensure(context);
       if (owner !== this.ownerKey()) { return; }
+      const deviceMs: number = Date.now() - startedAt;
       // 与首包并行，允许页面在加载遮罩内提前解码和判断；头图失败不阻塞帖子。
       if (!currentCategoryOnly) { void this.loadHeroHeadline(context, name); }
-      const initialResponse: ThreadListResponse = await this.fetchCategory(device, name, 1, this.selectedTabId);
+
+      let requestTabId: number = this.selectedTabId;
+      let allowTabFallback: boolean = false;
+      if (!currentCategoryOnly && requestTabId === 0) {
+        const cachedTabs: ForumTab[] | undefined = cachedForumTabs(name);
+        const cachedPreferred: number = cachedTabs !== undefined
+          ? preferredForumTabId(cachedTabs, forumDefaultTabStore.value) : 0;
+        requestTabId = cachedPreferred > 0 ? cachedPreferred : knownDefaultTabHint(forumDefaultTabStore.value);
+        allowTabFallback = true;
+      }
+
+      const fetchStart: number = Date.now();
+      let rttCount: number = 1;
+      const initialResponse: ThreadListResponse =
+        await this.fetchCategory(device, name, 1, requestTabId, allowTabFallback);
       if (owner !== this.ownerKey()) { return; }
       let response: ThreadListResponse = initialResponse;
       let availableTabs: ForumTab[] = initialResponse.data.tabs;
       let selectedOverride: number = 0;
+      let fallbackSnapshot: ThreadListResponse | undefined = undefined;
 
       if (initialResponse.ok && !currentCategoryOnly) {
         const preferredId: number = preferredForumTabId(availableTabs, forumDefaultTabStore.value);
         if (preferredId > 0 && preferredId !== initialResponse.data.selectedTabId) {
           // 分区 ID 来自本吧首包；目标失败或服务端未确认选择时仍显示首包的真实内容。
+          rttCount = 2;
           try {
             const preferredResponse: ThreadListResponse = await this.api.fetchThreadList(
               device, authSession.session(), name, 1, REQUEST_PAGE_SIZE, preferredId,
@@ -253,6 +361,7 @@ export class ThreadListVM {
             if (owner !== this.ownerKey()) { return; }
             if (preferredResponse.ok && preferredResponse.data.forum.id === initialResponse.data.forum.id &&
               (preferredResponse.data.selectedTabId === preferredId || preferredResponse.data.selectedTabId === 0)) {
+              fallbackSnapshot = initialResponse;
               response = preferredResponse;
               selectedOverride = preferredId;
             }
@@ -280,12 +389,23 @@ export class ThreadListVM {
       this.threads = mergeThreadPages([], response.data.threads);
       // 吧内列表的帖子不带来源吧字段，用当前吧兜底（帖子卡「屏蔽：XX吧」要用 fid）
       this.tagSourceForum(this.threads, name, this.forum.id);
+      if (fallbackSnapshot !== undefined && fallbackSnapshot.data.selectedTabId > 0 &&
+        fallbackSnapshot.data.selectedTabId !== this.selectedTabId) {
+        const prevThreads: ThreadBrief[] = mergeThreadPages([], fallbackSnapshot.data.threads);
+        this.tagSourceForum(prevThreads, name, this.forum.id);
+        this.tabSnapshots.set(fallbackSnapshot.data.selectedTabId, new ThreadListTabSnapshot(
+          fallbackSnapshot.data.forum, fallbackSnapshot.data.page, prevThreads,
+          this.tabs, fallbackSnapshot.data.selectedTabId));
+      }
       if (this.selectedTabId > 0) {
         this.saveTabSnapshot();
       }
       this.loadedOnce = true;
+      hilog.info(0x0000, 'ForumPerf',
+        'forum=%{public}s cacheHit=false rttCount=%{public}d prefMs=%{public}d deviceMs=%{public}d fetchMs=%{public}d totalMs=%{public}d threads=%{public}d',
+        name, rttCount, prefMs, deviceMs, Date.now() - fetchStart, Date.now() - startedAt, this.threads.length);
       if (!currentCategoryOnly) {
-        this.prefetchAdjacent(context);
+        this.schedulePrefetchAdjacent(context);
       }
     } catch (err) {
       const e: Error = err as Error;
@@ -353,6 +473,7 @@ export class ThreadListVM {
       this.errorText = '账号已变化，请刷新吧页面'; return false;
     }
     if (!this.switchingTab) { this.saveTabSnapshot(); }
+    this.cancelPrefetch();
     const version: number = ++this.contentVersion;
     this.isLoadingMore = false;
     this.pendingTabId = tabId;

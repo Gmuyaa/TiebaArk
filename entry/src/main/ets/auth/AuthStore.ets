@@ -202,4 +202,52 @@ export class AuthStore {
     }
     return tbs;
   }
+
+  private static accountAlias(uid: number, field: string): string {
+    return `acct_${uid}_${field}`;
+  }
+
+  static saveAccountCredentials(uid: number, bundle: CredentialBundle): Promise<StoreResult> {
+    if (!Number.isSafeInteger(uid) || uid <= 0 || !bundle.isUsable()) {
+      return Promise.resolve(StoreResult.failure('账号标识或凭据无效'));
+    }
+    const snapshot: CredentialBundle = new CredentialBundle();
+    snapshot.bduss = bundle.bduss;
+    snapshot.stoken = bundle.stoken;
+    snapshot.tbs = bundle.tbs;
+    return AuthStore.enqueue(async (): Promise<StoreResult> => {
+      const stoken: StoreResult = await AuthStore.putOne(AuthStore.accountAlias(uid, 'stoken'), snapshot.stoken);
+      if (!stoken.ok) { return stoken; }
+      const tbs: StoreResult = await AuthStore.putOne(AuthStore.accountAlias(uid, 'tbs'), snapshot.tbs);
+      if (!tbs.ok) { return tbs; }
+      return AuthStore.putOne(AuthStore.accountAlias(uid, 'bduss'), snapshot.bduss);
+    });
+  }
+
+  static async loadAccountCredentials(uid: number): Promise<CredentialBundle> {
+    const bundle: CredentialBundle = new CredentialBundle();
+    if (!Number.isSafeInteger(uid) || uid <= 0) { return bundle; }
+    await AuthStore.enqueue(async (): Promise<StoreResult> => {
+      bundle.bduss = await AuthStore.getOne(AuthStore.accountAlias(uid, 'bduss'));
+      if (bundle.bduss.length === 0) { return StoreResult.success(); }
+      bundle.stoken = await AuthStore.getOne(AuthStore.accountAlias(uid, 'stoken'));
+      bundle.tbs = await AuthStore.getOne(AuthStore.accountAlias(uid, 'tbs'));
+      return StoreResult.success();
+    });
+    return bundle;
+  }
+
+  static removeAccountCredentials(uid: number): Promise<StoreResult> {
+    if (!Number.isSafeInteger(uid) || uid <= 0) {
+      return Promise.resolve(StoreResult.success());
+    }
+    return AuthStore.enqueue(async (): Promise<StoreResult> => {
+      const bduss: StoreResult = await AuthStore.removeOne(AuthStore.accountAlias(uid, 'bduss'));
+      const stoken: StoreResult = await AuthStore.removeOne(AuthStore.accountAlias(uid, 'stoken'));
+      const tbs: StoreResult = await AuthStore.removeOne(AuthStore.accountAlias(uid, 'tbs'));
+      if (!bduss.ok) { return bduss; }
+      if (!stoken.ok) { return stoken; }
+      return tbs;
+    });
+  }
 }

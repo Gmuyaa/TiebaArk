@@ -10,10 +10,11 @@ import { AuthStore } from '../auth/AuthStore';
 import { CredentialBundle, extractBdussFromCookie, extractStokenFromCookie } from '../auth/AuthModel';
 import { sha256Hex } from '../net/RequestOptionsTrace';
 import { AppTheme } from '../theme/Theme';
-import { PageHeader } from '../components/PageHeader';
+import { GlassCircleButton } from '../components/GlassCircleButton';
 import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
 import { MotionEffect } from '../common/appearance/MotionConfig';
 import { motionStore } from '../common/appearance/MotionStore';
+import { UiLayout } from '../common/appearance/UiLayout';
 
 const PAGE_TAG: string = 'WebLogin';
 const POLL_INTERVAL_MS: number = 1500;
@@ -43,20 +44,34 @@ struct WebLoginPage {
   private loggingIn: boolean = false;
 
   /** 状态行文案（不出现任何凭据内容） */
-  @Local statusText: string = '正在打开百度官方页面…';
+  @Local statusText: string = '连接百度官方登录页…';
   @Local bdussSeen: boolean = false;
   @Local stokenSeen: boolean = false;
+  /** 清理完无痕 Cookie/存储后再挂载 Web，避免读到上一个账号的残留态。 */
+  @Local webReady: boolean = false;
+  @Local loadProgress: number = 0;
+  @Local pageLoading: boolean = true;
+  @Local firstPageLoaded: boolean = false;
+  @Local canGoBack: boolean = false;
+  @Local loadError: boolean = false;
+  @Local pollTimedOut: boolean = false;
 
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
+
+  private clearIncognitoWebState(): void {
+    try { webview.WebCookieManager.clearAllCookiesSync(true); } catch (_) {}
+    try { webview.WebStorage.deleteAllData(true); } catch (_) {}
+  }
 
   aboutToAppear(): void {
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
     readStatusBarVp(context).then((vp: number) => {
       this.statusBarH = vp;
-    }).catch(() => {
-      // 拿不到就保持兜底值
-    });
+    }).catch(() => {});
+
+    this.clearIncognitoWebState();
+    this.webReady = true;
 
     AuthStore.load().then((old: CredentialBundle) => {
       hilog.info(0x0000, PAGE_TAG, 'old credentials: bduss[%{public}s] stoken[%{public}s]',
@@ -65,7 +80,7 @@ struct WebLoginPage {
       hilog.info(0x0000, PAGE_TAG, 'old credentials: none (load failed / not logged in)');
     });
     this.pollStartedAt = Date.now();
-    this.pollCookies();
+    this.scheduleNext();
   }
 
   aboutToDisappear(): void {
@@ -73,6 +88,49 @@ struct WebLoginPage {
     if (this.pollTimer >= 0) {
       clearTimeout(this.pollTimer);
       this.pollTimer = -1;
+    }
+    this.clearIncognitoWebState();
+  }
+
+  onBackPress(): boolean {
+    try {
+      if (this.controller.accessBackward()) {
+        this.controller.backward();
+        this.syncBackState();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  private syncBackState(): void {
+    try {
+      this.canGoBack = this.controller.accessBackward();
+    } catch (_) {
+      this.canGoBack = false;
+    }
+  }
+
+  private retrySession(): void {
+    this.loadError = false;
+    this.pageLoading = true;
+    this.loadProgress = 10;
+    if (this.pollTimedOut) {
+      this.pollTimedOut = false;
+      this.pollStartedAt = Date.now();
+      this.statusText = '正在重新连接百度官方页面…';
+      if (this.pollTimer >= 0) {
+        clearTimeout(this.pollTimer);
+        this.pollTimer = -1;
+      }
+      if (!this.pollStopped) {
+        this.scheduleNext();
+      }
+    }
+    try {
+      this.controller.refresh();
+    } catch (_) {
+      try { this.controller.loadUrl(LOGIN_URL); } catch (_) {}
     }
   }
 
@@ -82,11 +140,10 @@ struct WebLoginPage {
     }
     let proceed: boolean = true;
     try {
-      // 落点页（tbwise/mine）+ baidu.com 主域都取一遍合并解析。
-      // WebCookieManager.fetchCookie 是静态方法。
-      const mineCookie: string = await webview.WebCookieManager.fetchCookie(MINE_URL);
+      // 无痕模式隔离持久 Cookie/localStorage，轮询也从无痕 CookieStore 读取。
+      const mineCookie: string = await webview.WebCookieManager.fetchCookie(MINE_URL, true);
       if (this.pollStopped) { return; }
-      const baiduCookie: string = await webview.WebCookieManager.fetchCookie('https://www.baidu.com/');
+      const baiduCookie: string = await webview.WebCookieManager.fetchCookie('https://www.baidu.com/', true);
       if (this.pollStopped) { return; }
       const cookieText: string = `${mineCookie}; ${baiduCookie}`;
       const bduss: string = extractBdussFromCookie(cookieText);
@@ -94,21 +151,18 @@ struct WebLoginPage {
       this.bdussSeen = bduss.length > 0;
       this.stokenSeen = stoken.length > 0;
       if (this.bdussSeen && this.stokenSeen) {
-
         hilog.info(0x0000, PAGE_TAG, 'web_login bduss=present stoken=present');
-        this.statusText = '已获取登录凭据，正在校验…';
+        this.statusText = '正在校验凭据…';
         this.finishLogin(bduss, stoken);
         proceed = false;
       } else {
-        this.statusText = this.bdussSeen
-          ? '登录状态不完整：已取到 BDUSS，等待 STOKEN（继续在网页里完成登录）'
-          : '等待登录…（在上方网页中登录百度账号）';
+        this.statusText = this.bdussSeen ? '等待 STOKEN…' : '';
       }
     } catch (err) {
       if (this.pollStopped) { return; }
       const e: Error = err as Error;
       hilog.warn(0x0000, PAGE_TAG, 'cookie fetch failed: %{public}s', e.message);
-      this.statusText = '读取登录状态失败，重试中…';
+      this.statusText = '读取状态失败，重试中…';
     }
     if (proceed) {
       this.scheduleNext();
@@ -120,7 +174,8 @@ struct WebLoginPage {
       return;
     }
     if (Date.now() - this.pollStartedAt > POLL_MAX_MS) {
-      this.statusText = '等待超时。可返回重试，或继续用手动粘贴 Cookie 登录。';
+      this.pollTimedOut = true;
+      this.statusText = '等待超时，点右上角刷新重试';
       hilog.warn(0x0000, PAGE_TAG, 'poll timeout');
       return;
     }
@@ -138,9 +193,14 @@ struct WebLoginPage {
         this.loggingIn = false;
         if (result.ok) {
           hilog.info(0x0000, PAGE_TAG, 'web login ok: authSource=web_login');
-          promptAction.showToast({ message: '网页登录成功', duration: 1800 });
+          this.clearIncognitoWebState();
+          try {
+            this.getUIContext().getPromptAction().showToast({ message: '网页登录成功', duration: 1800 });
+          } catch (_) {}
           this.pollStopped = true;
-          router.back();
+          try {
+            this.getUIContext().getRouter().back();
+          } catch (_) {}
           return;
         }
         // 校验失败如实展示（tbs 不可得 / 凭据被拒），继续轮询让用户重试
@@ -167,26 +227,231 @@ struct WebLoginPage {
 
   build() {
     Column() {
-      Column() {
-        PageHeader({ title: '百度网页登录', onBack: (): void => { router.back(); } })
-      }.width('100%').padding({ top: this.statusBarH })
+      Row({ space: 10 }) {
+        GlassCircleButton({
+          symbol: $r('sys.symbol.xmark'),
+          iconWeight: FontWeight.Regular,
+          accessibilityLabel: '关闭网页登录',
+          onTap: (): void => {
+            try { this.getUIContext().getRouter().back(); } catch (_) {}
+          }
+        })
 
-      Text(this.statusText)
-        .fontSize(12)
-        .fontColor(AppTheme.TEXT_SUB)
-        .width('100%')
-        .padding({ left: AppTheme.PAGE_GUTTER, right: AppTheme.PAGE_GUTTER, top: 8, bottom: 8 })
-        .backgroundColor(AppTheme.SURFACE_MUTED)
-
-      Web({ src: LOGIN_URL, controller: this.controller })
-        .cacheMode(CacheMode.Online)
+        Column({ space: 2 }) {
+          Text('百度网页登录')
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          this.HeaderSubtitle()
+        }
         .layoutWeight(1)
-        .domStorageAccess(true)
-        .javaScriptAccess(true)
-        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+
+        this.HeaderActions()
+      }
+      .width('100%')
+      .constraintSize({ minHeight: UiLayout.HEADER_HEIGHT })
+      .padding({
+        left: UiLayout.PAGE_GUTTER,
+        right: UiLayout.PAGE_GUTTER,
+        top: this.statusBarH + 8,
+        bottom: 8
+      })
+      .alignItems(VerticalAlign.Center)
+
+      Stack({ alignContent: Alignment.Top }) {
+        if (this.webReady) {
+          Web({ src: LOGIN_URL, controller: this.controller, incognitoMode: true })
+            .cacheMode(CacheMode.Online)
+            .width('100%')
+            .height('100%')
+            .domStorageAccess(true)
+            .javaScriptAccess(true)
+            .onPageBegin((): void => {
+              this.pageLoading = true;
+              this.loadError = false;
+            })
+            .onProgressChange((event: OnProgressChangeEvent): void => {
+              const p: number = event.newProgress;
+              this.loadProgress = p;
+              if (p >= 85 && !this.firstPageLoaded) {
+                this.firstPageLoaded = true;
+              }
+              if (p >= 100) {
+                this.pageLoading = false;
+                this.firstPageLoaded = true;
+              }
+            })
+            .onPageEnd((): void => {
+              this.pageLoading = false;
+              this.firstPageLoaded = true;
+              this.syncBackState();
+            })
+            .onRefreshAccessedHistory((): void => {
+              this.syncBackState();
+            })
+            .onErrorReceive((event: OnErrorReceiveEvent): void => {
+              if (event.request.isMainFrame()) {
+                this.pageLoading = false;
+                this.firstPageLoaded = true;
+                this.loadError = true;
+              }
+            })
+        }
+
+        if (this.pageLoading && this.loadProgress > 0 && this.loadProgress < 100 && !this.loadError) {
+          Progress({ value: this.loadProgress, total: 100, type: ProgressType.Linear })
+            .width('100%')
+            .height(2)
+            .color(AppTheme.ACCENT)
+            .backgroundColor(Color.Transparent)
+            .style({ strokeWidth: 2, enableSmoothEffect: true })
+        }
+
+        if (!this.firstPageLoaded && !this.loadError) {
+          this.InitialLoadingOverlay()
+        }
+
+        if (this.loadError) {
+          this.LoadErrorOverlay()
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .backgroundColor(AppTheme.CARD)
     }
     .width('100%')
     .height('100%')
     .backgroundColor(AppTheme.BG)
+  }
+
+  @Builder
+  HeaderActions() {
+    if (this.canGoBack) {
+      GlassCircleButton({
+        symbol: $r('sys.symbol.chevron_left'),
+        iconSize: 22,
+        iconWeight: FontWeight.Regular,
+        accessibilityLabel: '网页上一页',
+        onTap: (): void => {
+          try {
+            if (this.controller.accessBackward()) {
+              this.controller.backward();
+            }
+          } catch (_) {}
+          this.syncBackState();
+        }
+      })
+    }
+    GlassCircleButton({
+      symbol: $r('sys.symbol.arrow_clockwise'),
+      iconSize: 20,
+      iconWeight: FontWeight.Regular,
+      accessibilityLabel: '刷新网页',
+      onTap: (): void => {
+        this.retrySession();
+      }
+    })
+  }
+
+  @Builder
+  HeaderSubtitle() {
+    if (this.pollTimedOut || this.statusText.length > 0) {
+      Text(this.statusText)
+        .fontSize(11.5)
+        .fontColor(this.pollTimedOut ? AppTheme.MSG_BADGE_ORANGE_FG : AppTheme.TEXT_MUTED)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .onClick((): void => {
+          if (this.pollTimedOut) {
+            this.retrySession();
+          }
+        })
+    } else {
+      Row({ space: 10 }) {
+        this.TokenDot('BDUSS', this.bdussSeen)
+        this.TokenDot('STOKEN', this.stokenSeen)
+      }
+      .alignItems(VerticalAlign.Center)
+    }
+  }
+
+  @Builder
+  TokenDot(label: string, ready: boolean) {
+    Row({ space: 4 }) {
+      Circle()
+        .width(6)
+        .height(6)
+        .fill(ready ? AppTheme.MSG_BADGE_GREEN_FG : AppTheme.TEXT_MUTED)
+        .opacity(ready ? 1 : 0.45)
+      Text(label)
+        .fontSize(11.5)
+        .fontColor(ready ? AppTheme.MSG_BADGE_GREEN_FG : AppTheme.TEXT_MUTED)
+    }
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  InitialLoadingOverlay() {
+    Column({ space: 12 }) {
+      LoadingProgress()
+        .width(34)
+        .height(34)
+        .color(AppTheme.ACCENT)
+      Text('正在连接百度官方登录页…')
+        .fontSize(14)
+        .fontColor(AppTheme.TEXT_SUB)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(AppTheme.CARD)
+  }
+
+  @Builder
+  LoadErrorOverlay() {
+    Column({ space: 12 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(26)
+          .maxFontScale(1)
+          .fontColor([AppTheme.MSG_BADGE_ORANGE_FG])
+      }
+      .width(56)
+      .height(56)
+      .borderRadius(28)
+      .backgroundColor(AppTheme.MSG_BADGE_ORANGE_BG)
+
+      Text('百度登录页加载失败')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(AppTheme.TEXT_MAIN)
+
+      Text('请检查网络连接后重试，或返回使用 Cookie 导入')
+        .fontSize(13)
+        .fontColor(AppTheme.TEXT_SUB)
+        .textAlign(TextAlign.Center)
+
+      Button('重新加载', { type: ButtonType.Capsule })
+        .height(42)
+        .padding({ left: 26, right: 26 })
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(AppTheme.ON_ACCENT)
+        .backgroundColor(AppTheme.ACCENT)
+        .margin({ top: 4 })
+        .onClick((): void => {
+          this.retrySession();
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 32, right: 32 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(AppTheme.CARD)
   }
 }

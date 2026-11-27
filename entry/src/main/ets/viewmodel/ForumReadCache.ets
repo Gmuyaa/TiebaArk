@@ -5,7 +5,7 @@
  */
 import { common } from '@kit.AbilityKit';
 import { TiebaApi, ThreadListResponse } from '../api/TiebaApi';
-import { ForumMembership } from '../model/ThreadList';
+import { ForumMembership, ForumTab } from '../model/ThreadList';
 import { FollowForumItem, FollowForumList } from '../model/FollowForum';
 import { SignStats } from '../model/SignStats';
 import { authSession } from '../auth/AuthSession';
@@ -70,6 +70,7 @@ function store(urgent: boolean = false): void {
       level: member.level, levelName: member.levelName, currentScore: member.currentScore,
       nextScore: member.nextScore, signed: member.signed, missedDays: member.missedDays,
       continuousCount: member.continuousCount, totalCount: member.totalCount,
+      heroColor: forum.heroColor ?? '',
       day: value.day, accessedAt: value.accessedAt, fetchedAt: value.serverAt });
   });
   saveForumSnapshot(storageContext, { version: 1, uid, fetchedAt,
@@ -112,6 +113,7 @@ export function restoreForumCache(context: common.UIAbilityContext): void {
     const response: ThreadListResponse = new ThreadListResponse(); response.ok = true;
     response.data.forum.id = item.fid; response.data.forum.name = item.fname;
     response.data.forum.avatar = item.avatar; response.data.forum.followed = item.followed;
+    response.data.forum.heroColor = item.heroColor ?? '';
     const member: ForumMembership = response.data.membership;
     member.level = item.level; member.levelName = item.levelName;
     member.currentScore = item.currentScore; member.nextScore = item.nextScore;
@@ -150,6 +152,9 @@ export function publishForumRead(guard: ForumCacheGuard, name: string, response:
     // 缺字段不等于零：保留最近一次服务端返回的签到计数，直到有新值替换。
     if (response.data.membership.continuousCount < 0) { response.data.membership.continuousCount = known.continuousCount; }
     if (response.data.membership.totalCount < 0) { response.data.membership.totalCount = known.totalCount; }
+    if ((response.data.forum.heroColor ?? '').length === 0 && (previous.response.data.forum.heroColor ?? '').length > 0) {
+      response.data.forum.heroColor = previous.response.data.forum.heroColor;
+    }
   }
   if (confirmedSigns.get(name) === forumCacheDay()) { response.data.membership.signed = true; }
   forums.set(name, new ForumSnapshot(response));
@@ -171,6 +176,13 @@ export function cachedForumId(name: string): number {
   bind(); return forums.get(name)?.response.data.forum.id ??
     guide?.items.find((item: FollowForumItem): boolean => item.fname === name)?.fid ?? 0;
 }
+/** 仅返回内存中已实际拉取过的吧导航页签；磁盘快照不含页签信息，返回 undefined 促使发帖页按需补读。 */
+export function cachedForumTabs(name: string): ForumTab[] | undefined {
+  bind();
+  const value: ForumSnapshot | undefined = forums.get(name);
+  if (value === undefined || value.response.data.tabs.length === 0) { return undefined; }
+  return value.response.data.tabs.slice();
+}
 export function cachedForumAvatar(name: string, id: number): string {
   bind();
   const value: ForumSnapshot | undefined = forums.get(name);
@@ -179,6 +191,23 @@ export function cachedForumAvatar(name: string, id: number): string {
   }
   return guide?.items.find((item: FollowForumItem): boolean =>
     item.fname === name && (id <= 0 || item.fid === id))?.avatar ?? '';
+}
+
+export function cachedForumHeroColor(name: string): string {
+  bind();
+  return forums.get(name)?.response.data.forum.heroColor ?? '';
+}
+
+/** 仅返回新鲜期内已拉取的完整吧首屏响应（排除 rn=1 的吧头探针与落盘空列表快照）。 */
+export function cachedFreshThreadList(name: string): ThreadListResponse | undefined {
+  bind();
+  const value: ForumSnapshot | undefined = forums.get(name);
+  if (value === undefined || !forumReadFresh(name) || !value.response.ok ||
+    value.response.data.forum.id <= 0 || value.response.data.threads.length < 10) {
+    return undefined;
+  }
+  value.accessedAt = Date.now();
+  return value.response;
 }
 export function cachedForumFollow(name: string, id: number): boolean | undefined {
   bind(); const value: ForumSnapshot | undefined = forums.get(name);

@@ -26,8 +26,10 @@ import { ThreadBriefDataSource } from '../model/ThreadBriefDataSource';
 import { feedImageInfo } from '../model/HomeFeedPresentation';
 import { formatTimeText } from '../model/TimeText';
 import { ThreadListVM } from '../viewmodel/ThreadListVM';
+import { acquireForumPageState, ForumPageState } from '../viewmodel/ForumPageStore';
 import { clearFirstPageRead, markFirstPageRead } from '../viewmodel/ForumStateStore';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { ImageViewer } from '../components/ImageViewer';
 import { GlassPillButton } from '../components/GlassPillButton';
 import { MaterialSlot } from '../common/material/MaterialConfig';
@@ -48,12 +50,11 @@ import {
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { SearchField } from '../components/SearchField';
-import { STATUS_BAR_FALLBACK_VP, readStatusBarVp } from '../utils/SafeArea';
+import { cachedStatusBarVp, readStatusBarVp } from '../utils/SafeArea';
 import { ForumPageParams, NavigationService, SearchResultParams } from '../navigation/AppNavigation';
 import { forumDefaultTabStore } from '../common/appearance/ForumDefaultTabStore';
 import { smartReachStore, SmartReachStore, ForumTabsStyle } from '../common/appearance/SmartReachStore';
 import { themeModeStore } from '../common/appearance/ThemeModeStore';
-import { ForumDefaultTab } from '../model/ForumDefaultTab';
 
 class ForumTabFrameCallback extends FrameCallback {
   private ready: () => void;
@@ -61,14 +62,6 @@ class ForumTabFrameCallback extends FrameCallback {
   onIdle(_timeLeft: number): void { this.ready(); }
 }
 
-/** 仅缓存吧页返回所需的 VM 与滚动偏移，不引入全局状态框架。 */
-class ForumPageState {
-  vm: ThreadListVM = new ThreadListVM();
-  scrollOffset: number = 0;
-  defaultTab: ForumDefaultTab = ForumDefaultTab.HOT;
-}
-
-const FORUM_PAGE_STATES: Map<string, ForumPageState> = new Map<string, ForumPageState>();
 const FORUM_IDENTITY_MIN_HEIGHT: number = 116;
 /** 顶部工具栏里的圆按钮尺寸（vp）：按钮底端 = TOOLBAR − (TOOLBAR − 本值) / 2。 */
 const FORUM_TOOLBAR_BUTTON_SIZE: number = 40;
@@ -125,7 +118,7 @@ export struct ForumPage {
    * 状态栏高度（vp）。窗口全屏布局下页面从 y=0 起排，Hero 的内容要自己让出这一段，否则返回键压在状态栏上
    * （既重叠又点不到，状态栏会吃掉那片触摸）。封面仍从 y=0 铺起，工具栏内容整体下移。
    */
-  @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
+  @Local statusBarH: number = cachedStatusBarVp();
   /** 吧信息滚出视口的进度 0~1，驱动顶部分类提示条和圆角收拢。 */
   @Local tabsNavProgress: number = 0;
   @Local categoryScrollRevision: number = 0;
@@ -155,6 +148,9 @@ export struct ForumPage {
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
   @Local previewTabId: number = 0;
+  /** 推入转场期间仅挂载当前激活分类，避免 Swiper 内 ForEach 首帧同步构建并测量全部分类 List。 */
+  @Local private adjacentTabsReady: boolean = false;
+  private adjacentTabsTimer: number = -1;
   private active: boolean = true;
   private tabSwitchRevision: number = 0;
   private swiperReady: boolean = false;
@@ -162,10 +158,34 @@ export struct ForumPage {
   private tabSwiper: SwiperController = new SwiperController();
   private tabScrollers: Map<number, ListScroller> = new Map<number, ListScroller>();
   private tabSources: Map<number, ThreadBriefDataSource> = new Map<number, ThreadBriefDataSource>();
+  private pinnedByTab: Map<number, ThreadBrief[]> = new Map<number, ThreadBrief[]>();
 
   aboutToDisappear(): void {
     this.active = false;
+    if (this.adjacentTabsTimer >= 0) {
+      clearTimeout(this.adjacentTabsTimer);
+      this.adjacentTabsTimer = -1;
+    }
+    this.vm.cancelPrefetch();
     this.resetTabTransition();
+  }
+
+  private enableAdjacentTabs(): void {
+    if (this.adjacentTabsTimer >= 0) {
+      clearTimeout(this.adjacentTabsTimer);
+      this.adjacentTabsTimer = -1;
+    }
+    if (!this.adjacentTabsReady) {
+      this.adjacentTabsReady = true;
+    }
+  }
+
+  private shouldMountTab(index: number): boolean {
+    const current: number = this.selectedTabIndex();
+    if (!this.adjacentTabsReady) {
+      return index === current;
+    }
+    return Math.abs(index - current) <= 1;
   }
 
   private resetTabTransition(): void {
@@ -228,6 +248,12 @@ export struct ForumPage {
 
   aboutToAppear(): void {
     this.active = true;
+    this.adjacentTabsReady = false;
+    if (this.adjacentTabsTimer >= 0) { clearTimeout(this.adjacentTabsTimer); }
+    this.adjacentTabsTimer = setTimeout((): void => {
+      this.adjacentTabsTimer = -1;
+      if (this.active) { this.adjacentTabsReady = true; }
+    }, 450);
     this.categoryPrefs.load(this.hostContext());
 
     let name: string = '';
@@ -247,12 +273,7 @@ export struct ForumPage {
     }
 
     void threadBlockStore.load(this.hostContext());
-    let state: ForumPageState | undefined = FORUM_PAGE_STATES.get(name);
-    if (state === undefined) {
-      state = new ForumPageState();
-      FORUM_PAGE_STATES.set(name, state);
-    }
-    const pageState: ForumPageState = state;
+    const pageState: ForumPageState = acquireForumPageState(name);
     this.pageState = pageState;
     this.vm = pageState.vm;
     /* 复用缓存进入时数据已在 VM 里：先把数据源对齐，避免 LazyForEach 首帧是空的。 */
@@ -260,7 +281,7 @@ export struct ForumPage {
     this.restorePending = pageState.scrollOffset > 0;
     // 返回本页复用缓存；偏好变更后再次进入同一吧时重新按新默认分区加载。
     const context: common.UIAbilityContext = this.hostContext();
-    // 首包马上要拉：先登记，吧头状态直接等这份回包（FRS 首页同时带关注与签到段），不再另发 rn=1 请求。
+    // 首包马上要拉（或点击时已预发起）：先登记，吧头状态直接等这份回包，不再另发 rn=1 请求。
     if (!this.vm.loadedOnce) { markFirstPageRead(name); }
     void forumDefaultTabStore.load(context).then(() => {
       if (!this.active || this.pageState !== pageState) { return; }
@@ -286,7 +307,7 @@ export struct ForumPage {
 
   private openForumDirectory(kind: DirectoryKind): void {
     if (this.vm.forum.id <= 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '吧资料尚未加载，请稍后重试' });
+      try { this.getUIContext().getPromptAction().showToast({ message: '吧资料尚未加载，请稍后重试' }); } catch (_) {}
       return;
     }
     this.saveScrollPosition();
@@ -299,7 +320,7 @@ export struct ForumPage {
    */
   private openForumMember(): void {
     if (this.vm.forum.id <= 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '吧成员尚未加载，请稍后重试' });
+      try { this.getUIContext().getPromptAction().showToast({ message: '吧成员尚未加载，请稍后重试' }); } catch (_) {}
       return;
     }
     this.saveScrollPosition();
@@ -340,7 +361,7 @@ export struct ForumPage {
     if (word.length === 0) { return; }
     const name: string = this.forumName.trim();
     if (name.length === 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '吧名尚未加载，请稍后重试' });
+      try { this.getUIContext().getPromptAction().showToast({ message: '吧名尚未加载，请稍后重试' }); } catch (_) {}
       return;
     }
     this.saveScrollPosition();
@@ -360,7 +381,7 @@ export struct ForumPage {
     try {
       await this.vm.refresh(this.hostContext(), this.forumName, this.vm.loadedOnce);
       if (this.vm.errorText.length > 0) {
-        promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+        try { this.getUIContext().getPromptAction().showToast({ message: this.vm.errorText, duration: 1800 }); } catch (_) {}
       }
     } finally {
       // 内容区刷新动画随请求结束收起。
@@ -528,27 +549,47 @@ export struct ForumPage {
     this.viewerIndex = index;
   }
 
+  private partitionTabThreads(tabId: number): ThreadBrief[][] {
+    const filtered: ThreadBrief[] = visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false);
+    const pinned: ThreadBrief[] = [];
+    const regular: ThreadBrief[] = [];
+    for (let i = 0; i < filtered.length; i++) {
+      const item: ThreadBrief = filtered[i];
+      if (item.isVideo) { continue; }
+      if (item.isTop) { pinned.push(item); }
+      else { regular.push(item); }
+    }
+    return [pinned, regular];
+  }
+
   private pinnedThreadsForTab(tabId: number): ThreadBrief[] {
     void this.vm.tabSnapshotRevision;
-    return visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false)
-      .filter((item: ThreadBrief) => item.isTop && !item.isVideo);
+    const cached: ThreadBrief[] | undefined = this.pinnedByTab.get(tabId);
+    if (cached !== undefined) { return cached; }
+    const partitioned: ThreadBrief[][] = this.partitionTabThreads(tabId);
+    this.pinnedByTab.set(tabId, partitioned[0]);
+    return partitioned[0];
   }
 
   private regularThreadsForTab(tabId: number): ThreadBrief[] {
     void this.vm.tabSnapshotRevision;
-    return visibleThreads(this.vm.threadsForTab(tabId), threadBlockStore.rules(), false)
-      .filter((item: ThreadBrief) => !item.isTop && !item.isVideo);
+    return this.partitionTabThreads(tabId)[1];
   }
 
   @Local blocks: ThreadBlockStore = threadBlockStore;
 
   @Monitor('vm.threads', 'vm.tabSnapshotRevision', 'blocks.hidden', 'blocks.blockedForums', 'blocks.blockedUsers')
   syncThreadSource(): void {
+    this.pinnedByTab.clear();
     const activeId: number = this.activeTabId();
-    this.sourceForTab(activeId).sync(this.regularThreadsForTab(activeId));
+    const activePart: ThreadBrief[][] = this.partitionTabThreads(activeId);
+    this.pinnedByTab.set(activeId, activePart[0]);
+    this.sourceForTab(activeId).sync(activePart[1]);
     this.tabSources.forEach((source: ThreadBriefDataSource, tabId: number): void => {
       if (tabId !== activeId) {
-        source.sync(this.regularThreadsForTab(tabId));
+        const part: ThreadBrief[][] = this.partitionTabThreads(tabId);
+        this.pinnedByTab.set(tabId, part[0]);
+        source.sync(part[1]);
       }
     });
   }
@@ -559,6 +600,14 @@ export struct ForumPage {
     const index: number = this.vm.tabs.findIndex((tab: ForumTab): boolean => tab.id === this.vm.selectedTabId);
     if (index >= 0) {
       this.tabSwiper.changeIndex(index, false);
+      // ForEach 扩展子页在下一帧提交到原生 Swiper：帧回调内再对齐一次，避免同步调用时子页数未更新被忽略。
+      this.getUIContext().postFrameCallback(new ForumTabFrameCallback((): void => {
+        if (!this.active || !this.swiperReady || this.previewTabId > 0) { return; }
+        const settled: number = this.vm.tabs.findIndex((tab: ForumTab): boolean => tab.id === this.vm.selectedTabId);
+        if (settled >= 0) {
+          this.tabSwiper.changeIndex(settled, false);
+        }
+      }));
     }
   }
 
@@ -584,9 +633,9 @@ export struct ForumPage {
   }
 
   private lightStatusBar(): boolean {
-    // 首载为主题底；封面在顶部时使用浅色状态栏字，收拢后跟随页面主题。
+    // 首帧即渲染封面，封面在顶部时保持浅色状态栏字，收拢后跟随页面主题。
     return themeModeStore.isDark || this.viewerUrls.length > 0 ||
-      (this.forumName.length > 0 && !(this.vm.loading && !this.vm.loadedOnce) && this.toolbarBackgroundProgress() < 1);
+      (this.forumName.length > 0 && this.toolbarBackgroundProgress() < 1);
   }
 
   build() {
@@ -599,12 +648,7 @@ export struct ForumPage {
       Stack({ alignContent: Alignment.BottomEnd }) {
         Column() {
           if (this.forumName.length > 0) {
-            if (this.vm.loading && !this.vm.loadedOnce) {
-
-              this.FullPageLoading()
-            } else {
-              this.ThreadList()
-            }
+            this.ThreadList()
           } else {
             this.TopBar()
             this.StatusView('没有拿到吧名')
@@ -1185,7 +1229,7 @@ export struct ForumPage {
       this.activeScroller().scrollTo({ xOffset: 0,
         yOffset: Math.min(this.activeScroller().currentOffset().yOffset, this.contentTopOffset()), animation: false });
     } else if (this.vm.errorText.length > 0) {
-      promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+      try { this.getUIContext().getPromptAction().showToast({ message: this.vm.errorText, duration: 1800 }); } catch (_) {}
     }
   }
 
@@ -1228,7 +1272,7 @@ export struct ForumPage {
       this.activeScroller().scrollTo({ xOffset: 0,
         yOffset: Math.min(this.activeScroller().currentOffset().yOffset, this.contentTopOffset()), animation: false });
     } else if (this.vm.errorText.length > 0) {
-      promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+      try { this.getUIContext().getPromptAction().showToast({ message: this.vm.errorText, duration: 1800 }); } catch (_) {}
     }
   }
 
@@ -1240,6 +1284,7 @@ export struct ForumPage {
     if ((this.vm.loading && !this.vm.switchingTab) || tab.id === this.displaySelectedTabId()) {
       return;
     }
+    this.enableAdjacentTabs();
     this.previewTabId = tab.id;
     this.revealTopCategory();
     this.syncInactiveTabHeaders(this.activeTabId(), Math.min(this.contentScrollOffset, this.coverSpacerHeight()));
@@ -1247,6 +1292,7 @@ export struct ForumPage {
   }
 
   private onSwiperAnimationStart(targetIndex: number): void {
+    this.enableAdjacentTabs();
     const tab: ForumTab | undefined = this.vm.tabs[targetIndex];
     if (tab === undefined || tab.id === this.previewTabId) { return; }
     this.previewTabId = tab.id;
@@ -1270,7 +1316,7 @@ export struct ForumPage {
       this.revealTopCategory();
     } else {
       if (this.vm.errorText.length > 0) {
-        promptAction.showToast({ message: this.vm.errorText, duration: 1800 });
+        try { this.getUIContext().getPromptAction().showToast({ message: this.vm.errorText, duration: 1800 }); } catch (_) {}
       }
       const fallbackIndex: number = this.vm.tabs.findIndex((item: ForumTab): boolean => item.id === this.vm.selectedTabId);
       if (fallbackIndex >= 0 && fallbackIndex !== index) {
@@ -1326,7 +1372,12 @@ export struct ForumPage {
           .justifyContent(FlexAlign.Center).clip(true)
           .id(tab.id === this.activeTabId() ? 'forum-pull-refresh' : `forum-pull-refresh-${tab.id}`)
         }
-        if (tab.id === this.activeTabId() && !this.refreshing && !this.vm.switchingTab && tab.supportsPostOrder && this.vm.loading) {
+        if (tab.id === this.activeTabId() && this.vm.errorText.length > 0 && this.vm.threadsForTab(tab.id).length === 0) {
+          ListItem() {
+            Column() { this.ErrorView() }
+              .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
+          }
+        } else if (tab.id === this.activeTabId() && !this.refreshing && !this.vm.switchingTab && tab.supportsPostOrder && this.vm.loading) {
           ListItem() {
             Column({ space: 12 }) {
               RefreshSpinner()
@@ -1345,22 +1396,17 @@ export struct ForumPage {
             .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
             .justifyContent(FlexAlign.Center)
           }
-        } else if (tab.id === this.activeTabId() && this.vm.errorText.length > 0 && this.vm.threadsForTab(tab.id).length === 0) {
-          ListItem() {
-            Column() { this.ErrorView() }
-              .width('100%').height(Math.max(240, this.contentHeight - this.forumHeaderHeight()))
-          }
         } else if (tab.isVideo) {
           if (this.videoItemsForTab(tab.id).length === 0) {
             ListItem() { this.StatusView('这个分类暂无可播放视频') }
           } else {
             ListItem() {
               Row({ space: 8 }) {
-                ForEach([0, 1], (side: number) => {
+                ForEach(this.videoColumnIndices(), (side: number) => {
                   Column({ space: 8 }) {
                     ForEach(this.videoColumnForTab(tab.id, side), (item: ThreadBrief) => { this.VideoCard(item) }, (item: ThreadBrief) => `${item.tid}`)
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-                }, (side: number) => `${side}`)
+                }, (side: number) => `${this.videoColumnIndices().length}-${side}`)
               }.width('100%').alignItems(VerticalAlign.Top)
             }.padding({ left: visualThemeStore.isPaper ? 0 : 8, right: visualThemeStore.isPaper ? 0 : 8,
               top: visualThemeStore.isPaper ? 0 : ThreadCardLayout.LIST_GAP })
@@ -1414,6 +1460,8 @@ export struct ForumPage {
       }
       // 面板底色与 20vp 顶部圆角已抽到 Swiper 外的静止底板层，避免横滑切页时分类栏背后的圆角底板跟着分裂移动。
       .backgroundColor(Color.Transparent)
+      .constraintSize({ maxWidth: windowBreakpoint.wideMaxWidth() })
+      .alignSelf(ItemAlign.Center)
     }
     .width('100%')
     .height('100%')
@@ -1485,33 +1533,58 @@ export struct ForumPage {
       Column() {
         Row().height(this.statusBarH + FORUM_TOOLBAR_HEIGHT).width('100%').hitTestBehavior(HitTestMode.None)
         Column() {
-          Swiper(this.tabSwiper) {
-            ForEach(this.displayTabs(), (tab: ForumTab) => {
-              this.TabListPage(tab)
-            }, (tab: ForumTab) => String(tab.id))
+          if (!this.vm.loadedOnce) {
+            Column() {
+              Row().width('100%').height(this.coverSpacerHeight()).hitTestBehavior(HitTestMode.None)
+              Row().width('100%').height(this.forumHeaderHeight()).hitTestBehavior(HitTestMode.None)
+              if (this.vm.errorText.length > 0 && !this.vm.loading) {
+                Column() { this.ErrorView() }
+                  .width('100%').layoutWeight(1)
+              } else {
+                Column() { RefreshSpinner() }
+                  .width('100%').layoutWeight(1)
+                  .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+                  .id('forum-initial-loading')
+              }
+            }
+            .width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
+          } else {
+            Swiper(this.tabSwiper) {
+              ForEach(this.displayTabs(), (tab: ForumTab, index: number) => {
+                if (this.shouldMountTab(index)) {
+                  this.TabListPage(tab)
+                } else {
+                  Column().width('100%').height('100%')
+                }
+              }, (tab: ForumTab) => String(tab.id))
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .indicator(false)
+            .loop(false)
+            .cachedCount(1)
+            .duration(motionDuration(400))
+            .curve(motionSwiperCurve())
+            .disableSwipe(this.vm.tabs.length <= 1 || (this.vm.loading && !this.vm.switchingTab))
+            .onAppear(() => {
+              this.swiperReady = true;
+              const index: number = this.selectedTabIndex();
+              if (index >= 0) { this.tabSwiper.changeIndex(index, false); }
+            })
+            .onDisAppear(() => {
+              this.swiperReady = false;
+            })
+            .onGestureSwipe(() => {
+              this.enableAdjacentTabs();
+              this.syncInactiveTabHeaders(this.activeTabId(), Math.min(this.contentScrollOffset, this.coverSpacerHeight()));
+            })
+            .onAnimationStart((_index: number, targetIndex: number) => {
+              this.onSwiperAnimationStart(targetIndex);
+            })
+            .onChange((index: number) => {
+              void this.commitForumTab(index);
+            })
           }
-          .width('100%')
-          .layoutWeight(1)
-          .indicator(false)
-          .loop(false)
-          .cachedCount(1)
-          .duration(motionDuration(400))
-          .curve(motionSwiperCurve())
-          .disableSwipe(this.vm.tabs.length <= 1 || (this.vm.loading && !this.vm.switchingTab))
-          .onAppear(() => {
-            this.swiperReady = true;
-            const index: number = this.selectedTabIndex();
-            if (index >= 0) { this.tabSwiper.changeIndex(index, false); }
-          })
-          .onGestureSwipe(() => {
-            this.syncInactiveTabHeaders(this.activeTabId(), Math.min(this.contentScrollOffset, this.coverSpacerHeight()));
-          })
-          .onAnimationStart((_index: number, targetIndex: number) => {
-            this.onSwiperAnimationStart(targetIndex);
-          })
-          .onChange((index: number) => {
-            void this.commitForumTab(index);
-          })
         }
         .layoutWeight(1)
         .onAreaChange((_old: Area, area: Area) => { this.contentHeight = Number(area.height); })
@@ -1585,15 +1658,31 @@ export struct ForumPage {
     return item.video !== undefined && item.video.width > 0 && item.video.height > 0
       ? Math.max(0.6, Math.min(1.8, item.video.width / item.video.height)) : 1;
   }
+  private videoColumnIndices(): number[] {
+    const count: number = windowBreakpoint.videoColumns();
+    const out: number[] = [];
+    for (let i: number = 0; i < count; i++) { out.push(i); }
+    return out;
+  }
+
   private videoColumnForTab(tabId: number, side: number): ThreadBrief[] {
-    const columns: ThreadBrief[][] = [[], []];
-    const heights: number[] = [0, 0];
-    const width: number = Math.max(120, (this.viewportWidth - 24) / 2);
-    for (const item of this.videoItemsForTab(tabId)) {
-      const target: number = heights[0] <= heights[1] ? 0 : 1;
-      columns[target].push(item); heights[target] += width / this.videoRatio(item) + 94;
+    const count: number = windowBreakpoint.videoColumns();
+    const columns: ThreadBrief[][] = [];
+    const heights: number[] = [];
+    for (let i: number = 0; i < count; i++) {
+      columns.push([]);
+      heights.push(0);
     }
-    return columns[side];
+    const width: number = Math.max(120, (this.viewportWidth - 16 - (count - 1) * 8) / count);
+    for (const item of this.videoItemsForTab(tabId)) {
+      let target: number = 0;
+      for (let i: number = 1; i < count; i++) {
+        if (heights[i] < heights[target]) { target = i; }
+      }
+      columns[target].push(item);
+      heights[target] += width / this.videoRatio(item) + 94;
+    }
+    return side >= 0 && side < columns.length ? columns[side] : [];
   }
   @Builder
   VideoCard(item: ThreadBrief) {
@@ -1629,7 +1718,8 @@ export struct ForumPage {
       // 光源仍是各页面的发帖按钮；本页判断发光由按钮自己按可见性决定。
       litType: hdsEffect.PointLightIlluminatedType.BORDER,
       authorName: item.authorName, authorAvatar: item.authorAvatar,
-      postedTime: formatTimeText(item.postedMs, Date.now()), title: item.title, summary: item.summary,
+      postedTime: formatTimeText(item.postedMs, Date.now()), title: item.title,
+      sectionLabel: item.isHelp ? '' : item.tabName, summary: item.summary,
       images: item.images.length > 0 ? item.images : (item.coverImage.length > 0 ? [item.coverImage] : []),
       isTop: item.isTop, isGood: item.isGood, isHelp: item.isHelp,
       agreeCount: item.agreeCount, replyCount: item.replyCount,
@@ -1673,22 +1763,6 @@ export struct ForumPage {
   @Builder
   StatusView(text: string) {
     PageState({ fillRemaining: true, message: text, loading: this.vm.loading && !this.vm.loadedOnce }).layoutWeight(1)
-  }
-
-  @Builder
-  FullPageLoading() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      // 头图和帖子并行加载，遮罩下也开始解码/判断，不等正文显示后再下载。
-      if (this.vm.heroHeadline.length > 0) { this.ForumHeadlineImage(this.vm.heroHeadline) }
-      Column() {
-        RefreshSpinner()
-      }
-      .width('100%').height(LayoutPolicy.matchParent)
-      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-      .backgroundColor(AppTheme.BG)
-    }
-    .width('100%')
-    .layoutWeight(1)
   }
 
   @Builder

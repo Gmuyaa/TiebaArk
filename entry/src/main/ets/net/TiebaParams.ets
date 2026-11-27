@@ -1,9 +1,11 @@
 import { CreateForumDraft, createForumDraftError } from '../model/CreateForum';
 import { ImageUploadChunk, imageUploadChunkError } from '../model/ImageUpload';
+import { AuthorBlockScope } from '../model/AuthorBlock';
 import { FollowKind } from '../model/FollowOperation';
 import { MessageSettingField, validMessageSetting } from '../model/MessageSettings';
 import { TailAction, TailChange, tailChangeError } from '../model/Tails';
 import { PrivacyMarkField, validPrivacyMark } from '../model/PrivacyMarks';
+import { AccountPrivacyField, validAccountPrivacy } from '../model/AccountPrivacy';
 import { AtCandidateKind, validAtKind } from '../model/AtCandidates';
 import { VideoFeedEnvironment } from '../model/VideoFeed';
 /**
@@ -96,8 +98,13 @@ export class ImageUploadParams {
     params.push(new SignParam('resourceId', `${chunk.digest.toUpperCase()}${chunk.chunkSize}`),
       new SignParam('chunkNo', String(chunk.chunkNo)), new SignParam('isFinish', chunk.finish() ? '1' : '0'),
       new SignParam('is_bjh', '0'), new SignParam('size', String(chunk.totalSize)),
-      new SignParam('width', String(chunk.width)), new SignParam('height', String(chunk.height)),
-      new SignParam('groupId', '1'), new SignParam('alt', 'json'), new SignParam('saveOrigin', '0'));
+      new SignParam('width', String(chunk.width)), new SignParam('height', String(chunk.height)));
+    if (chunk.smallWidth > 0 && chunk.smallHeight > 0) {
+      params.push(new SignParam('smallWidth', String(chunk.smallWidth)),
+        new SignParam('smallHeight', String(chunk.smallHeight)));
+    }
+    params.push(new SignParam('groupId', chunk.groupId.length > 0 ? chunk.groupId : '1'),
+      new SignParam('alt', 'json'), new SignParam('saveOrigin', '0'));
     if (chunk.watermarkType !== 0) { params.push(new SignParam('pic_water_type', String(chunk.watermarkType))); }
     if (chunk.watermarkType === 1) { params.push(new SignParam('user_name', chunk.userName)); }
     if (chunk.watermarkType === 2) { params.push(new SignParam('forum_name', chunk.forumName)); }
@@ -855,7 +862,7 @@ export class AddThreadParams {
    */
   static build(device: TiebaDevice, session: TiebaSession, title: string, content: string,
     fid: number, forumName: string, nickname: string, topicId: number,
-    isHide: string, contentStatement: string): SignParam[] {
+    isHide: string, contentStatement: string, tabId: number = 0, tabName: string = ''): SignParam[] {
     const params: SignParam[] = TiebaCommonParams.build(device, session);
     params.push(new SignParam('content', content));
     params.push(new SignParam('kw', forumName));
@@ -876,6 +883,12 @@ export class AddThreadParams {
     params.push(new SignParam('cuid_gid', ''));
     /* 话题：官方写帖 Model 与 proto AddThreadRequest.encode 都用同一个键 `topic_id`，值是不带前缀的整数 id；只有选了话题才发。 */
     if (topicId > 0) { params.push(new SignParam('topic_id', String(topicId))); }
+    const sectionName: string = tabName.trim();
+    if (tabId > 0 && sectionName.length > 0) {
+      params.push(new SignParam('tab_id', String(tabId)));
+      params.push(new SignParam('tab_name', sectionName));
+      params.push(new SignParam('is_general_tab', '1'));
+    }
     /*
      * 展示范围与内容声明，取证自 PC 发帖页 bundle `tb3.bdstatic.com/tb/pc/pc-main-core/static/js/publish.<hash>.js`：
      * `is_hide` 取 '0'（全场景可见）或 '1'（个人主页不可见）；`content_statement` 传声明文案本身，不传下标，
@@ -1007,12 +1020,21 @@ export class BawuTeamParams {
   }
 }
 
-/** 官方 UserBlockSetModel：309697 写，309698 读；权限 1 表示选中拉黑。 */export class AuthorBlockParams {
+/** 官方 UserBlockSetModel：309697 写，309698 读；权限 1 表示选中拉黑。 */
+export class AuthorBlockParams {
   static url(write: boolean): string {
     return write ? `https://${TiebaHost.APP}/c/c/user/setUserBlack?cmd=309697`
       : `https://${TiebaHost.APP}/c/u/user/getUserBlackInfo?cmd=309698`;
   }
   static build(device: TiebaDevice, session: TiebaSession, uid: number, blocked?: boolean): Uint8Array {
+    return AuthorBlockParams.buildWithScope(device, session, uid,
+      blocked === undefined ? undefined : (blocked ? AuthorBlockScope.all() : AuthorBlockScope.none()));
+  }
+  static buildScope(device: TiebaDevice, session: TiebaSession, uid: number, scope: AuthorBlockScope): Uint8Array {
+    return AuthorBlockParams.buildWithScope(device, session, uid, scope);
+  }
+  private static buildWithScope(device: TiebaDevice, session: TiebaSession, uid: number,
+    scope: AuthorBlockScope | undefined): Uint8Array {
     const common: ProtoWriter = new ProtoWriter();
     common.writeInt32(1, 2);
     common.writeString(2, device.clientVersion);
@@ -1029,9 +1051,11 @@ export class BawuTeamParams {
     const data: ProtoWriter = new ProtoWriter();
     data.writeMessage(1, common.toUint8Array());
     data.writeInt64(2, BigInt(uid));
-    if (blocked !== undefined) {
+    if (scope !== undefined) {
       const permissions: ProtoWriter = new ProtoWriter();
-      for (let field: number = 1; field <= 3; field++) { permissions.writeInt32(field, blocked ? 1 : 0); }
+      permissions.writeInt32(1, scope.follow ? 1 : 0);
+      permissions.writeInt32(2, scope.interact ? 1 : 0);
+      permissions.writeInt32(3, scope.chat ? 1 : 0);
       data.writeMessage(3, permissions.toUint8Array());
     }
     const root: ProtoWriter = new ProtoWriter();
@@ -1169,6 +1193,19 @@ export class PrivacyMarksParams {
     const data: ProtoWriter = new ProtoWriter(); data.writeInt64(1, BigInt(uid)); data.writeMessage(2, common.toUint8Array());
     const root: ProtoWriter = new ProtoWriter(); root.writeMessage(1, data.toUint8Array());
     return SelfProfileParams.wrapMultipart(root.toUint8Array());
+  }
+}
+
+/** 账号全局隐私写通道（1001506 /c/c/friend/setprivate）：不带 tid，区分于单帖评论权限。 */
+export class AccountPrivacyParams {
+  static readonly WRITE_PATH: string = '/c/c/friend/setprivate';
+
+  static buildWrite(device: TiebaDevice, session: TiebaSession,
+    field: AccountPrivacyField, value: number): SignParam[] {
+    if (!validAccountPrivacy(field, value)) { return []; }
+    const params: SignParam[] = TiebaCommonParams.build(device, session);
+    params.push(new SignParam('opt', field), new SignParam('val', String(value)));
+    return params;
   }
 }
 
@@ -1346,6 +1383,44 @@ export class AgreeMeParams {
     data.writeMessage(1, common.toUint8Array());
     data.writeInt64(2, BigInt(cursor));
     data.writeInt32(3, rn);
+
+    const root: ProtoWriter = new ProtoWriter();
+    root.writeMessage(1, data.toUint8Array());
+    return SelfProfileParams.wrapMultipart(root.toUint8Array());
+  }
+}
+
+/** AddPollPost (cmd 309006, 内部消息号 1003468): DataReq{1:thread_id(uint64), 2:options(csv), 3:common, 4:forum_id(uint64)}. */
+export class AddPollPostParams {
+  static readonly PATH: string = '/c/c/post/addPollPost';
+  static readonly CMD: string = '309006';
+
+  static url(): string {
+    return `https://${TiebaHost.APP}${AddPollPostParams.PATH}?cmd=${AddPollPostParams.CMD}`;
+  }
+
+  static build(device: TiebaDevice, session: TiebaSession, tid: number, forumId: number,
+    optionIds: number[]): Uint8Array {
+    const common: ProtoWriter = new ProtoWriter();
+    common.writeInt32(1, 2);
+    common.writeString(2, device.clientVersion);
+    common.writeString(3, device.clientId);
+    common.writeString(7, device.cuid);
+    common.writeInt64(8, BigInt(Date.now()));
+    common.writeString(9, device.model.length > 0 ? device.model : 'HarmonyOS');
+    common.writeString(10, session.bduss);
+    if (session.tbs.length > 0) { common.writeString(11, session.tbs); }
+    common.writeInt32(12, 1);
+    if (device.osVersion.length > 0) { common.writeString(25, device.osVersion); }
+    if (session.stoken.length > 0) { common.writeString(30, session.stoken); }
+    if (device.cuidGalaxy2.length > 0) { common.writeString(32, device.cuidGalaxy2); }
+    if (device.c3Aid.length > 0) { common.writeString(35, device.c3Aid); }
+
+    const data: ProtoWriter = new ProtoWriter();
+    data.writeInt64(1, BigInt(tid));
+    data.writeString(2, optionIds.join(','));
+    data.writeMessage(3, common.toUint8Array());
+    data.writeInt64(4, BigInt(forumId));
 
     const root: ProtoWriter = new ProtoWriter();
     root.writeMessage(1, data.toUint8Array());

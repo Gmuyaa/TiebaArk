@@ -12,6 +12,7 @@ import { chatStore } from './ChatStore';
 @ObservedV2
 export class ChatListVM {
   @Trace groups: ChatGroup[] = [];
+  @Trace unreadTotal: number = 0;
   @Trace loading: boolean = false;
   @Trace loaded: boolean = false;
   @Trace error: string = '';
@@ -30,6 +31,7 @@ export class ChatListVM {
 
   private pull(): void {
     this.groups = chatStore.groupList();
+    this.unreadTotal = chatStore.totalUnread();
   }
 
   async refresh(context: common.UIAbilityContext): Promise<void> {

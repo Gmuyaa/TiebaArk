@@ -185,6 +185,7 @@ struct RowChevron {
 @ComponentV2
 export struct SettingsEntryRow {
   @Param label: string = '';
+  @Param sub: string = '';
   @Param summary: string = '';
   @Param icon: Resource | undefined = undefined;
   @Param imageIcon: Resource | undefined = undefined;
@@ -201,6 +202,7 @@ export struct SettingsEntryRow {
 
   build() {
     RowShell({
+      tall: this.sub.length > 0,
       showDivider: this.showDivider,
       dividerInset: this.icon !== undefined || this.imageIcon !== undefined || this.hasAvatar() ? 52 : SettingsLayout.ROW_PAD_L,
       onTap: this.onTap,
@@ -232,7 +234,12 @@ export struct SettingsEntryRow {
         .fontSize(SettingsLayout.LABEL_SIZE)
         .fontColor(AppTheme.TEXT_MAIN)
         .width('100%')
-      if (summaryBelow(this.label, this.summary)) {
+      if (this.sub.length > 0) {
+        Text(this.sub)
+          .fontSize(SettingsLayout.SUB_SIZE)
+          .fontColor(AppTheme.NOTE_TEXT)
+          .width('100%')
+      } else if (summaryBelow(this.label, this.summary)) {
         Text(this.summary)
           .fontSize(SettingsLayout.SUB_SIZE)
           .fontColor(AppTheme.NOTE_TEXT)
@@ -242,7 +249,7 @@ export struct SettingsEntryRow {
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
 
-    if (this.summary.length > 0 && !summaryBelow(this.label, this.summary)) {
+    if (this.summary.length > 0 && (this.sub.length > 0 || !summaryBelow(this.label, this.summary))) {
       Text(this.summary)
         .fontSize(SettingsLayout.VALUE_SIZE)
         .fontColor(AppTheme.VALUE_TEXT)

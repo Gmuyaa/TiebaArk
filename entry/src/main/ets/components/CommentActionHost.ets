@@ -36,7 +36,9 @@ export struct CommentActionHost {
   @Local auth: AuthSession = authSession;
 
   aboutToAppear(): void {
-    this.menuWidth = Math.min(336, px2vp(display.getDefaultDisplaySync().width) - 24);
+    try {
+      this.menuWidth = Math.min(336, this.getUIContext().px2vp(display.getDefaultDisplaySync().width) - 24);
+    } catch (_) {}
     this.bindAuthor();
   }
 
@@ -70,11 +72,13 @@ export struct CommentActionHost {
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
-  private toast(message: string): void { this.getUIContext().getPromptAction().showToast({ message }); }
+  private toast(message: string): void {
+    try { this.getUIContext().getPromptAction().showToast({ message }); } catch (_) {}
+  }
 
   private async copy(text: string): Promise<void> {
     if (text.length === 0) { this.toast('没有可复制的文字'); return; }
-    await pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(text));
+    await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
     this.toast('已复制');
   }
 
@@ -102,7 +106,7 @@ export struct CommentActionHost {
         const link: string = commentLink(this.target);
         if (link.length === 0) { this.toast('评论链接暂不可用'); return; }
         // 官方公布的投诉入口；不代填理由、不自动提交举报。
-        await pasteboard.getSystemPasteboard().setData(pasteboard.createPlainTextData(link));
+        await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, link));
         reportCopied = true;
         await this.context().openLink('https://tieba.baidu.com/tousu/new');
         this.toast('评论链接已复制，请在官方举报页面填写');
@@ -156,15 +160,16 @@ export struct CommentActionHost {
 
   private selectionIconPath(): string {
     // Path 命令坐标使用物理像素，按当前密度换算成 24vp 图标。
-    const p4: number = vp2px(4);
-    const p7: number = vp2px(7);
-    const p8: number = vp2px(8);
-    const p9: number = vp2px(9);
-    const p12: number = vp2px(12);
-    const p15: number = vp2px(15);
-    const p16: number = vp2px(16);
-    const p17: number = vp2px(17);
-    const p20: number = vp2px(20);
+    const ui = this.getUIContext();
+    const p4: number = ui.vp2px(4);
+    const p7: number = ui.vp2px(7);
+    const p8: number = ui.vp2px(8);
+    const p9: number = ui.vp2px(9);
+    const p12: number = ui.vp2px(12);
+    const p15: number = ui.vp2px(15);
+    const p16: number = ui.vp2px(16);
+    const p17: number = ui.vp2px(17);
+    const p20: number = ui.vp2px(20);
     return `M ${p7} ${p4} H ${p4} V ${p7} M ${p17} ${p4} H ${p20} V ${p7}` +
       ` M ${p4} ${p17} V ${p20} H ${p7} M ${p20} ${p17} V ${p20} H ${p17}` +
       ` M ${p9} ${p8} H ${p15} M ${p12} ${p8} V ${p16} M ${p9} ${p16} H ${p15}`;

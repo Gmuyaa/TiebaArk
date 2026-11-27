@@ -5,12 +5,14 @@
 import { common } from '@kit.AbilityKit';
 import { authSession } from '../auth/AuthSession';
 import { SettingsLayout } from '../common/appearance/SettingsLayout';
-import { ImBlacklistUser } from '../model/AuthorBlock';
+import { AuthorBlockScope, ImBlacklistUser } from '../model/AuthorBlock';
 import { portraitUrl } from '../model/ThreadDetail';
 import { AppTheme } from '../theme/Theme';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
 import { BlacklistVM } from '../viewmodel/BlacklistVM';
-import { SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine } from './SettingsComponents';
+import {
+  SettingsCard, SettingsEntryRow, SettingsInfoRow, SettingsStatusKind, SettingsStatusLine, SettingsSwitchRow
+} from './SettingsComponents';
 import { SwipeDeleteButton } from './SwipeDeleteButton';
 
 function resolveBlacklistAvatar(portrait: string): string {
@@ -26,6 +28,12 @@ export struct BlacklistPane {
   @Param scroller: Scroller = new Scroller();
   @Param topInset: number = 0;
   @Event onScrolled: () => void = (): void => {};
+  @Local sheetOpen: boolean = false;
+  @Local editingUser: ImBlacklistUser | undefined = undefined;
+  @Local draftFollow: boolean = true;
+  @Local draftInteract: boolean = true;
+  @Local draftChat: boolean = true;
+  @Local savingScope: boolean = false;
 
   private context(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -80,6 +88,56 @@ export struct BlacklistPane {
     }
   }
 
+  private async openScopeEditor(user: ImBlacklistUser): Promise<void> {
+    if (this.vm.selecting || this.vm.actionBusy || this.vm.loading || this.savingScope || user.uid <= 0) {
+      return;
+    }
+    if (!user.scopeKnown) {
+      const err: string = await this.vm.fetchUserScope(this.context(), user);
+      if (err.length > 0) {
+        this.toast(err);
+        return;
+      }
+    }
+    this.editingUser = user;
+    this.draftFollow = user.follow;
+    this.draftInteract = user.interact;
+    this.draftChat = user.chat;
+    this.sheetOpen = true;
+  }
+
+  private scopeChanged(): boolean {
+    if (this.editingUser === undefined) { return false; }
+    return this.draftFollow !== this.editingUser.follow
+      || this.draftInteract !== this.editingUser.interact
+      || this.draftChat !== this.editingUser.chat;
+  }
+
+  private async saveScope(): Promise<void> {
+    const target: ImBlacklistUser | undefined = this.editingUser;
+    if (target === undefined || this.savingScope || !this.scopeChanged()) { return; }
+    const nextScope: AuthorBlockScope = AuthorBlockScope.fromFlags(
+      this.draftFollow, this.draftInteract, this.draftChat);
+    this.savingScope = true;
+    try {
+      const err: string = await this.vm.updateUserScope(this.context(), target, nextScope);
+      if (err.length > 0) {
+        if (target.scopeKnown) {
+          this.draftFollow = target.follow;
+          this.draftInteract = target.interact;
+          this.draftChat = target.chat;
+        }
+        this.toast(err);
+        return;
+      }
+      this.sheetOpen = false;
+      this.editingUser = undefined;
+      this.toast(nextScope.any() ? '已更新拉黑范围' : `已解除对 ${target.displayName()} 的拉黑`);
+    } finally {
+      this.savingScope = false;
+    }
+  }
+
   build() {
     List({ space: 10, scroller: this.scroller }) {
       ListItem() { Row().height(Math.max(0, this.topInset - 10)).width('100%') }
@@ -96,7 +154,7 @@ export struct BlacklistPane {
           end: this.vm.selecting ? undefined : (): void => { this.DeleteSwipeAction(user); },
           edgeEffect: SwipeEdgeEffect.Spring
         })
-      }, (user: ImBlacklistUser) => `u${user.uidText}:${user.displayName()}:${user.portrait}`)
+      }, (user: ImBlacklistUser) => `u${user.uidText}:${user.displayName()}:${user.portrait}:${user.scopeKey()}`)
       ListItem() {
         Column() {
           if (this.vm.error.length > 0) {
@@ -120,7 +178,102 @@ export struct BlacklistPane {
     .height('100%')
     .padding({ left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER })
     .scrollBar(BarState.Off)
-    .onScroll(() => { this.onScrolled(); })
+    .onDidScroll(() => { this.onScrolled(); })
+    .bindSheet($$this.sheetOpen, this.ScopeSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: AppTheme.BG,
+      onWillDismiss: (action: DismissSheetAction): void => {
+        if (!this.savingScope) { action.dismiss(); }
+      },
+      onDisappear: (): void => {
+        if (!this.savingScope) { this.editingUser = undefined; }
+      }
+    })
+  }
+
+  @Builder
+  ScopeSheet() {
+    Column() {
+      Row() {
+        Text(this.editingUser !== undefined ? this.editingUser.displayName() : '拉黑范围')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(AppTheme.TEXT_MAIN)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(20).maxFontScale(1)
+          .fontColor([AppTheme.TEXT_SUB])
+          .padding(6)
+          .onClick((): void => {
+            if (!this.savingScope) { this.sheetOpen = false; }
+          })
+      }
+      .width('100%')
+      .padding({ left: 4, right: 0, bottom: 12 })
+
+      SettingsCard({
+        content: (): void => {
+          this.ScopeSwitchRows();
+        }
+      })
+
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1)
+          .height(42)
+          .fontSize(SettingsLayout.LABEL_SIZE)
+          .fontColor(AppTheme.TEXT_MAIN)
+          .backgroundColor(AppTheme.CARD)
+          .borderRadius(SettingsLayout.CARD_RADIUS)
+          .enabled(!this.savingScope)
+          .onClick((): void => { this.sheetOpen = false; })
+
+        Button(this.savingScope ? '正在保存…' : (!this.draftFollow && !this.draftInteract && !this.draftChat ? '解除拉黑' : '保存'))
+          .layoutWeight(1)
+          .height(42)
+          .fontSize(SettingsLayout.LABEL_SIZE)
+          .fontColor(!this.draftFollow && !this.draftInteract && !this.draftChat ? AppTheme.DANGER_TEXT : AppTheme.ON_ACCENT)
+          .backgroundColor(!this.draftFollow && !this.draftInteract && !this.draftChat ? AppTheme.CARD : AppTheme.ACCENT)
+          .borderRadius(SettingsLayout.CARD_RADIUS)
+          .enabled(!this.savingScope && this.scopeChanged())
+          .opacity(!this.savingScope && this.scopeChanged() ? 1 : 0.45)
+          .onClick((): void => { void this.saveScope(); })
+      }
+      .width('100%')
+      .margin({ top: 16 })
+    }
+    .width('100%')
+    .padding({
+      left: SettingsLayout.PAGE_GUTTER, right: SettingsLayout.PAGE_GUTTER,
+      top: 16, bottom: SettingsLayout.PAGE_BOTTOM_GAP
+    })
+  }
+
+  @Builder
+  ScopeSwitchRows() {
+    SettingsSwitchRow({
+      label: '禁止关注',
+      checked: this.draftFollow,
+      interactionEnabled: !this.savingScope,
+      onToggle: (next: boolean): void => { this.draftFollow = next; }
+    })
+    SettingsSwitchRow({
+      label: '禁止互动',
+      checked: this.draftInteract,
+      interactionEnabled: !this.savingScope,
+      onToggle: (next: boolean): void => { this.draftInteract = next; }
+    })
+    SettingsSwitchRow({
+      label: '禁止私信',
+      checked: this.draftChat,
+      interactionEnabled: !this.savingScope,
+      showDivider: false,
+      onToggle: (next: boolean): void => { this.draftChat = next; }
+    })
   }
 
   @Builder
@@ -128,13 +281,18 @@ export struct BlacklistPane {
     Row() {
       SettingsEntryRow({
         label: user.displayName(),
+        sub: user.scopeLabel(),
         summary: '',
         avatarUrl: resolveBlacklistAvatar(user.portrait),
         avatarName: user.displayName(),
         showChevron: false,
         showDivider: false,
         onTap: (): void => {
-          if (this.vm.selecting) { this.vm.toggleItem(user.uidText); }
+          if (this.vm.selecting) {
+            this.vm.toggleItem(user.uidText);
+          } else {
+            void this.openScopeEditor(user);
+          }
         }
       }).layoutWeight(1)
       if (this.vm.selecting) {

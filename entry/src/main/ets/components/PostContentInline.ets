@@ -1,5 +1,7 @@
 /** 正文与楼中楼预览共用的行内富文本，嵌入 Text 以保持连续排版。 */
-import { ContentKind, ContentPiece, linkLabel, webLinkUrl } from '../model/ThreadDetail';
+import {
+  ContentKind, ContentPiece, isolateInlineText, linkLabel, stripBidiControls, webLinkUrl
+} from '../model/ThreadDetail';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { DetailTheme } from '../theme/Theme';
 
@@ -26,16 +28,16 @@ export function PostContentInline($$: PostContentInlineParams) {
           .fontColor([$$.accentColor])
         Span('\u00A0')
       }
-      Span(piece.kind === ContentKind.TOPIC ? piece.text : linkLabel(piece.link, piece.text))
+      Span(isolateInlineText(piece.kind === ContentKind.TOPIC ? piece.text : linkLabel(piece.link, piece.text)))
         .fontColor(piece.kind === ContentKind.TOPIC || webLinkUrl(piece.link).length > 0
           ? $$.accentColor : $$.textColor)
         .onClick(() => { $$.onActivate(piece); })
     } else if (piece.kind === ContentKind.REPLY_TARGET) {
-      Span(piece.text)
+      Span(isolateInlineText(piece.text))
         .fontColor(DetailTheme.COMMENT_ACTION)
     } else if (piece.kind !== ContentKind.IMAGE) {
-      Span(piece.text)
+      Span(stripBidiControls(piece.text))
         .fontColor($$.textColor)
     }
-  }, (piece: ContentPiece, index: number) => `${index}`)
+  }, (piece: ContentPiece, index: number) => `${index}:${piece.kind}:${piece.text}:${piece.emojiUrl}:${piece.link}`)
 }

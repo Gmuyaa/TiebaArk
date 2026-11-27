@@ -9,7 +9,7 @@
  */
 
 import { AvatarComponent } from './AvatarComponent';
-import { ChatMessage, MSG_TYPE_READED } from '../model/Chat';
+import { ChatImageContent, ChatMessage, MSG_TYPE_IMAGE, MSG_TYPE_READED } from '../model/Chat';
 import { ContentKind, ContentPiece, portraitUrl } from '../model/ThreadDetail';
 import { emojiSrc } from '../common/emoji/EmojiSrc';
 import { formatTimeText } from '../model/TimeText';
@@ -25,6 +25,7 @@ export struct ChatBubble {
   @Param showTime: boolean = false;
   @Param selfPortrait: string = '';
   @Event onRetry: (message: ChatMessage) => void = (): void => {};
+  @Event onOpenImage: (url: string) => void = (): void => {};
 
   private avatarUrl(): string {
     const raw: string = this.message.fromSelf ? this.selfPortrait : this.message.peer.portrait;
@@ -53,7 +54,37 @@ export struct ChatBubble {
 
   /** 正文分片：官方表情 `#(xxx)` 会拆成 EMOJI 片段，其余保持文本。 */
   private pieces(): ContentPiece[] {
-    return ContentPiece.splitTextAndEmoji(this.message.content);
+    return ContentPiece.splitTextAndEmoji(this.message.text());
+  }
+
+  private imageWidth(img: ChatImageContent): number {
+    if (img.width > 0 && img.height > 0) {
+      const ratio: number = img.width / img.height;
+      if (ratio >= 1) { return 204; }
+      return Math.max(112, Math.min(204, Math.round(204 * ratio)));
+    }
+    return 168;
+  }
+
+  private imageHeight(img: ChatImageContent): number {
+    const w: number = this.imageWidth(img);
+    if (img.width > 0 && img.height > 0) {
+      return Math.max(84, Math.min(240, Math.round(w * (img.height / img.width))));
+    }
+    return 168;
+  }
+
+  @Builder
+  BubbleImage(img: ChatImageContent) {
+    Image(img.src)
+      .width(this.imageWidth(img))
+      .height(this.imageHeight(img))
+      .objectFit(ImageFit.Cover)
+      .borderRadius(12)
+      .backgroundColor(AppTheme.SURFACE_MUTED)
+      .onClick((): void => {
+        this.onOpenImage(img.bigSrc.length > 0 ? img.bigSrc : img.src);
+      })
   }
 
   @Builder
@@ -113,7 +144,11 @@ export struct ChatBubble {
         Row({ space: 8 }) {
           if (!this.message.fromSelf) { this.Avatar() } else { Blank() }
           Column({ space: 4 }) {
-            this.BubbleText()
+            if (this.message.msgType === MSG_TYPE_IMAGE && this.message.imageContent() !== undefined) {
+              this.BubbleImage(this.message.imageContent() as ChatImageContent)
+            } else {
+              this.BubbleText()
+            }
             if (this.message.fromSelf && (this.message.sendState === 'sending' || this.message.sendState === 'failed')) {
               Row({ space: 6 }) {
                 if (this.message.sendState === 'sending') {

@@ -93,10 +93,11 @@ export struct GlassCircleButton {
   @Builder
   IconContent() {
     if (this.useCustomIcon) {
-      // 自绘图标同样交给 Button 居中，不再靠 offset 手调。
       Column() {
         this.customIcon();
       }
+      .width('100%').height('100%')
+      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     } else if (this.label.length > 0) {
       Text(this.label)
         .fontSize(this.iconSize).maxFontScale(1)
@@ -121,7 +122,10 @@ export struct GlassCircleButton {
       // 官方组件材质必须位于合法区域；这里使用真实圆形 Button，不给普通内容区空挂材质。
       // 图标放在 Button 内部当内容 —— 见文件头注释，这是中心区域能触发材质反馈的前提。
       Button({ type: ButtonType.Circle }) {
-        this.IconContent()
+        Stack({ alignContent: Alignment.Center }) {
+          this.IconContent()
+        }
+        .width('100%').height('100%')
       }
       .width(this.diameter).height(this.diameter).margin(0).padding(0)
       .backgroundColor(Color.Transparent)

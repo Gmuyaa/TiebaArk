@@ -1,9 +1,22 @@
-/** 搜帖卡片按需补图；只保留当前查询的内存结果，不新增落盘缓存。 */
+/** 搜帖卡片按需补图与计数；只保留当前查询的内存结果，不新增落盘缓存。 */
 import { InflightQueue } from '../model/InflightQueue';
 
+export class SearchPostMetrics {
+  agreeCount: number = -1;
+  replyCount: number = -1;
+  shareCount: number = -1;
+
+  constructor(agreeCount: number = -1, replyCount: number = -1, shareCount: number = -1) {
+    this.agreeCount = agreeCount;
+    this.replyCount = replyCount;
+    this.shareCount = shareCount;
+  }
+}
+
 export type SearchForumAvatarDone = (forumName: string, avatarUrl: string) => void;
+export type SearchPostMetricsDone = (agreeCount: number, replyCount: number, shareCount: number) => void;
 export type SearchAvatarFetcher = (name: string, forum: boolean, tid: number, pid: number,
-  onForumAvatar: SearchForumAvatarDone) => Promise<string>;
+  onForumAvatar: SearchForumAvatarDone, onMetrics?: SearchPostMetricsDone) => Promise<string>;
 
 class AvatarTask {
   name: string;
@@ -26,6 +39,7 @@ class AvatarTask {
 @ObservedV2
 export class SearchPostAvatarsVM {
   @Trace urls: Map<string, string> = new Map();
+  @Trace metrics: Map<number, SearchPostMetrics> = new Map();
   private fetcher: SearchAvatarFetcher | undefined = undefined;
   private epoch: number = 0;
   private queue: InflightQueue<AvatarTask> = new InflightQueue<AvatarTask>(2);
@@ -37,6 +51,7 @@ export class SearchPostAvatarsVM {
     this.fetcher = fetcher;
     this.queue.clear(); this.pending = new Set(); this.failedAt = new Map();
     this.urls = new Map();
+    this.metrics = new Map();
   }
 
   /** cachedForumAvatar 仅接受调用方已校正的会话缓存，不能传入未经校正的历史地址。 */
@@ -98,11 +113,25 @@ export class SearchPostAvatarsVM {
     this.urls = next;
   }
 
+  private acceptMetrics(task: AvatarTask, agreeCount: number, replyCount: number, shareCount: number): void {
+    if (task.epoch !== this.epoch || task.forum || !Number.isSafeInteger(task.tid) || task.tid <= 0) { return; }
+    const next: Map<number, SearchPostMetrics> = new Map(this.metrics);
+    next.set(task.tid, new SearchPostMetrics(
+      Number.isSafeInteger(agreeCount) && agreeCount >= 0 ? agreeCount : -1,
+      Number.isSafeInteger(replyCount) && replyCount >= 0 ? replyCount : -1,
+      Number.isSafeInteger(shareCount) && shareCount >= 0 ? shareCount : -1
+    ));
+    this.metrics = next;
+  }
+
   private async run(task: AvatarTask, fetcher: SearchAvatarFetcher): Promise<void> {
     let url: string = '';
     try {
       url = await fetcher(task.name, task.forum, task.tid, task.pid,
-        (name: string, avatar: string): void => { this.acceptForumAvatar(task, name, avatar); });
+        (name: string, avatar: string): void => { this.acceptForumAvatar(task, name, avatar); },
+        (agreeCount: number, replyCount: number, shareCount: number): void => {
+          this.acceptMetrics(task, agreeCount, replyCount, shareCount);
+        });
     } catch (_) { /* 保留文字兜底并进入冷却。 */ }
     if (task.epoch === this.epoch) {
       this.pending.delete(task.key);

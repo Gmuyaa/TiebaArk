@@ -2,13 +2,15 @@ import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import hilog from '@ohos.hilog';
 import { AddThreadResponse } from '../api/ApiResponses';
-import { TiebaApi } from '../api/TiebaApi';
+import { ThreadListResponse, TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import { UploadedPostImage, uploadedImageToken } from '../model/ImageUpload';
+import { ForumTab, postableForumTabs } from '../model/ThreadList';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { ImagePrepareResult, prepareUploadImage } from '../utils/ImagePrepare';
 import { ImageUploadVM } from './ImageUploadVM';
 import { deleteForumSnapshot } from '../utils/ForumSnapshotStore';
+import { cachedForumId, cachedForumTabs, ForumCacheGuard, publishForumRead } from './ForumReadCache';
 import { accountWithPortrait } from './SessionOwner';
 
 export const COMPOSE_TYPES: string[] = ['文章', '帖子', '视频', '求助'];
@@ -64,6 +66,11 @@ export class ComposePublishResult {
   tidText: string = '';
 }
 
+class ResolvedForumMeta {
+  id: number = 0;
+  avatar: string = '';
+}
+
 /** 编辑内容只保留在本次页面内，退出即丢弃。 */
 @ObservedV2
 export class ComposeDraft {
@@ -71,6 +78,9 @@ export class ComposeDraft {
   @Trace body: string = '';
   @Trace forum: string = '';
   @Trace forumId: number = 0;
+  @Trace forumAvatar: string = '';
+  @Trace tabId: number = 0;
+  @Trace tabName: string = '';
   @Trace topic: string = '';
   @Trace topicId: number = 0;
   @Trace visibility: string = '全场景可见';
@@ -86,29 +96,216 @@ export class ComposeVM {
   @Trace drafts: ComposeDraft[] = [new ComposeDraft(), new ComposeDraft(), new ComposeDraft(), new ComposeDraft()];
   @Trace picking: boolean = false;
   @Trace error: string = '';
+  /** 当前草稿所选吧的可发帖版块分区；空数组表示无分区或未选吧。 */
+  @Trace forumSections: ForumTab[] = [];
+  @Trace sectionsLoading: boolean = false;
+  @Trace sectionsError: string = '';
   /** 发布进行中：发布按钮与关闭动作都应让位，避免重复提交 */
   @Trace publishing: boolean = false;
   /** 发布阶段提示（如"正在上传图片 2/3"）；空闲时为空串 */
   @Trace publishStep: string = '';
   private alive: boolean = true;
   private publishEpoch: number = 0;
+  private sectionEpoch: number = 0;
+  private sectionCache: Map<string, ForumTab[]> = new Map<string, ForumTab[]>();
+  private forumMetaCache: Map<string, ResolvedForumMeta> = new Map<string, ResolvedForumMeta>();
   private api: TiebaApi = new TiebaApi();
   private uploader: ImageUploadVM = new ImageUploadVM();
 
   get draft(): ComposeDraft { return this.drafts[this.type]; }
 
+  clearError(): void {
+    if (this.error.length > 0) { this.error = ''; }
+  }
+
+  moveMedia(from: number, to: number): void {
+    const list: string[] = this.draft.media;
+    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) { return; }
+    const next: string[] = list.slice();
+    const moved: string = next.splice(from, 1)[0];
+    next.splice(to, 0, moved);
+    this.draft.media = next;
+    this.clearError();
+  }
+
+  supportsSections(): boolean {
+    return this.type === 0 || this.type === 1;
+  }
+
   hasContent(): boolean {
     return this.drafts.some((draft: ComposeDraft): boolean => draft.title.length > 0 || draft.body.length > 0 ||
-      draft.media.length > 0 || draft.video.length > 0 || draft.forum.length > 0 || draft.topic.length > 0 ||
-      draft.declaration.length > 0 || draft.mood.length > 0 || draft.visibility !== '全场景可见');
+      draft.media.length > 0 || draft.video.length > 0 || draft.forum.length > 0 || draft.tabId > 0 ||
+      draft.topic.length > 0 || draft.declaration.length > 0 || draft.mood.length > 0 ||
+      draft.visibility !== '全场景可见');
   }
 
   dispose(): void {
     this.alive = false;
     this.publishEpoch++;
+    this.sectionEpoch++;
     this.publishing = false;
     this.publishStep = '';
+    this.sectionsLoading = false;
     this.uploader.dispose();
+  }
+
+  private rememberForumMeta(name: string, id: number, avatar: string): void {
+    const existing: ResolvedForumMeta = this.forumMetaCache.get(name) ?? new ResolvedForumMeta();
+    if (id > 0) { existing.id = id; }
+    if (avatar.trim().length > 0) { existing.avatar = avatar.trim(); }
+    this.forumMetaCache.set(name, existing);
+  }
+
+  private applySections(forumName: string, sections: ForumTab[]): void {
+    if (this.draft.forum !== forumName) { return; }
+    this.forumSections = sections.slice();
+    this.sectionsError = '';
+    this.sectionsLoading = false;
+    if (this.draft.tabId > 0 && !sections.some((tab: ForumTab): boolean => tab.id === this.draft.tabId)) {
+      this.draft.tabId = 0;
+      this.draft.tabName = '';
+    }
+  }
+
+  /**
+   * 选中发布目标吧：切到不同的吧时清空旧版块分区，按需从缓存或 `frs/page` 补齐板块列表与缺失的 `forumId`。
+   */
+  async selectForum(context: common.UIAbilityContext | undefined, name: string, id: number,
+    avatar: string = '', knownTabs?: ForumTab[]): Promise<void> {
+    if (!this.alive) { return; }
+    const trimmed: string = name.trim();
+    if (trimmed.length === 0) { return; }
+    const draft: ComposeDraft = this.draft;
+    const changed: boolean = draft.forum !== trimmed;
+    const cachedMeta: ResolvedForumMeta | undefined = this.forumMetaCache.get(trimmed);
+    const resolvedId: number = id > 0 ? id
+      : (cachedMeta !== undefined && cachedMeta.id > 0 ? cachedMeta.id : cachedForumId(trimmed));
+    const resolvedAvatar: string = avatar.trim().length > 0 ? avatar.trim() : (cachedMeta?.avatar ?? '');
+    draft.forum = trimmed;
+    draft.forumId = resolvedId;
+    if (changed || resolvedAvatar.length > 0) { draft.forumAvatar = resolvedAvatar; }
+    if (changed) {
+      draft.tabId = 0;
+      draft.tabName = '';
+    }
+    this.clearError();
+    if (resolvedId > 0 || resolvedAvatar.length > 0) {
+      this.rememberForumMeta(trimmed, resolvedId, resolvedAvatar);
+    }
+
+    if (knownTabs !== undefined && knownTabs.length > 0) {
+      const sections: ForumTab[] = postableForumTabs(knownTabs);
+      this.sectionCache.set(trimmed, sections);
+      this.applySections(trimmed, sections);
+      if (draft.forumId > 0 || context === undefined) { return; }
+    } else {
+      const cachedSections: ForumTab[] | undefined = this.sectionCache.get(trimmed);
+      if (cachedSections !== undefined && draft.forumId > 0) {
+        this.applySections(trimmed, cachedSections);
+        return;
+      }
+      const readCacheTabs: ForumTab[] | undefined = cachedForumTabs(trimmed);
+      if (readCacheTabs !== undefined) {
+        const sections: ForumTab[] = postableForumTabs(readCacheTabs);
+        this.sectionCache.set(trimmed, sections);
+        this.applySections(trimmed, sections);
+        if (draft.forumId > 0 || context === undefined) { return; }
+      }
+    }
+
+    if (context === undefined) {
+      this.forumSections = [];
+      this.sectionsError = '';
+      this.sectionsLoading = false;
+      return;
+    }
+    await this.fetchForumSections(context, trimmed);
+  }
+
+  async retryForumSections(context: common.UIAbilityContext): Promise<void> {
+    const name: string = this.draft.forum.trim();
+    if (name.length === 0) { return; }
+    await this.fetchForumSections(context, name);
+  }
+
+  /** 切换发帖类型后将界面展示的版块列表同步到新草稿所选的吧。 */
+  syncSectionsForCurrentDraft(context: common.UIAbilityContext | undefined): void {
+    this.sectionEpoch++;
+    this.sectionsLoading = false;
+    this.sectionsError = '';
+    const name: string = this.draft.forum.trim();
+    if (name.length === 0) {
+      this.forumSections = [];
+      return;
+    }
+    const cachedSections: ForumTab[] | undefined = this.sectionCache.get(name);
+    if (cachedSections !== undefined) {
+      this.applySections(name, cachedSections);
+      if (this.draft.forumId > 0 || context === undefined) { return; }
+    } else {
+      const readCacheTabs: ForumTab[] | undefined = cachedForumTabs(name);
+      if (readCacheTabs !== undefined) {
+        const sections: ForumTab[] = postableForumTabs(readCacheTabs);
+        this.sectionCache.set(name, sections);
+        this.applySections(name, sections);
+        if (this.draft.forumId > 0 || context === undefined) { return; }
+      }
+    }
+    this.forumSections = [];
+    if (context !== undefined) {
+      void this.fetchForumSections(context, name);
+    }
+  }
+
+  toggleSection(tab: ForumTab): void {
+    const name: string = tab.name.trim();
+    if (tab.id <= 0 || name.length === 0) { return; }
+    if (this.draft.tabId === tab.id) {
+      this.draft.tabId = 0;
+      this.draft.tabName = '';
+    } else {
+      this.draft.tabId = tab.id;
+      this.draft.tabName = name;
+    }
+    this.clearError();
+  }
+
+  private async fetchForumSections(context: common.UIAbilityContext, forumName: string): Promise<void> {
+    if (!this.alive || forumName.length === 0) { return; }
+    const epoch: number = ++this.sectionEpoch;
+    const owner: string = authSession.sessionKey();
+    this.sectionsLoading = true;
+    this.sectionsError = '';
+    this.forumSections = [];
+    const current = (): boolean => this.alive && epoch === this.sectionEpoch &&
+      owner === authSession.sessionKey() && this.draft.forum === forumName;
+    try {
+      const device = await DeviceIdentity.ensure(context);
+      if (!current()) { return; }
+      const guard: ForumCacheGuard = new ForumCacheGuard(forumName);
+      const response: ThreadListResponse = await this.api.fetchThreadList(device, authSession.session(), forumName, 1, 1);
+      if (!current()) { return; }
+      if (!response.ok) {
+        this.sectionsError = response.describeFailure() || '版块分区读取失败，请重试';
+        return;
+      }
+      publishForumRead(guard, forumName, response);
+      const fetchedId: number = response.data.forum.id;
+      const fetchedAvatar: string = response.data.forum.avatar;
+      this.rememberForumMeta(forumName, fetchedId, fetchedAvatar);
+      for (const item of this.drafts) {
+        if (item.forum !== forumName) { continue; }
+        if (item.forumId <= 0 && fetchedId > 0) { item.forumId = fetchedId; }
+        if (item.forumAvatar.length === 0 && fetchedAvatar.length > 0) { item.forumAvatar = fetchedAvatar; }
+      }
+      const sections: ForumTab[] = postableForumTabs(response.data.tabs);
+      this.sectionCache.set(forumName, sections);
+      this.applySections(forumName, sections);
+    } catch (err) {
+      if (current()) { this.sectionsError = '版块分区读取失败，请重试'; }
+    } finally {
+      if (this.alive && epoch === this.sectionEpoch) { this.sectionsLoading = false; }
+    }
   }
 
   async pickMedia(asVideo: boolean = false): Promise<void> {
@@ -147,7 +344,10 @@ export class ComposeVM {
   publishBlocked(): string {
     const draft: ComposeDraft = this.draft;
     if (!authSession.isLoggedIn()) { return '登录后才能发布'; }
-    if (draft.forum.trim().length === 0 || draft.forumId <= 0) { return '请先选择要发布到哪个吧'; }
+    if (draft.forum.trim().length === 0) { return '请先选择要发布到哪个吧'; }
+    if (draft.forumId <= 0) {
+      return this.sectionsLoading ? '正在获取吧信息，请稍候' : '请先选择要发布到哪个吧';
+    }
     if (this.type === 2) { return '视频帖暂未接入发布，请先切换为帖子或文章'; }
     if (draft.video.length > 0) { return '视频附件暂未接入发布，请先移除'; }
     const title: string = draft.title.trim();
@@ -188,6 +388,8 @@ export class ComposeVM {
     const media: string[] = draft.media.slice();
     const forumName: string = draft.forum.trim();
     const fid: number = draft.forumId;
+    const tabId: number = (type === 0 || type === 1) ? draft.tabId : 0;
+    const tabName: string = tabId > 0 ? draft.tabName.trim() : '';
     const topicId: number = draft.topicId;
     const topicName: string = draft.topic.trim();
     // 展示范围与内容声明：官方 PC 发帖页把范围映射成 is_hide（'0' 全场景可见 / '1' 个人主页不可见），
@@ -234,7 +436,7 @@ export class ComposeVM {
       const session = authSession.session();
       const nickname: string = authSession.snapshot.nickname;
       const response: AddThreadResponse = await this.api.addThread(device, session, title, content,
-        fid, forumName, nickname, topicId, isHide, contentStatement);
+        fid, forumName, nickname, topicId, isHide, contentStatement, tabId, tabName);
       if (!current()) { return result; }
       if (!response.ok) {
         return fail(response.describeFailure());
@@ -259,5 +461,8 @@ export class ComposeVM {
   /** 发布成功后清掉四个页签的全部草稿：内容已经发出，不应再以"待发"状态留着。 */
   private clearDrafts(): void {
     this.drafts = [new ComposeDraft(), new ComposeDraft(), new ComposeDraft(), new ComposeDraft()];
+    this.forumSections = [];
+    this.sectionsError = '';
+    this.sectionsLoading = false;
   }
 }

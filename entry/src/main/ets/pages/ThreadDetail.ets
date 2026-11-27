@@ -7,6 +7,7 @@ import { TaggedThreadText } from '../components/TaggedThreadText';
 import { PaperLayout } from '../common/appearance/VisualTheme';
 import { PageState, ListFooter } from '../components/PageState';
 import { ThemeModeStore, themeModeStore } from '../common/appearance/ThemeModeStore';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { ForumLevelBadge } from '../components/ForumLevelBadge';
 import { forumLevelStore } from '../common/appearance/ForumLevelStore';
 import { PullRefreshHeader, PULL_REFRESH_OFFSET } from '../components/RefreshSpinner';
@@ -21,6 +22,8 @@ import { openUserByIdentity } from '../navigation/UserNavigation';
 import { common } from '@kit.AbilityKit';
 import { VoicePlayer } from '../components/VoicePlayer';
 import { VideoPlayer } from '../components/VideoPlayer';
+import { ThreadPollCard } from '../components/ThreadPollCard';
+import { ThreadAuthorBar, ThreadMoreMenu } from '../components/ThreadDetailHeader';
 import { videoPlayback } from '../viewmodel/VideoPlaybackVM';
 import { voicePlayback } from '../viewmodel/VoicePlaybackVM';
 import { shareWebPage } from '../utils/SystemShare';
@@ -52,6 +55,11 @@ import { ReplyImagesVM } from '../viewmodel/ReplyImagesVM';
 import { UploadedPostImage } from '../model/ImageUpload';
 import { ReplyEditorContent } from '../model/ReplyEditor';
 import { readEmojiEditor, updateEmojiEditorTextColor } from '../utils/EmojiEditor';
+import { authSession } from '../auth/AuthSession';
+import { BrowseProgress, readBrowseProgress, saveBrowseProgress } from '../utils/BrowseHistory';
+import {
+  clearReplyDraft, loadReplyDraft, peekReplyDraft, saveReplyDraft, warmReplyDrafts
+} from '../utils/DraftStore';
 import { ERRNO_THREAD_DELETED } from '../api/TiebaApi';
 import { AgreeObjType } from '../net/TiebaParams';
 import { ImageViewer } from '../components/ImageViewer';
@@ -60,6 +68,7 @@ import { ImageTransitionGalleryScope } from '../components/ImageTransitionGaller
 import { GlassBackButton } from '../components/GlassBackButton';
 import { GlassMoreButton } from '../components/GlassMoreButton';
 import { ThreadPopupButton } from '../components/ThreadPopupButton';
+import { ThreadCommentPermissionSheet, ThreadJumpFloorDialog } from '../components/ThreadDetailDialogs';
 import { GlassCircleButton } from '../components/GlassCircleButton';
 import { THREAD_ACTION_BUTTON_SIZE, floatingButtonHitRegion } from '../model/SmartReach';
 import { PostImageGallery } from '../components/PostImageGallery';
@@ -97,7 +106,7 @@ import { NavigationService, ThreadDetailParams } from '../navigation/AppNavigati
 const BODY_EMOJI_SIZE: number = 21;
 
 /** 帖子操作胶囊内容高（vp），独立于主界面导航底栏 */
-const ACTION_PILL_HEIGHT: number = 52;
+const ACTION_PILL_HEIGHT: number = 46;
 /** 左胶囊宽（vp） */
 const REPLY_PILL_WIDTH: number = 143;
 /** 右胶囊宽（vp） */
@@ -105,7 +114,7 @@ const ACTION_PILL_WIDTH: number = 197;
 /** 两胶囊间距：143 + 8 + 197 = 348 = 屏宽 − 左右各 14vp，正好填满一行 */
 const ACTION_PILL_GAP: number = 8;
 /** 胶囊圆角（vp）= 高度的一半 */
-const ACTION_PILL_RADIUS: number = 26;
+const ACTION_PILL_RADIUS: number = 23;
 const REPLY_PILL_PADDING: number = 17;
 const ACTION_QUAD_PADDING: number = 8;
 /** 底部行距屏幕两侧 / 屏底的边距（vp） */
@@ -241,8 +250,16 @@ export struct ThreadDetailPage {
    * 只喂字数计数与提交校验，不回写输入框。
    */
   @Local replyText: string = '';
+  @Local mainReplyDraft: string = '';
+  @Local resumeFloor: number = 0;
+  @Local resumingFloor: boolean = false;
   @Local replyImages: ReplyImagesVM = new ReplyImagesVM();
   private replyEditEpoch: number = 0;
+  private replyDraftTimer: number = -1;
+  private trackedFloor: number = 0;
+  private trackedPid: number = 0;
+  private progressSaveTimer: number = -1;
+  private resumeHideTimer: number = -1;
   private rebuildingReply: boolean = false;
   private videoFullscreen: boolean = false;
   @Local videoMode: boolean = false;
@@ -426,17 +443,36 @@ export struct ThreadDetailPage {
         this.hostContext(), target, this.commentPermissionOwner);
       if (!this.commentsActive) { return; }
       if (message.length > 0) {
-        this.getUIContext().getPromptAction().showToast({ message });
+        this.safeToast(message);
         return;
       }
       if (previous === ThreadReplyPermission.SELF_ONLY || target === ThreadReplyPermission.SELF_ONLY) {
         this.sourceReplyCount = -1;
       }
       this.closeCommentPermissionDialog();
-      this.getUIContext().getPromptAction().showToast({ message: '设置成功' });
+      this.safeToast('设置成功');
     } finally {
       this.pendingCommentPermission = ThreadReplyPermission.UNKNOWN;
     }
+  }
+
+  private safeToast(message: string, duration?: number): void {
+    try {
+      if (duration !== undefined) {
+        this.getUIContext().getPromptAction().showToast({ message, duration });
+      } else {
+        this.getUIContext().getPromptAction().showToast({ message });
+      }
+    } catch (_) {}
+  }
+
+  private async handleSubmitPoll(optionIds: number[]): Promise<void> {
+    if (!authSession.isLoggedIn()) {
+      this.safeToast('请先登录后再投票');
+      return;
+    }
+    const err: string = await this.vm.submitPoll(this.hostContext(), optionIds);
+    this.safeToast(err.length > 0 ? err : '投票成功');
   }
 
   private async confirmDeleteComment(post: PostItem, sub?: SubPostItem): Promise<void> {
@@ -524,8 +560,26 @@ export struct ThreadDetailPage {
     const tidForHistory: number = this.vm.tid > 0 ? this.vm.tid : tid;
     const targetPid: number = this.routeParams?.targetPid ?? 0;
     const targetIsSubPost: boolean = this.routeParams?.targetIsSubPost === true;
+    const accountKey: string = authSession.forumCacheSessionKey();
+    void warmReplyDrafts(context).then((): void => {
+      if (!this.commentsActive) { return; }
+      this.mainReplyDraft = peekReplyDraft(accountKey, tidForHistory, 0, 0);
+    });
+    const shouldCheckResume: boolean = targetPid <= 0 && !this.commentsJumpPending;
+    const progressTask: Promise<BrowseProgress> = shouldCheckResume
+      ? readBrowseProgress(context, tidForHistory)
+      : Promise.resolve(new BrowseProgress());
     this.vm.load(context, tid, targetPid, targetIsSubPost).then(() => {
       this.requestCommentsJump();
+      if (shouldCheckResume && this.vm.errorText.length === 0 && this.vm.loadedOnce && !this.videoMode) {
+        void progressTask.then((progress: BrowseProgress): void => {
+          if (!this.commentsActive || this.videoMode || this.vm.sortType !== ReplySortType.ASC) { return; }
+          if (progress.floor >= 5 && this.trackedFloor < progress.floor) {
+            this.resumeFloor = progress.floor;
+            this.scheduleResumeAutoHide();
+          }
+        });
+      }
       if (targetPid > 0 && this.vm.errorText.length === 0) {
         const focusPid: number = this.vm.focusedReplyPid > 0 ? this.vm.focusedReplyPid : targetPid;
         const focusSubPid: number = this.vm.focusedSubPostPid;
@@ -630,6 +684,9 @@ export struct ThreadDetailPage {
   aboutToDisappear(): void {
     ++this.keyboardWatchSeq;
     this.commentsActive = false;
+    this.flushReadingProgress();
+    this.clearResumeTimers();
+    this.clearReplyDraftTimer();
     this.closeCommentPermissionDialog();
     // 离页后不再补页：探测回调哪怕排上了队也一并撤掉
     if (this.atEndProbeTimer >= 0) {
@@ -680,9 +737,10 @@ export struct ThreadDetailPage {
         if (seq !== this.keyboardWatchSeq) { return; }
         const area: window.AvoidArea =
           win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-        this.safeBottomVp = px2vp(area.bottomRect.height);
+        const ui = this.getUIContext();
+        this.safeBottomVp = ui.px2vp(area.bottomRect.height);
 
-        this.screenWvp = px2vp(win.getWindowProperties().windowRect.width);
+        this.screenWvp = ui.px2vp(win.getWindowProperties().windowRect.width);
         try {
           this.screenDensity = display.getDefaultDisplaySync().densityPixels;
         } catch (_) {
@@ -691,7 +749,7 @@ export struct ThreadDetailPage {
 
         this.keyboardAreaCb = (data: window.AvoidAreaOptions) => {
           if (data.type === window.AvoidAreaType.TYPE_KEYBOARD) {
-            this.keyboardVp = px2vp(data.area.bottomRect.height);
+            this.keyboardVp = ui.px2vp(data.area.bottomRect.height);
             if (this.keyboardVp > 0) {
               this.lastKeyboardVp = this.keyboardVp;
               this.replyAwaitKeyboard = false;
@@ -829,7 +887,7 @@ export struct ThreadDetailPage {
   private toggleLike(item: PostItem, objType: AgreeObjType = AgreeObjType.POST): void {
     this.vm.toggleAgree(this.hostContext(), item, objType).then((reason: string) => {
       if (reason.length > 0) {
-        promptAction.showToast({ message: reason, duration: 1800 });
+        this.getUIContext().getPromptAction().showToast({ message: reason, duration: 1800 });
       }
     });
   }
@@ -857,13 +915,29 @@ export struct ThreadDetailPage {
   private openReplyBox(pid: number, sub?: SubPostItem): void {
     if (this.vm.replyPending) { return; }
     this.replyEditEpoch++;
+    const epoch: number = this.replyEditEpoch;
     this.replyImages.reset();
     this.replyTargetPid = pid > 0 ? pid : 0;
     this.replyTargetSubPost = sub;
     this.replyTargetName = sub !== undefined ? sub.author.displayName : pid > 0 ? this.authorNameOf(pid) : '';
     // RichEditor 是同一 controller 跨弹窗复用：先清掉上一次的图文残留
     this.richCtl.deleteSpans();
-    this.replyText = '';
+    const accountKey: string = authSession.forumCacheSessionKey();
+    const subPid: number = sub !== undefined ? sub.pid : 0;
+    const cachedDraft: string = peekReplyDraft(accountKey, this.vm.tid, this.replyTargetPid, subPid);
+    this.replyText = cachedDraft;
+    if (cachedDraft.length === 0 && this.vm.tid > 0) {
+      void loadReplyDraft(this.hostContext(), accountKey, this.vm.tid, this.replyTargetPid, subPid)
+        .then((loaded: string): void => {
+          if (epoch !== this.replyEditEpoch || !this.showReply || loaded.length === 0 || this.replyText.length > 0) {
+            return;
+          }
+          this.replyText = loaded;
+          if (this.replyEditorReady) {
+            this.rebuildReplySpansIfAny();
+          }
+        });
+    }
     // 上次展开的面板不带进下一次：打开即紧凑输入形态
     this.showEmojiPanel = false;
     this.replyCardPinned = false;
@@ -916,7 +990,8 @@ export struct ThreadDetailPage {
       maskTransition: replacing ? TransitionEffect.IDENTITY : popupMotion(),
       autoCancel: true,
 
-      width: this.screenWvp > 0 ? this.screenWvp - REPLY_SHEET_SIDE_MARGIN * 2 : 336,
+      width: windowBreakpoint.dialogWidth(REPLY_SHEET_SIDE_MARGIN, 560,
+        this.screenWvp > 0 ? this.screenWvp - REPLY_SHEET_SIDE_MARGIN * 2 : 336),
       cornerRadius: REPLY_SHEET_RADIUS,
 
       systemMaterial: materialManager.officialOf(MaterialSlot.REPLY_SHEET),
@@ -955,6 +1030,7 @@ export struct ThreadDetailPage {
         // 面板还开着的话一并收掉（点空白 = 整组回复 UI 关闭，口径不变）
         action.dismiss();
         if (this.replyDialogSeq === seq) {
+          this.persistCurrentReplyDraft();
           this.showReply = false;
           this.replyEditEpoch++;
           this.replyImages.cancel();
@@ -966,6 +1042,7 @@ export struct ThreadDetailPage {
         hilog.info(0x0, 'ReplyFocus', 'card onDidDisappear seqMatch=%{public}s',
           String(this.replyDialogSeq === seq));
         if (this.replyDialogSeq === seq) {
+          this.persistCurrentReplyDraft();
           this.replyDialogId = 0;
           this.replyCardPinned = false;
           this.replyCardSwitching = false;
@@ -1022,8 +1099,22 @@ export struct ThreadDetailPage {
     });
   }
 
-  /** 关闭回复输入框。内容不清，误触出去还能回来接着写 */
-  private closeReplyBox(): void {
+  /** 关闭回复输入框。未发出的文字按回复目标持久化为草稿。 */
+  private closeReplyBox(clearCurrentDraft: boolean = false): void {
+    this.clearReplyDraftTimer();
+    const targetPid: number = this.replyTargetPid;
+    const targetSubPid: number = this.replyTargetSubPost !== undefined ? this.replyTargetSubPost.pid : 0;
+    if (this.showReply && this.vm.tid > 0) {
+      const accountKey: string = authSession.forumCacheSessionKey();
+      if (clearCurrentDraft) {
+        void clearReplyDraft(this.hostContext(), accountKey, this.vm.tid, targetPid, targetSubPid);
+        if (targetPid === 0 && targetSubPid === 0) { this.mainReplyDraft = ''; }
+      } else {
+        const cleaned: string = this.replyDraftPayload(this.replyText);
+        void saveReplyDraft(this.hostContext(), accountKey, this.vm.tid, targetPid, targetSubPid, cleaned);
+        if (targetPid === 0 && targetSubPid === 0) { this.mainReplyDraft = cleaned; }
+      }
+    }
     this.replyEditEpoch++;
     this.replyImages.cancel();
     if (this.replyDialogId !== 0) {
@@ -1238,7 +1329,7 @@ export struct ThreadDetailPage {
     this.syncReplyMirror();
     const invalid: string = this.replyImages.submissionError(this.replyText, REPLY_MAX_LENGTH);
     if (invalid.length > 0) {
-      promptAction.showToast({ message: invalid, duration: 1800 });
+      this.safeToast(invalid, 1800);
       return;
     }
     const text: string = this.replyImages.content(this.replyText);
@@ -1250,10 +1341,10 @@ export struct ThreadDetailPage {
       undefined, targetSubPost);
     if (editEpoch !== this.replyEditEpoch) { return; }
     if (tip.length > 0) {
-      promptAction.showToast({ message: tip, duration: 2200 });
+      this.safeToast(tip, 2200);
       return;
     }
-    this.closeReplyBox();
+    this.closeReplyBox(true);
     // 成功后清输入区：图文一起删（deleteSpans 不传参 = 全部），镜像归零
     this.richCtl.deleteSpans();
     this.replyText = '';
@@ -1261,10 +1352,10 @@ export struct ThreadDetailPage {
     if (targetPid > 0) {
       const visible: boolean = this.vm.subState(targetPid).subPosts.some(
         (sub: SubPostItem): boolean => sub.pid === this.vm.lastReplyPid);
-      promptAction.showToast({ message: visible ? '回复已发布' : '回复已发布，可在本层回复里查看', duration: 2200 });
+      this.safeToast(visible ? '回复已发布' : '回复已发布，可在本层回复里查看', 2200);
       return;
     }
-    promptAction.showToast({ message: '评论已发布，可刷新查看', duration: 2200 });
+    this.safeToast('评论已发布，可刷新查看', 2200);
   }
 
   /** 回复目标作者的昵称。找不到返回空串，占位文案退回通用的「发表评论」 */
@@ -1283,7 +1374,7 @@ export struct ThreadDetailPage {
     }
     const tid: number = this.vm.tid;
     if (!Number.isSafeInteger(tid) || tid <= 0) {
-      this.getUIContext().getPromptAction().showToast({ message: '帖子链接暂不可用' });
+      this.safeToast('帖子链接暂不可用');
       return;
     }
     this.shareOpening = true;
@@ -1294,7 +1385,7 @@ export struct ThreadDetailPage {
     } catch (err) {
       const error: BusinessError = err as BusinessError;
       hilog.error(0x0, 'ThreadShare', 'system share failed code=%{public}d', error.code);
-      this.getUIContext().getPromptAction().showToast({ message: '暂时无法打开系统分享，请稍后重试' });
+      this.safeToast('暂时无法打开系统分享，请稍后重试');
     } finally {
       this.shareOpening = false;
     }
@@ -1302,7 +1393,7 @@ export struct ThreadDetailPage {
 
   /** 写接口尚未实现时的统一反馈，避免给出虚假的操作结果 */
   toastNotAvailable(action: string): void {
-    promptAction.showToast({ message: `${action}暂未开放`, duration: 2000 });
+    this.safeToast(`${action}暂未开放`, 2000);
   }
 
   private forumTitleText(): string {
@@ -1312,7 +1403,7 @@ export struct ThreadDetailPage {
   private openForum(): void {
     const name: string = resolveForumName(this.vm.detail.forumName, this.vm.forumNameHint);
     if (name.length === 0) {
-      promptAction.showToast({ message: '吧信息还没加载出来', duration: 1800 });
+      this.safeToast('吧信息还没加载出来', 1800);
       return;
     }
 
@@ -1375,6 +1466,147 @@ export struct ThreadDetailPage {
     this.toastNotAvailable(label);
   }
 
+  private replyDraftPayload(raw: string): string {
+    return raw.replace(/#\(pic,[^)]+\)/g, '').trim();
+  }
+
+  private clearReplyDraftTimer(): void {
+    if (this.replyDraftTimer >= 0) {
+      clearTimeout(this.replyDraftTimer);
+      this.replyDraftTimer = -1;
+    }
+  }
+
+  private persistCurrentReplyDraft(): void {
+    this.clearReplyDraftTimer();
+    if (this.vm.tid <= 0) { return; }
+    const targetPid: number = this.replyTargetPid;
+    const targetSubPid: number = this.replyTargetSubPost !== undefined ? this.replyTargetSubPost.pid : 0;
+    const cleaned: string = this.replyDraftPayload(this.replyText);
+    void saveReplyDraft(this.hostContext(), authSession.forumCacheSessionKey(),
+      this.vm.tid, targetPid, targetSubPid, cleaned);
+    if (targetPid === 0 && targetSubPid === 0) {
+      this.mainReplyDraft = cleaned;
+    }
+  }
+
+  private scheduleReplyDraftSave(): void {
+    if (!this.showReply || this.vm.tid <= 0) { return; }
+    this.clearReplyDraftTimer();
+    this.replyDraftTimer = setTimeout((): void => {
+      this.replyDraftTimer = -1;
+      if (!this.showReply) { return; }
+      this.persistCurrentReplyDraft();
+    }, 600);
+  }
+
+  private clearResumeTimers(): void {
+    if (this.progressSaveTimer >= 0) {
+      clearTimeout(this.progressSaveTimer);
+      this.progressSaveTimer = -1;
+    }
+    if (this.resumeHideTimer >= 0) {
+      clearTimeout(this.resumeHideTimer);
+      this.resumeHideTimer = -1;
+    }
+  }
+
+  private scheduleResumeAutoHide(): void {
+    if (this.resumeHideTimer >= 0) { clearTimeout(this.resumeHideTimer); }
+    this.resumeHideTimer = setTimeout((): void => {
+      this.resumeHideTimer = -1;
+      if (!this.resumingFloor) {
+        this.resumeFloor = 0;
+      }
+    }, 8000);
+  }
+
+  private onPostScrollIndex(start: number, end: number): void {
+    if (this.vm.sortType !== ReplySortType.ASC || this.vm.visiblePosts.length <= 1) { return; }
+    const listIdx: number = start >= 2 ? start : (end >= 2 ? end : -1);
+    if (listIdx < 2) { return; }
+    const postIdx: number = listIdx - 1;
+    if (postIdx <= 0 || postIdx >= this.vm.visiblePosts.length) { return; }
+    const post: PostItem = this.vm.visiblePosts[postIdx];
+    if (post.floor < 2) { return; }
+    if (this.resumeFloor > 0 && !this.resumingFloor && post.floor >= this.resumeFloor) {
+      this.resumeFloor = 0;
+    }
+    if (post.floor === this.trackedFloor && post.pid === this.trackedPid) { return; }
+    this.trackedFloor = post.floor;
+    this.trackedPid = post.pid;
+    if (this.progressSaveTimer >= 0) { clearTimeout(this.progressSaveTimer); }
+    this.progressSaveTimer = setTimeout((): void => {
+      this.progressSaveTimer = -1;
+      this.flushReadingProgress();
+    }, 1200);
+  }
+
+  private flushReadingProgress(): void {
+    if (this.vm.tid <= 0 || this.trackedFloor < 2) { return; }
+    void saveBrowseProgress(this.hostContext(), this.vm.tid, this.trackedFloor, this.trackedPid);
+  }
+
+  private async triggerResumeFloor(): Promise<void> {
+    const target: number = this.resumeFloor;
+    if (target < 2 || this.resumingFloor || this.vm.isJumpingFloor) { return; }
+    this.resumingFloor = true;
+    if (this.resumeHideTimer >= 0) {
+      clearTimeout(this.resumeHideTimer);
+      this.resumeHideTimer = -1;
+    }
+    try {
+      const result: FloorJumpResult = await this.vm.jumpToFloor(this.hostContext(), target);
+      if (!this.commentsActive) { return; }
+      this.resumeFloor = 0;
+      if (result.status === FloorJumpStatus.FOUND) {
+        if (result.loadedNewPage) {
+          this.getUIContext().postFrameCallback(new ThreadCommentsFrame((): void => {
+            if (!this.commentsActive) { return; }
+            this.jumpToPost(result.index);
+          }));
+        } else {
+          this.jumpToPost(result.index);
+        }
+      } else if (result.message.length > 0 && result.status !== FloorJumpStatus.CANCELLED) {
+        this.safeToast(result.message, 2000);
+      }
+    } finally {
+      this.resumingFloor = false;
+    }
+  }
+
+  @Builder
+  ResumeProgressPill() {
+    Row({ space: 8 }) {
+      if (this.resumingFloor) {
+        LoadingProgress().width(14).height(14).color(AppTheme.ACCENT)
+      } else {
+        SymbolGlyph($r('sys.symbol.bookmark')).fontSize(14).maxFontScale(1).fontColor([AppTheme.ACCENT])
+      }
+      Text(this.resumingFloor ? `正在定位第 ${this.resumeFloor} 楼…` : `上次看到第 ${this.resumeFloor} 楼`)
+        .fontSize(13).fontColor(AppTheme.TEXT_MAIN).maxLines(1)
+      if (!this.resumingFloor) {
+        Text('定位').fontSize(13).fontWeight(FontWeight.Medium).fontColor(AppTheme.ACCENT)
+        SymbolGlyph($r('sys.symbol.xmark')).fontSize(12).maxFontScale(1).fontColor([AppTheme.TEXT_MUTED])
+          .padding({ left: 4, top: 4, bottom: 4 })
+          .accessibilityText('关闭上次阅读位置提示')
+          .onClick((): void => {
+            this.resumeFloor = 0;
+            if (this.resumeHideTimer >= 0) { clearTimeout(this.resumeHideTimer); this.resumeHideTimer = -1; }
+          })
+      }
+    }
+    .padding({ left: 14, right: 12, top: 9, bottom: 9 })
+    .borderRadius(20)
+    .backgroundColor(AppTheme.CARD)
+    .border({ width: 0.5, color: AppTheme.DIVIDER })
+    .shadow({ radius: 14, color: '#24000000', offsetX: 0, offsetY: 4 })
+    .margin({ bottom: BOTTOM_BAR_BOTTOM_MARGIN + ACTION_PILL_HEIGHT + 12 })
+    .id('thread-resume-floor-pill')
+    .onClick((): void => { void this.triggerResumeFloor(); })
+  }
+
   private closeJumpDialog(): void {
     this.showJump = false;
     this.vm.cancelJumpToFloor();
@@ -1384,12 +1616,12 @@ export struct ThreadDetailPage {
     if (this.vm.isJumpingFloor) { return; }
     const raw: string = this.jumpText.trim();
     if (!/^\d+$/.test(raw)) {
-      promptAction.showToast({ message: '请输入有效的楼层号', duration: 1800 });
+      this.safeToast('请输入有效的楼层号', 1800);
       return;
     }
     const floor: number = Number(raw);
     if (!Number.isSafeInteger(floor) || floor < 1) {
-      promptAction.showToast({ message: '请输入有效的楼层号', duration: 1800 });
+      this.safeToast('请输入有效的楼层号', 1800);
       return;
     }
 
@@ -1409,7 +1641,7 @@ export struct ThreadDetailPage {
     }
     if (result.status === FloorJumpStatus.CANCELLED) { return; }
     if (result.message.length > 0) {
-      promptAction.showToast({ message: result.message, duration: 2200 });
+      this.safeToast(result.message, 2200);
     }
   }
 
@@ -1442,8 +1674,13 @@ export struct ThreadDetailPage {
         if (!this.videoComments) {
           Column() {
             Row() {
-              SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([Color.White])
-                .width(44).height(44).onClick(() => { NavigationService.back(); })
+              Row() {
+                SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).maxFontScale(1).fontColor([Color.White])
+              }
+              .width(44).height(44)
+              .justifyContent(FlexAlign.Center).alignItems(VerticalAlign.Center)
+              .accessibilityGroup(true).accessibilityText('返回')
+              .onClick(() => { NavigationService.back(); })
               Row({ space: 8 }) {
                 ForumAvatarImage({ url: this.vm.detail.forumAvatar, forumName: this.vm.forumNameHint,
                   avatarSize: 28, radius: forumAvatarRadius(28), onHero: true })
@@ -1538,6 +1775,9 @@ export struct ThreadDetailPage {
           // 底部操作栏 / 菜单 / 弹层 / 查看器：悬浮层语义不变（Stack 后声明者在上）
           if (!this.videoMode && this.vm.posts.length > 0 && !this.showJump
             && !this.showReply && this.subDetailPid === 0) {
+            if (this.resumeFloor >= 5 && this.viewerUrl.length === 0) {
+              this.ResumeProgressPill();
+            }
             this.BottomActionBar();
           }
 
@@ -1616,6 +1856,7 @@ export struct ThreadDetailPage {
       .onShown((): void => { this.pageVisible = true; })
       .onHidden((reason: VisibilityChangeReason): void => {
         this.pageVisible = false;
+        this.flushReadingProgress();
         // 全屏视频的 ContentCover 会隐藏 destination，但仍使用同一 AVPlayer。
         // 导航离开、退后台及其它覆盖层仍释放；未知原因也不跳过释放。
         if (reason === VisibilityChangeReason.CONTENT_COVER && this.videoFullscreen) { return; }
@@ -1712,7 +1953,7 @@ export struct ThreadDetailPage {
         this.vm.toggleAgree(this.hostContext(), sub, AgreeObjType.SUB_POST, this.subDetailPid)
           .then((reason: string) => {
             if (reason.length > 0) {
-              promptAction.showToast({ message: reason, duration: 1800 });
+              this.getUIContext().getPromptAction().showToast({ message: reason, duration: 1800 });
             }
           });
       },
@@ -1835,66 +2076,11 @@ export struct ThreadDetailPage {
 
   @Builder
   AuthorBar() {
-    Row({ space: 10 }) {
-      AvatarComponent({ url: this.vm.detail.author.portraitUrl, avatarSize: 40, fallbackName: this.vm.detail.author.displayName })
-        .id('thread-author-avatar').flexShrink(0)
-        .onClick(() => { openUserByIdentity(this.vm.detail.author.id, this.vm.detail.author.portraitUrl, this.vm.detail.author.displayName, this.getUIContext()); })
-
-      Column({ space: 4 }) {
-        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-          Text(this.vm.detail.author.displayName.length > 0
-            ? this.vm.detail.author.displayName : '匿名用户')
-            .fontSize(POST_NICKNAME_SIZE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppTheme.TEXT_MAIN)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .id('thread-author-name')
-            .onClick(() => { openUserByIdentity(this.vm.detail.author.id, this.vm.detail.author.portraitUrl, this.vm.detail.author.displayName, this.getUIContext()); })
-            .margin({ right: 6 })
-
-          if (this.authorLevelText().length > 0) {
-            if (forumLevelStore.style === 1 && this.vm.detail.author.level > 0) {
-              ForumLevelBadge({ level: this.vm.detail.author.level, levelName: this.vm.detail.author.levelName })
-            } else {
-              this.LevelChip(this.authorLevelText())
-            }
-          }
-          if (this.vm.detail.author.isBawu) {
-            Row() {
-              ThreadBawuBadge({ text: this.vm.detail.author.bawuTitle.length > 0
-                ? this.vm.detail.author.bawuTitle : '吧务', textColor: AppTheme.ACCENT_DARK,
-                backgroundColor: AppTheme.ACCENT_LIGHT, borderColor: AppTheme.ACCENT })
-            }
-            .margin({ right: 6 })
-          }
-        }
-        .width('100%')
-        .id('thread-author-identities')
-
-        // 第二行：`时间 · 地区`。两段都缺时整行不渲染，不留空
-        if (this.authorMetaLine().length > 0) {
-          Text(this.authorMetaLine())
-            .fontSize(12)
-            .fontColor(AppTheme.TEXT_SUB)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-            .id('thread-author-meta')
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .id('thread-author-info')
-
-      FollowButton({ kind: 'user', targetId: this.vm.detail.author.id,
-        portrait: this.vm.detail.author.portraitUrl, targetName: this.vm.detail.author.displayName })
-        .id('thread-author-follow').flexShrink(0)
-    }
-    .width('100%')
-
-    .padding({ bottom: 2 })
-    .alignItems(VerticalAlign.Center)
+    ThreadAuthorBar({
+      author: this.vm.detail.author,
+      levelText: this.authorLevelText(),
+      metaLine: this.authorMetaLine()
+    })
   }
 
   @Builder
@@ -1903,250 +2089,66 @@ export struct ThreadDetailPage {
       avatarSize: size, radius: forumAvatarRadius(size), fontSize: 13, bgColor: AppTheme.SURFACE_MUTED })
   }
 
-  /** 吧内等级：贴吧用等级名而不是裸数字，样式与"楼主/吧务"区分开（浅底无边框） */
-  @Builder
-  LevelChip(text: string) {
-    Text(text)
-      .fontSize(10)
-      .fontColor(AppTheme.ACCENT_DARK)
-      .backgroundColor(AppTheme.ACCENT_LIGHT)
-      .borderRadius(5)
-      .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-      .margin({ right: 6 })
-  }
-
   @Builder
   MoreMenu() {
-    Column({ space: 2 }) {
-      Text(this.vm.sortType === ReplySortType.ONLY_AUTHOR ? '显示全部回复' : '只看楼主')
-        .fontSize(14)
-        .textAlign(TextAlign.Center)
-        .fontColor(AppTheme.TEXT_MAIN)
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .onClick(() => {
-          const target: ReplySortType = this.vm.sortType === ReplySortType.ONLY_AUTHOR
-            ? ReplySortType.ASC : ReplySortType.ONLY_AUTHOR;
-          this.vm.switchReplySort(this.hostContext(), target);
-          this.showMore = false;
-        })
-
-      Text('跳转楼层')
-        .fontSize(14)
-        .textAlign(TextAlign.Center)
-        .fontColor(AppTheme.TEXT_MAIN)
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .onClick(() => {
-          this.jumpText = '';
-          this.showMore = false;
-          this.showJump = true;
-        })
-
-      Text('回到顶部')
-        .fontSize(14)
-        .textAlign(TextAlign.Center)
-        .fontColor(AppTheme.TEXT_MAIN)
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .onClick(() => {
-          this.jumpToTop();
-          this.showMore = false;
-        })
-
-      Text('分享')
-        .fontSize(14)
-        .textAlign(TextAlign.Center)
-        .fontColor(AppTheme.TEXT_MAIN)
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-        .onClick(() => {
-          this.showMore = false;
-          this.shareThread();
-        })
-      if (this.vm.canManageReplyPermission()) {
-        Text('评论权限')
-          .fontSize(14)
-          .textAlign(TextAlign.Center)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .width('100%')
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-          .enabled(!this.vm.deletePending)
-          .id('thread-comment-permission-entry')
-          .onClick((): void => { this.openCommentPermissionSheet(); })
-      }
-      if (this.vm.canDeleteThread()) {
-        Text(this.vm.deletePending ? '正在删除…' : '删除帖子')
-          .fontSize(14)
-          .textAlign(TextAlign.Center)
-          .fontColor(BrandTheme.DANGER_TEXT)
-          .width('100%')
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-          .enabled(!this.vm.deletePending)
-          .id('thread-delete-entry')
-          .onClick((): void => { void this.confirmDeleteThread(); })
-      }
-    }
-    .width(120)
-    .padding({ top: 4, bottom: 4 })
-    .id('thread-more-menu')
+    ThreadMoreMenu({
+      sortType: this.vm.sortType,
+      canManageReplyPermission: this.vm.canManageReplyPermission(),
+      canDeleteThread: this.vm.canDeleteThread(),
+      deletePending: this.vm.deletePending,
+      onToggleOnlyAuthor: (): void => {
+        const target: ReplySortType = this.vm.sortType === ReplySortType.ONLY_AUTHOR
+          ? ReplySortType.ASC : ReplySortType.ONLY_AUTHOR;
+        this.vm.switchReplySort(this.hostContext(), target);
+        this.showMore = false;
+      },
+      onJumpFloor: (): void => {
+        this.jumpText = '';
+        this.showMore = false;
+        this.showJump = true;
+      },
+      onJumpTop: (): void => {
+        this.jumpToTop();
+        this.showMore = false;
+      },
+      onShare: (): void => {
+        this.showMore = false;
+        this.shareThread();
+      },
+      onCommentPermission: (): void => { this.openCommentPermissionSheet(); },
+      onDeleteThread: (): void => { void this.confirmDeleteThread(); }
+    })
   }
 
   @Builder
   CommentPermissionSheet() {
-    Column() {
-      Column({ space: 4 }) {
-        Text('评论权限')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .textAlign(TextAlign.Center)
-        Text('仅对该贴生效，不影响设置页权限')
-          .fontSize(12.5)
-          .fontColor(AppTheme.TEXT_SUB)
-          .textAlign(TextAlign.Center)
+    ThreadCommentPermissionSheet({
+      currentPermission: this.vm.replyPermission,
+      pending: this.vm.replyPermissionPending,
+      pendingPermission: this.pendingCommentPermission,
+      onSelect: (permission: ThreadReplyPermission): void => {
+        void this.selectCommentPermission(permission);
+      },
+      onCancel: (): void => {
+        this.closeCommentPermissionDialog();
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center)
-      .padding({ left: 24, right: 24, top: 22, bottom: 14 })
-
-      Divider()
-        .color(AppTheme.DIVIDER)
-        .strokeWidth(0.5)
-        .margin({ left: 20, right: 20 })
-
-      ForEach(THREAD_REPLY_PERMISSION_OPTIONS, (option: ThreadReplyPermissionOption, index: number) => {
-        Column() {
-          Row({ space: 12 }) {
-            Text(option.label)
-              .fontSize(15)
-              .fontWeight(this.vm.replyPermission === option.permission ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.vm.replyPermission === option.permission ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)
-              .layoutWeight(1)
-            if (this.vm.replyPermissionPending && this.pendingCommentPermission === option.permission) {
-              LoadingProgress()
-                .width(18)
-                .height(18)
-                .color(AppTheme.ACCENT)
-            } else if (this.vm.replyPermission === option.permission) {
-              SymbolGlyph($r('sys.symbol.checkmark'))
-                .fontSize(18)
-                .maxFontScale(1)
-                .fontColor([AppTheme.ACCENT])
-            }
-          }
-          .width('100%')
-          .constraintSize({ minHeight: 50 })
-          .padding({ left: 24, right: 24, top: 12, bottom: 12 })
-          .alignItems(VerticalAlign.Center)
-          .enabled(!this.vm.replyPermissionPending)
-          .accessibilityGroup(true)
-          .accessibilityText(option.label)
-          .accessibilitySelected(this.vm.replyPermission === option.permission)
-          .id(`thread-comment-permission-option-${option.permission}`)
-          .onClick((): void => { void this.selectCommentPermission(option.permission); })
-
-          if (index < THREAD_REPLY_PERMISSION_OPTIONS.length - 1) {
-            Divider()
-              .color(AppTheme.DIVIDER)
-              .strokeWidth(0.5)
-              .margin({ left: 24, right: 24 })
-          }
-        }
-        .width('100%')
-      }, (option: ThreadReplyPermissionOption): string => String(option.permission))
-
-      Divider()
-        .color(AppTheme.DIVIDER)
-        .strokeWidth(0.5)
-        .margin({ left: 20, right: 20 })
-
-      Text('取消')
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(AppTheme.TEXT_SUB)
-        .textAlign(TextAlign.Center)
-        .width('100%')
-        .padding({ top: 14, bottom: 16 })
-        .enabled(!this.vm.replyPermissionPending)
-        .id('thread-comment-permission-cancel')
-        .onClick((): void => {
-          if (!this.vm.replyPermissionPending) { this.closeCommentPermissionDialog(); }
-        })
-    }
-    .width('100%')
-    .id('thread-comment-permission-sheet')
+    })
   }
 
   @Builder
   JumpDialog() {
-    Stack() {
-      Column({ space: 14 }) {
-        Text('跳转楼层')
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(AppTheme.TEXT_MAIN)
-
-        TextInput({ text: this.jumpText, placeholder: '输入楼层号，如 25' })
-          .caretColor(AppTheme.ACCENT)
-          .selectedBackgroundColor(BrandTheme.SELECTION_BACKGROUND)
-          .type(InputType.Number)
-          .enabled(!this.vm.isJumpingFloor)
-          .fontSize(15)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .placeholderColor(AppTheme.TEXT_MUTED)
-          .width(210)
-          .height(44)
-          .backgroundColor(AppTheme.SURFACE_MUTED)
-          .borderRadius(12)
-          .onChange((value: string) => {
-            this.jumpText = value;
-          })
-          .onSubmit(() => {
-            void this.jumpToFloor();
-          })
-
-        Row({ space: 12 }) {
-          Text('取消')
-            .fontSize(14)
-            .fontColor(AppTheme.TEXT_SUB)
-            .textAlign(TextAlign.Center)
-            .width(92)
-            .height(38)
-            .borderRadius(19)
-            .backgroundColor(AppTheme.SURFACE_MUTED)
-            .onClick(() => {
-              this.closeJumpDialog();
-            })
-
-          Text(this.vm.isJumpingFloor ? '跳转中…' : '跳转')
-            .fontSize(14)
-            .fontColor(BrandTheme.ON_ACCENT)
-            .textAlign(TextAlign.Center)
-            .width(92)
-            .height(38)
-            .borderRadius(19)
-            .backgroundColor(AppTheme.ACCENT)
-            .opacity(this.vm.isJumpingFloor ? 0.65 : 1)
-            .enabled(!this.vm.isJumpingFloor)
-            .onClick(() => {
-              void this.jumpToFloor();
-            })
-        }
+    ThreadJumpFloorDialog({
+      text: this.jumpText,
+      jumping: this.vm.isJumpingFloor,
+      onChange: (value: string): void => {
+        this.jumpText = value;
+      },
+      onSubmit: (): void => {
+        void this.jumpToFloor();
+      },
+      onClose: (): void => {
+        this.closeJumpDialog();
       }
-      .padding({ left: 22, right: 22, top: 22, bottom: 20 })
-      .borderRadius(18)
-      .backgroundColor(AppTheme.CARD)
-      .shadow({ radius: 24, color: '#40000000', offsetY: 8 })
-      .onClick(() => {})
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(AppTheme.OVERLAY)
-    .transition(motionTransition(TransitionEffect.OPACITY, MotionEffect.FADE)
-      .animation({ duration: motionDuration(180, MotionEffect.FADE), curve: Curve.EaseOut }))
-    .onClick(() => {
-      this.closeJumpDialog();
     })
   }
 
@@ -2394,7 +2396,7 @@ export struct ThreadDetailPage {
       if (inserted < 0) { this.replyImages.restoreAttachment(image); return; }
     } catch (err) {
       this.replyImages.restoreAttachment(image);
-      promptAction.showToast({ message: '图片未插入输入框，已保留为回复附件', duration: 1800 });
+      this.safeToast('图片未插入输入框，已保留为回复附件', 1800);
     } finally { this.rebuildingReply = false; }
     this.syncReplyMirror();
   }
@@ -2406,6 +2408,7 @@ export struct ThreadDetailPage {
       this.replyImages.inlineTokenTable());
     this.replyText = content.text;
     this.replyImages.reconcileInline(content.imageCounts);
+    this.scheduleReplyDraftSave();
 
   }
 
@@ -2417,7 +2420,7 @@ export struct ThreadDetailPage {
   appendReplyText(text: string): void {
     if (this.vm.replyPending) { return; }
     if (this.replyText.length + text.length > REPLY_MAX_LENGTH) {
-      promptAction.showToast({ message: '已达 500 字上限', duration: 1500 });
+      this.safeToast('已达 500 字上限', 1500);
       return;
     }
     this.richCtl.addTextSpan(text, { style: { fontColor: AppTheme.TEXT_MAIN } });
@@ -2550,6 +2553,8 @@ export struct ThreadDetailPage {
           .backgroundColor(Color.Transparent)
       }
       .width('100%')
+      .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+      .alignSelf(ItemAlign.Center)
       .layoutWeight(1)
       .padding({ top: this.videoMode ? 0 : this.titleBarH })
       .cachedCount(2)
@@ -2565,6 +2570,9 @@ export struct ThreadDetailPage {
       })
 
        .scrollBar(BarState.Off)
+       .onScrollIndex((start: number, end: number): void => {
+         this.onPostScrollIndex(start, end);
+       })
        .onReachEnd(() => {
         /*
          * 先挪开 1px 再请求：`maintainVisibleContentPosition` 只管"可视区外插入时保持
@@ -2633,6 +2641,20 @@ export struct ThreadDetailPage {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
 
+      if (this.vm.poll !== undefined) {
+        ThreadPollCard({
+          poll: this.vm.poll,
+          pending: this.vm.pollPending,
+          loggedIn: authSession.isLoggedIn(),
+          onVote: (optionIds: number[]): void => {
+            this.handleSubmitPoll(optionIds);
+          },
+          onOpenImage: (url: string): void => {
+            this.openGalleryImage([url], 0);
+          }
+        })
+      }
+
       if (item.subPostCount > 0) {
         this.SubPostEntry(item)
         // 主帖的楼中楼仍旧就地展开：它不在回复列表里，没有"点进详情"的去处
@@ -2652,8 +2674,8 @@ export struct ThreadDetailPage {
   ReplySummary() {
     Row() {
       Text(`共 ${this.displayedReplyCount()} 回复`)
-        .fontSize(COMMENT_NICKNAME_SIZE)
-        .fontWeight(FontWeight.Normal)
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
         .fontColor(AppTheme.TEXT_MAIN)
       Blank()
         .layoutWeight(1)
@@ -2663,15 +2685,16 @@ export struct ThreadDetailPage {
         this.ReplySortSegment('倒序', ReplySortType.DESC)
         this.ReplySortSegment('楼主', ReplySortType.ONLY_AUTHOR)
       }
-      .padding(1.5)
-      .borderRadius(13.5)
+      .padding(2)
+      .borderRadius(14)
       .backgroundColor(AppTheme.SURFACE_MUTED)
     }
     .width('100%')
     .id('thread-comments-summary')
     .height(42)
+    .alignItems(VerticalAlign.Center)
     .margin({ top: 12, bottom: 12 })
-    .padding({ left: 16, right: 16, top: 7.5, bottom: 6 })
+    .padding({ left: 16, right: 16 })
     .backgroundColor(AppTheme.BG)
   }
 
@@ -2682,18 +2705,18 @@ export struct ThreadDetailPage {
   @Builder
   ReplySortSegment(label: string, type: ReplySortType) {
     Text(label)
-      .fontSize(COMMENT_NICKNAME_SIZE)
-      .fontWeight(FontWeight.Medium)
+      .fontSize(12)
+      .fontWeight(this.vm.sortType === type ? FontWeight.Medium : FontWeight.Normal)
       .fontColor(this.vm.sortType === type ? AppTheme.TEXT_MAIN : AppTheme.TEXT_SUB)
       .textAlign(TextAlign.Center)
       .height(24)
-      .padding({ left: 8.25, right: 8.25 })
+      .padding({ left: 9, right: 9 })
       .borderRadius(12)
       .backgroundColor(this.vm.sortType === type ? AppTheme.CARD : Color.Transparent)
       .opacity(isReplySortSupported(type) ? 1 : 0.45)
       .onClick(() => {
         if (!isReplySortSupported(type)) {
-          promptAction.showToast({ message: unsupportedSortTip(type), duration: 2200 });
+          this.getUIContext().getPromptAction().showToast({ message: unsupportedSortTip(type), duration: 2200 });
           return;
         }
         this.vm.switchReplySort(this.hostContext(), type);
@@ -2747,6 +2770,25 @@ export struct ThreadDetailPage {
       } })
   }
 
+  private contentBlockKey(block: ContentBlock, index: number): string {
+    if (block.isVoice && block.voice !== undefined) {
+      return `v:${index}:${block.voice.id}:${block.voice.durationMs}`;
+    }
+    if (block.isImage) {
+      const urls: string[] = [];
+      for (let i: number = 0; i < block.images.length; i++) {
+        urls.push(block.images[i].imageUrl);
+      }
+      return `i:${index}:${block.imageStartIndex}:${urls.join('|')}`;
+    }
+    const parts: string[] = [];
+    for (let i: number = 0; i < block.pieces.length; i++) {
+      const p: ContentPiece = block.pieces[i];
+      parts.push(`${p.kind}:${p.text}:${p.emojiUrl}:${p.link}`);
+    }
+    return `t:${index}:${parts.join('|')}`;
+  }
+
   /** 图片被文字拆成不同区段时，仍共享当前渲染实例的完整图库。 */
   @Builder
   RichPiecesBlocks(pieces: ContentPiece[], fontSize: number, lineHeight: number, textColor: ResourceColor,
@@ -2761,7 +2803,7 @@ export struct ThreadDetailPage {
       } else {
         this.TextBlock(block, fontSize, lineHeight, textColor)
       }
-    }, (block: ContentBlock, index: number) => `${index}`)
+    }, (block: ContentBlock, index: number) => this.contentBlockKey(block, index))
   }
 
   @Builder
@@ -3125,17 +3167,19 @@ export struct ThreadDetailPage {
       SymbolGlyph($r('sys.symbol.pencil_line'))
         .fontSize(22)
         .fontColor([AppTheme.TEXT_MAIN])
-      Text('写评论')
+      Text(this.mainReplyDraft.length > 0 ? `[草稿] ${this.mainReplyDraft}` : '写评论')
         .fontSize(15)
-        .fontColor(AppTheme.TEXT_MAIN)
+        .fontColor(this.mainReplyDraft.length > 0 ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
     }
 
     .height('100%')
 
     .width('100%')
-    // 图标左沿钉在「左半圆与上下边切点」的垂线上 = 节点左沿 + 半径 26vp；
-    // 容器左沿在节点内 12vp → 左内边距 = 26 − 12 = 14vp（真机实测 140px 命中）。
-    .padding({ left: 14, right: REPLY_PILL_PADDING })
+    // 图标左沿对齐左半圆切点（节点左沿 + ACTION_PILL_RADIUS），容器左沿已在节点内 12vp。
+    .padding({ left: ACTION_PILL_RADIUS - 12, right: REPLY_PILL_PADDING })
     .onClick(() => {
       this.openReplyBox(0);
     })
@@ -3260,9 +3304,14 @@ export struct ThreadDetailPage {
     Row({ space: 4 }) {
       Stack() {
         Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.pencil_line')).fontSize(18).maxFontScale(1).fontColor([AppTheme.TEXT_SUB])
-          Text('写评论').fontSize(14).fontColor(AppTheme.TEXT_SUB).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          SymbolGlyph($r('sys.symbol.pencil_line')).fontSize(18).maxFontScale(1).fontColor([AppTheme.FLOAT_BAR_FG])
+          if (this.mainReplyDraft.length > 0) {
+            Text(`[草稿] ${this.mainReplyDraft}`).fontSize(14).fontColor(AppTheme.ACCENT).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          } else {
+            Text('写评论').fontSize(14).fontColor(AppTheme.FLOAT_BAR_FG).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+          }
         }.width('100%').height(36).padding({ left: 10, right: 8 })
       }.layoutWeight(2.3).height(44)
         .id('paper-write-comment').accessibilityGroup(true).accessibilityText('写评论')
@@ -3332,11 +3381,12 @@ export struct ThreadDetailPage {
       SymbolGlyph(this.mainLiked() ? $r('sys.symbol.hand_thumbsup_fill')
         : $r('sys.symbol.hand_thumbsup'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? (this.mainLiked() ? BrandTheme.EMPHASIS : AppTheme.TEXT_SUB) :
+        .fontColor([visualThemeStore.isPaper ? (this.mainLiked() ? BrandTheme.EMPHASIS : AppTheme.FLOAT_BAR_FG) :
           (this.mainLiked() ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.mainLikeCount() > 0 ? `${this.mainLikeCount()}` : '点赞')
         .fontSize(10)
-        .fontColor(this.mainLiked() ? (visualThemeStore.isPaper ? BrandTheme.EMPHASIS : AppTheme.ACCENT) : AppTheme.TEXT_SUB)
+        .fontColor(this.mainLiked() ? (visualThemeStore.isPaper ? BrandTheme.EMPHASIS : AppTheme.ACCENT)
+          : (visualThemeStore.isPaper ? AppTheme.FLOAT_BAR_FG : AppTheme.TEXT_SUB))
     }
     .layoutWeight(1)
     .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
@@ -3367,10 +3417,10 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(this.vm.collected ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.TEXT_SUB) : (this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
+        .fontColor([visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.FLOAT_BAR_FG) : (this.vm.collected ? AppTheme.ACCENT : AppTheme.TEXT_MAIN)])
       Text(this.vm.collected ? '已收藏' : '收藏')
         .fontSize(10)
-        .fontColor(visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.TEXT_SUB) : AppTheme.COMMENT_ACTION)
+        .fontColor(visualThemeStore.isPaper ? (this.vm.collected ? BrandTheme.GOLD : AppTheme.FLOAT_BAR_FG) : AppTheme.COMMENT_ACTION)
     }
     .layoutWeight(1)
     .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
@@ -3387,7 +3437,7 @@ export struct ThreadDetailPage {
   private toggleMainStore(): void {
     this.vm.toggleStore(this.hostContext()).then((reason: string) => {
       if (reason.length > 0) {
-        promptAction.showToast({ message: reason, duration: 1800 });
+        this.getUIContext().getPromptAction().showToast({ message: reason, duration: 1800 });
       }
     });
   }
@@ -3398,10 +3448,10 @@ export struct ThreadDetailPage {
       // 回复数入口：官方 Symbol `message`（原为字符 ▤）
       SymbolGlyph($r('sys.symbol.message'))
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? AppTheme.FLOAT_BAR_FG : AppTheme.TEXT_MAIN])
       Text(`${this.displayedReplyCount()}`)
         .fontSize(10)
-        .fontColor(AppTheme.TEXT_SUB)
+        .fontColor(visualThemeStore.isPaper ? AppTheme.FLOAT_BAR_FG : AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
     .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })
@@ -3417,10 +3467,10 @@ export struct ThreadDetailPage {
     Column({ space: 1 }) {
       SymbolGlyph(icon)
         .fontSize(22)
-        .fontColor([visualThemeStore.isPaper ? AppTheme.TEXT_SUB : AppTheme.TEXT_MAIN])
+        .fontColor([visualThemeStore.isPaper ? AppTheme.FLOAT_BAR_FG : AppTheme.TEXT_MAIN])
       Text(label)
         .fontSize(10)
-        .fontColor(AppTheme.TEXT_SUB)
+        .fontColor(visualThemeStore.isPaper ? AppTheme.FLOAT_BAR_FG : AppTheme.TEXT_SUB)
     }
     .layoutWeight(1)
     .constraintSize({ minHeight: visualThemeStore.isPaper ? 44 : 0 })

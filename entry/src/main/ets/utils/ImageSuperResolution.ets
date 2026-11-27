@@ -231,7 +231,7 @@ export async function srEncodePixelMap(pixelMap: image.PixelMap, format: string,
   const packer: image.ImagePacker = image.createImagePacker();
   try {
     const option: image.PackingOption = { format: format, quality: quality };
-    return await packer.packing(pixelMap, option);
+    return await packer.packToData(pixelMap, option);
   } finally {
     await packer.release();
   }

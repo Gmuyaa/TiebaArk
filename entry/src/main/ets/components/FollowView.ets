@@ -108,9 +108,15 @@ export struct FollowView {
   @Monitor('foreground.revision', 'active')
   onForegroundRefresh(): void {
     if (!this.active) {
+      this.wasActive = false;
+      this.clearTransitionDefer();
       this.foregroundRefreshPending = false; this.foregroundExperiencePending = false;
       this.resetPullRefresh();
       return;
+    }
+    if (!this.wasActive) {
+      this.wasActive = true;
+      this.deferForTransition(550);
     }
     if (this.foregroundRevision === this.foreground.revision) { return; }
     this.foregroundRevision = this.foreground.revision;
@@ -140,14 +146,48 @@ export struct FollowView {
   @Monitor('historyChanges.revision', 'active')
   syncRecentForums(): void {
     if (!this.active || this.historyRevision === this.historyChanges.revision) { return; }
+    if (this.transitionDeferring) { return; }
     this.historyRevision = this.historyChanges.revision;
     void this.recentVm.load(this.hostContext());
   }
   private relationshipRefreshPending: boolean = false;
   private visibleForums: Map<number, FollowForumItem> = new Map();
+  private visibleStartIndex: number = -1;
+  private visibleEndIndex: number = -1;
   private forumSource: FollowForumDataSource = new FollowForumDataSource();
   @Local private capsuleForums: FollowForumItem[] = [];
-  private listScrolling: boolean = false;
+  @Local private listScrolling: boolean = false;
+  /** 推入/返回子页或切 Tab 转场期间暂撤行内按钮实时材质，避免双页叠加 20+ 次 TakeSnapshot 拖垮转场帧率。 */
+  @Local private transitionDeferring: boolean = false;
+  private wasActive: boolean = true;
+  private transitionDeferTimer: number = -1;
+  private deferForTransition(durationMs: number): void {
+    this.transitionDeferring = true;
+    if (this.transitionDeferTimer >= 0) { clearTimeout(this.transitionDeferTimer); }
+    this.transitionDeferTimer = setTimeout((): void => {
+      this.transitionDeferTimer = -1;
+      this.transitionDeferring = false;
+      if (this.active && this.historyRevision !== this.historyChanges.revision) {
+        this.historyRevision = this.historyChanges.revision;
+        void this.recentVm.load(this.hostContext());
+      }
+    }, durationMs);
+  }
+  private clearTransitionDefer(): void {
+    if (this.transitionDeferTimer >= 0) {
+      clearTimeout(this.transitionDeferTimer);
+      this.transitionDeferTimer = -1;
+    }
+    this.transitionDeferring = false;
+  }
+  private readonly handleOpenForum: (fname: string) => void = (fname: string): void => {
+    if (fname.length === 0) { return; }
+    this.deferForTransition(800);
+    NavigationService.openForum({ forumName: fname });
+  };
+  private readonly handleSignTapBound: (target: FollowForumItem) => void = (target: FollowForumItem): void => {
+    this.handleSignTap(target);
+  };
   @Monitor('vm.forums')
   private syncForumSource(): void {
     const changed: boolean = this.forumSource.sync(this.vm.forums);
@@ -167,6 +207,9 @@ export struct FollowView {
     const force: boolean = this.active && this.foregroundExperiencePending;
     this.foregroundExperiencePending = false;
     if (!this.layoutStore.isCapsule) {
+      if (this.visibleStartIndex >= 0) {
+        this.syncVisibleForums();
+      }
       for (const item of this.vm.forums) {
         if (this.active && this.visibleForums.has(item.fid)) { this.vm.ensureExperience(this.hostContext(), item, force); }
       }
@@ -191,7 +234,10 @@ export struct FollowView {
     this.resetPullRefresh();
     this.foregroundExperiencePending = false;
     this.listScrolling = false;
+    this.visibleStartIndex = -1;
+    this.visibleEndIndex = -1;
     this.visibleForums.clear();
+    void this.recentVm.load(this.hostContext());
     void this.vm.load(this.hostContext());
   }
   /** 状态栏高度（vp），见 SafeArea.ets */
@@ -205,6 +251,7 @@ export struct FollowView {
     }).catch(() => {
       // 拿不到就保持兜底值
     });
+    this.wasActive = this.active;
     this.historyRevision = this.historyChanges.revision;
     void this.layoutStore.load(context);
     void this.recentVm.load(context);
@@ -218,6 +265,7 @@ export struct FollowView {
   }
   aboutToDisappear(): void {
     this.listScrolling = false;
+    this.clearTransitionDefer();
     this.resetPullRefresh();
     this.vm.dispose();
     this.recentVm.dispose();
@@ -306,7 +354,7 @@ export struct FollowView {
   ForumSquareEntry() {
     GlassCircleButton({ symbol: $r('sys.symbol.compass'), diameter: 40, iconSize: 22,
       iconWeight: FontWeight.Regular, accessibilityLabel: '吧广场',
-      onTap: (): void => { NavigationService.openForumSquare(); } })
+      onTap: (): void => { this.deferForTransition(800); NavigationService.openForumSquare(); } })
       .id('follow-square-entry').margin(4)
   }
 
@@ -322,7 +370,7 @@ export struct FollowView {
           title: '关注列表是空的',
           subtitle: '登录后可查看关注的吧；关注吧的帖子在首页关注频道查看',
           onLogin: (): void => {
-            router.pushUrl({ url: 'pages/Login' });
+            void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
           }
         })
         .padding({ top: this.headerHeight() })
@@ -357,7 +405,7 @@ export struct FollowView {
   private signAll(): void {
     if (this.signAllDisabled()) { return; }
     this.vm.signInAll(this.hostContext()).then((message: string) => {
-      if (message.length > 0) { promptAction.showToast({ message, duration: 2400 }); }
+      if (message.length > 0) { this.getUIContext().getPromptAction().showToast({ message, duration: 2400 }); }
     });
   }
 
@@ -368,6 +416,8 @@ export struct FollowView {
 
   private toggleLayout(): void {
     if (!this.layoutStore.isCapsule) {
+      this.visibleStartIndex = -1;
+      this.visibleEndIndex = -1;
       this.visibleForums.clear();
     }
     void this.layoutStore.toggle(this.hostContext());
@@ -443,8 +493,7 @@ export struct FollowView {
     .accessibilityGroup(true)
     .accessibilityText(`进入${displayForumName(item.forumName)}`)
     .onClick((): void => {
-      if (item.forumName.length === 0) { return; }
-      NavigationService.openForum({ forumName: item.forumName });
+      this.handleOpenForum(item.forumName);
     })
   }
 
@@ -486,10 +535,7 @@ export struct FollowView {
           onAvatarError: (): void => {
             void this.recentVm.retryAvatar(this.hostContext(), item.forumName);
           },
-          onOpenForum: (fname: string): void => {
-            if (fname.length === 0) { return; }
-            NavigationService.openForum({ forumName: fname });
-          }
+          onOpenForum: this.handleOpenForum
         })
       }, (item: RecentForumItem): string => this.recentCapsuleKey(item))
     }
@@ -552,7 +598,7 @@ export struct FollowView {
           title: '关注列表是空的',
           subtitle: '登录后可查看关注的吧；关注吧的帖子在首页关注频道查看',
           onLogin: (): void => {
-            router.pushUrl({ url: 'pages/Login' });
+            void this.getUIContext().getRouter().pushUrl({ url: 'pages/Login' });
           }
         })
       }
@@ -576,7 +622,7 @@ export struct FollowView {
     .height('100%')
   }
 
-  private forumGroupIndex(): number {
+  private forumStartIndex(): number {
     let idx: number = 1;
     if (this.recentVm.forums.length > 0) { idx++; }
     idx++;
@@ -584,28 +630,38 @@ export struct FollowView {
     return idx;
   }
 
-  private updateVisibleForums(start: VisibleListContentInfo, end: VisibleListContentInfo): void {
-    if (this.layoutStore.isCapsule) {
+  private syncVisibleForums(): void {
+    if (this.layoutStore.isCapsule || this.visibleStartIndex < 0 || this.visibleEndIndex < 0) {
       this.visibleForums.clear();
       return;
     }
     const total: number = this.vm.forums.length;
-    const groupIdx: number = this.forumGroupIndex();
-    if (total === 0 || end.index < groupIdx || start.index > groupIdx) {
+    const startIdx: number = this.forumStartIndex();
+    if (total === 0 || this.visibleEndIndex < startIdx || this.visibleStartIndex >= startIdx + total) {
       this.visibleForums.clear();
       return;
     }
-    const first: number = start.index < groupIdx ? 0 : Math.max(0, start.itemIndexInGroup ?? 0);
-    const last: number = end.index > groupIdx ? total - 1 :
-      Math.min(total - 1, end.itemIndexInGroup ?? (total - 1));
+    const first: number = Math.max(0, this.visibleStartIndex - startIdx);
+    const last: number = Math.min(total - 1, this.visibleEndIndex - startIdx);
     this.visibleForums.clear();
     for (let i: number = first; i <= last && i < total; i++) {
       const row: FollowForumItem = this.vm.forums[i];
       this.visibleForums.set(row.fid, row);
     }
-    if (!this.listScrolling) {
-      this.ensureVisibleExperiences(false);
+  }
+
+  private updateVisibleForums(start: VisibleListContentInfo, end: VisibleListContentInfo): void {
+    if (this.layoutStore.isCapsule) {
+      this.visibleStartIndex = -1;
+      this.visibleEndIndex = -1;
+      this.visibleForums.clear();
+      return;
     }
+    this.visibleStartIndex = start.index;
+    this.visibleEndIndex = end.index;
+    if (this.listScrolling) { return; }
+    this.syncVisibleForums();
+    this.ensureVisibleExperiences(false);
   }
 
   private ensureVisibleExperiences(force: boolean): void {
@@ -620,7 +676,7 @@ export struct FollowView {
     // 写操作防连点在 VM 内部（signingFname 占位）；结果用 toast 反馈
     this.vm.signIn(this.hostContext(), item).then((message: string) => {
       if (message.length > 0) {
-        promptAction.showToast({ message: message, duration: 2000 });
+        this.getUIContext().getPromptAction().showToast({ message: message, duration: 2000 });
       }
     });
   }
@@ -631,10 +687,7 @@ export struct FollowView {
       ForEach(this.capsuleForums, (item: FollowForumItem) => {
         FollowForumCapsule({
           item: item,
-          onOpenForum: (fname: string): void => {
-            if (fname.length === 0) { return; }
-            NavigationService.openForum({ forumName: fname });
-          }
+          onOpenForum: this.handleOpenForum
         })
       }, (item: FollowForumItem): string => followForumRowId(item))
     }
@@ -683,29 +736,20 @@ export struct FollowView {
             this.FollowCapsuleFlow()
           }.id('follow-capsule-flow')
         } else {
-          ListItemGroup() {
-            LazyForEach(this.forumSource, (item: FollowForumItem) => {
-              ListItem() {
-                FollowForumRow({
-                  item: item,
-                  signingFname: this.vm.signingFname,
-                  vmLoading: this.vm.loading,
-                  signingAll: this.vm.signingAll,
-                  onOpenForum: (fname: string): void => {
-                    if (fname.length === 0) { return; }
-                    NavigationService.openForum({ forumName: fname });
-                  },
-                  onSignTap: (target: FollowForumItem): void => { this.handleSignTap(target); }
-                })
-              }
-            }, (item: FollowForumItem): string => followForumRowId(item))
-          }
-          .divider({
-            strokeWidth: 0.5,
-            color: AppTheme.DIVIDER,
-            startMargin: 66,
-            endMargin: 16
-          })
+          LazyForEach(this.forumSource, (item: FollowForumItem, index: number) => {
+            ListItem() {
+              FollowForumRow({
+                item: item,
+                showTopDivider: index > 0,
+                scrolling: this.listScrolling || !this.active || this.transitionDeferring,
+                signingFname: this.vm.signingFname,
+                vmLoading: this.vm.loading,
+                signingAll: this.vm.signingAll,
+                onOpenForum: this.handleOpenForum,
+                onSignTap: this.handleSignTapBound
+              })
+            }
+          }, (item: FollowForumItem): string => followForumRowId(item))
         }
       }
       ListItem() {
@@ -721,6 +765,7 @@ export struct FollowView {
     .onScrollStart((): void => { this.listScrolling = true; })
     .onScrollStop((): void => {
       this.listScrolling = false;
+      this.syncVisibleForums();
       this.ensureVisibleExperiences(false);
     })
     .onScrollVisibleContentChange((start: VisibleListContentInfo, end: VisibleListContentInfo): void => {
@@ -734,11 +779,15 @@ export struct FollowView {
 @ComponentV2
 export struct FollowForumRow {
   @Param @Require item: FollowForumItem;
+  @Param showTopDivider: boolean = false;
+  @Param scrolling: boolean = false;
   @Param signingFname: string = '';
   @Param vmLoading: boolean = false;
   @Param signingAll: boolean = false;
   @Event onOpenForum: (fname: string) => void = (_fname: string): void => {};
   @Event onSignTap: (item: FollowForumItem) => void = (_item: FollowForumItem): void => {};
+  private readonly handleSignButtonTap: () => void = (): void => { this.onSignTap(this.item); };
+  private readonly handleRowClick: () => void = (): void => { this.onOpenForum(this.item.fname); };
 
   /** 进行中只用按钮内的转圈表示，文案保持稳定状态，不加「…中…」字样。 */
   private signLabel(): string {
@@ -748,49 +797,59 @@ export struct FollowForumRow {
   }
 
   build() {
-    Row({ space: 10 }) {
-      ForumAvatarImage({ url: this.item.avatar, forumName: this.item.fname,
-        avatarSize: 40, radius: 40 * 14 / 64 })
-
-      Column({ space: 3 }) {
-        Text(displayForumName(this.item.fname))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(AppTheme.TEXT_MAIN)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-        Row({ space: 6 }) {
-          ForumLevelBadge({ level: this.item.level, levelName: this.item.levelName }).flexShrink(0)
-          if (this.item.continuousCount >= 0) {
-            Text(`连签 ${this.item.continuousCount} 天`)
-              .fontSize(UiLayout.META).fontColor(AppTheme.TEXT_SUB)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1)
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
+    Column() {
+      if (this.showTopDivider) {
+        Divider()
+          .strokeWidth(0.5)
+          .color(AppTheme.DIVIDER)
+          .margin({ left: 66, right: 16 })
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      Row({ space: 10 }) {
+        ForumAvatarImage({ url: this.item.avatar, forumName: this.item.fname,
+          avatarSize: 40, radius: 40 * 14 / 64 })
 
-      ForumActionButton({
-        label: this.signLabel(),
-        actionSymbol: $r('sys.symbol.calendar'),
-        busy: this.signingFname === this.item.fname || (!this.item.signKnown && this.vmLoading),
-        completed: this.item.signKnown && this.item.isSigned,
-        retry: !this.item.signKnown && !this.vmLoading,
-        disabled: (this.item.signKnown && this.item.isSigned) || this.vmLoading || this.signingAll ||
-          this.signingFname.length > 0,
-        accessibilityLabel: `${this.item.fname}，${this.signLabel()}`,
-        onTap: (): void => { this.onSignTap(this.item); }
-      })
+        Column({ space: 3 }) {
+          Text(displayForumName(this.item.fname))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppTheme.TEXT_MAIN)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          Row({ space: 6 }) {
+            ForumLevelBadge({ level: this.item.level, levelName: this.item.levelName }).flexShrink(0)
+            if (this.item.continuousCount >= 0) {
+              Text(`连签 ${this.item.continuousCount} 天`)
+                .fontSize(UiLayout.META).fontColor(AppTheme.TEXT_SUB)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+            }
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        ForumActionButton({
+          label: this.signLabel(),
+          actionSymbol: $r('sys.symbol.calendar'),
+          busy: this.signingFname === this.item.fname || (!this.item.signKnown && this.vmLoading),
+          completed: this.item.signKnown && this.item.isSigned,
+          retry: !this.item.signKnown && !this.vmLoading,
+          disabled: (this.item.signKnown && this.item.isSigned) || this.vmLoading || this.signingAll ||
+            this.signingFname.length > 0,
+          deferMaterial: this.scrolling,
+          accessibilityLabel: `${this.item.fname}，${this.signLabel()}`,
+          onTap: this.handleSignButtonTap
+        })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => { this.onOpenForum(this.item.fname); })
+    .onClick(this.handleRowClick)
   }
 }
 

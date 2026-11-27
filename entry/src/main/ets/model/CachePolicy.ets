@@ -37,3 +37,21 @@ export const FORUM_IDENTITY_CACHE_ENTRIES: number = 256;
  * 都会重新取一次并覆盖写入（见 `getCachedForumAvatarUrl` / `forgetCachedForumAvatar`）。
  */
 export const FORUM_AVATAR_URL_TTL_MS: number = 6 * 60 * 60 * 1000;
+
+/** 吧页会话态（`viewmodel/ForumPageStore`）的 LRU 上限；换号整体清空，进程结束释放。 */
+export const FORUM_PAGE_STATE_CACHE_ENTRIES: number = 24;
+
+/** 草稿（`utils/DraftStore`）的用户数据容量上限：最多保留 4 个账号桶，每账号最多 32 条回复草稿。 */
+export const DRAFT_MAX_ACCOUNTS: number = 4;
+export const REPLY_DRAFT_MAX_ENTRIES: number = 32;
+
+/** 私信本地历史库（`utils/ChatHistoryStore`）预算：最多 4 账号、每账号最多 40 会话 × 200 条消息。 */
+export const CHAT_HISTORY_MAX_ACCOUNTS: number = 4;
+export const CHAT_HISTORY_MAX_GROUPS: number = 40;
+export const CHAT_HISTORY_MAX_MESSAGES_PER_GROUP: number = 200;
+
+/** 多账号名册（`auth/AccountRosterStore`）上限：仅存公开资料，凭据在 Asset Store。 */
+export const ACCOUNT_ROSTER_MAX_ENTRIES: number = 8;
+
+/** 浏览历史（`utils/BrowseHistory`）账号桶上限：每账号仍沿用 200 条上限。 */
+export const BROWSE_HISTORY_MAX_ACCOUNTS: number = 4;

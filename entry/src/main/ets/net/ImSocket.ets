@@ -44,6 +44,7 @@ class ImFrame {
 }
 
 export type ImPushHandler = (body: Uint8Array) => void;
+export type ImReconnectHandler = () => void;
 
 function bigEndian32(out: Uint8Array, offset: number, value: number): void {
   out[offset] = (value >>> 24) & 0xff;
@@ -69,6 +70,7 @@ export class ImSocket {
   private connecting: Promise<ImInitInfo> | undefined = undefined;
   private pending: Map<number, ImPending> = new Map<number, ImPending>();
   private pushHandlers: Map<number, ImPushHandler> = new Map<number, ImPushHandler>();
+  private reconnectHandler: ImReconnectHandler | undefined = undefined;
   private reqSeq: number = 0;
   private owner: string = '';
   private keepAlive: boolean = false;
@@ -88,6 +90,11 @@ export class ImSocket {
   /** 注册推送处理；同一 cmd 覆盖。 */
   onPush(cmd: number, handler: ImPushHandler): void {
     this.pushHandlers.set(cmd, handler);
+  }
+
+  /** 注册非主动断线后的指数退避重连回调。 */
+  onReconnectNeeded(handler: ImReconnectHandler): void {
+    this.reconnectHandler = handler;
   }
 
   /** 保证连上并完成握手：同账号并发调用共用同一个 Promise，换账号（owner 变化）先断开重来。 */
@@ -259,9 +266,10 @@ export class ImSocket {
     this.reconnectTimer = setTimeout((): void => {
       this.reconnectTimer = -1;
       const ws: ImWsTcp | undefined = this.ws;
-      if (ws !== undefined || !this.keepAlive || this.owner.length === 0) { return; }
-      // 重连由下一次业务请求驱动：这里只清掉不可用状态，避免后台反复取凭据。
-      this.reconnectAttempt = Math.max(0, this.reconnectAttempt - 1);
+      if (ws !== undefined || !this.keepAlive || this.closedByUser || this.owner.length === 0) { return; }
+      if (this.reconnectHandler !== undefined) {
+        this.reconnectHandler();
+      }
     }, delay);
   }
 

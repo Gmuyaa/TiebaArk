@@ -10,6 +10,8 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { authSession } from '../auth/AuthSession';
+import { CHAT_HISTORY_MAX_MESSAGES_PER_GROUP } from '../model/CachePolicy';
+import { RestoredChatHistory, loadChatHistory, saveChatHistory } from '../utils/ChatHistoryStore';
 import { loggedInSessionKey } from './SessionOwner';
 import { imSocket } from '../net/ImSocket';
 import { chatLocalPrefs } from './ChatLocalPrefsStore';
@@ -21,14 +23,13 @@ import { ImCmd, ImGroupCursor, ImGroupSyncParams, ImReadParams, ImRequest, ImSen
 import {
   ChatContact, ChatContactPage, ChatGroup, ChatMessage, ChatPeer, GROUP_TYPE_PRIVATE, ImGroupSeed,
   ImInitInfo, ImPushNotify, ImReadAck, ImSendAck, ImSyncGroup, ImSyncResult, MSG_TYPE_READED,
-  distinctPeerCount, dedupeChatMessages, matchContactGroup, mergeChatMessages, parseChatContacts, parseImPushNotify,
-  parseImReadAck, parseImSendAck, parseImSync, peerThreadKey
+  distinctPeerCount, dedupeChatMessages, encodeChatImageContent, matchContactGroup, mergeChatMessages,
+  parseChatContacts, parseImPushNotify, parseImReadAck, parseImSendAck, parseImSync, peerThreadKey
 } from '../model/Chat';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'ChatStore';
-/** 每个会话内存里保留的消息上限，超出丢弃最旧（列表只回看最近这些）。 */
-const MAX_MESSAGES_PER_GROUP: number = 50;
+const MAX_MESSAGES_PER_GROUP: number = CHAT_HISTORY_MAX_MESSAGES_PER_GROUP;
 
 type ChatListener = () => void;
 
@@ -39,6 +40,9 @@ export class ChatStore {
   private messages: Map<string, ChatMessage[]> = new Map<string, ChatMessage[]>();
   private listeners: ChatListener[] = [];
   private loginTask: Promise<string> | undefined = undefined;
+  private hydratedOwner: string = '';
+  private persistTimer: number = -1;
+  private reconnecting: boolean = false;
 
   /** 订阅数据变化（UI 层用它刷新 @Trace 快照）。 */
   watch(listener: ChatListener): void {
@@ -71,6 +75,17 @@ export class ChatStore {
     return out;
   }
 
+  /** 所有私信会话的未读总数（供底栏「消息」角标合并展示）。 */
+  totalUnread(): number {
+    let sum: number = 0;
+    this.groups.forEach((group: ChatGroup): void => {
+      if (!group.container && group.unread > 0) {
+        sum += group.unread;
+      }
+    });
+    return sum;
+  }
+
   /** 置顶/取消置顶：只影响本地排序，没有服务端接口。 */
   async togglePin(context: common.UIAbilityContext, groupIdText: string): Promise<void> {
     const group: ChatGroup | undefined = this.groups.get(groupIdText);
@@ -78,6 +93,7 @@ export class ChatStore {
     const next: boolean = !group.pinned;
     group.pinned = next;
     this.notify();
+    this.schedulePersist();
     await chatLocalPrefs.setPinned(context, groupIdText, next);
   }
 
@@ -88,7 +104,10 @@ export class ChatStore {
       ? `uid:${group.peer.uidText}` : '';
     const removed: boolean = this.groups.delete(groupIdText);
     this.messages.delete(groupIdText);
-    if (removed) { this.notify(); }
+    if (removed) {
+      this.notify();
+      this.schedulePersist();
+    }
     await chatLocalPrefs.setRemoved(context, groupIdText, true);
     // contacts 会用 `u:<uid>` 把同一个会话重建出来，所以按 uid 也记一份
     if (uidKey.length > 0) {
@@ -169,13 +188,109 @@ export class ChatStore {
   }
 
   reset(): void {
+    this.clearPersistTimer();
     this.owner = '';
+    this.hydratedOwner = '';
     this.selfUid = BigInt(0);
     this.lastRecordId = BigInt(0);
     this.groups.clear();
     this.messages.clear();
     this.loginTask = undefined;
     this.notify();
+  }
+
+  private clearPersistTimer(): void {
+    if (this.persistTimer >= 0) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = -1;
+    }
+  }
+
+  private schedulePersist(): void {
+    const ctx: common.UIAbilityContext | undefined = this.appContext;
+    const owner: string = this.owner;
+    if (ctx === undefined || owner.length === 0) { return; }
+    this.clearPersistTimer();
+    this.persistTimer = setTimeout((): void => {
+      this.persistTimer = -1;
+      if (this.owner !== owner || this.appContext === undefined) { return; }
+      void saveChatHistory(this.appContext, owner, Array.from(this.groups.values()), this.messages);
+    }, 500);
+  }
+
+  private async hydrateFromDisk(context: common.UIAbilityContext, owner: string): Promise<void> {
+    if (this.hydratedOwner === owner) { return; }
+    this.hydratedOwner = owner;
+    await chatLocalPrefs.load(context);
+    const restored: RestoredChatHistory = await loadChatHistory(context, owner);
+    if (this.owner !== owner) { return; }
+    let changed: boolean = false;
+    for (const group of restored.groups) {
+      if (chatLocalPrefs.isRemoved(group.groupIdText)) { continue; }
+      if (group.peer.uid > BigInt(0) && chatLocalPrefs.isRemoved(`uid:${group.peer.uidText}`)) { continue; }
+      if (chatLocalPrefs.isPinned(group.groupIdText)) { group.pinned = true; }
+      const existing: ChatGroup | undefined = this.groups.get(group.groupIdText);
+      if (existing === undefined) {
+        this.groups.set(group.groupIdText, group);
+        changed = true;
+      } else {
+        if (existing.peer.uid <= BigInt(0) && group.peer.uid > BigInt(0)) {
+          existing.peer = group.peer;
+          changed = true;
+        }
+        if (existing.lastMessage === undefined && group.lastMessage !== undefined) {
+          existing.lastMessage = group.lastMessage;
+          existing.lastMsgTimeMs = group.lastMsgTimeMs;
+          changed = true;
+        }
+      }
+      const diskMsgs: ChatMessage[] | undefined = restored.messages.get(group.groupIdText);
+      if (diskMsgs !== undefined && diskMsgs.length > 0) {
+        const current: ChatMessage[] = this.messages.get(group.groupIdText) ?? [];
+        const merged: ChatMessage[] = mergeChatMessages(diskMsgs, current);
+        const trimmed: ChatMessage[] = merged.length > MAX_MESSAGES_PER_GROUP
+          ? merged.slice(merged.length - MAX_MESSAGES_PER_GROUP) : merged;
+        this.messages.set(group.groupIdText, dedupeChatMessages(trimmed));
+        const target: ChatGroup | undefined = this.groups.get(group.groupIdText);
+        if (target !== undefined && trimmed.length > 0) {
+          const tail: ChatMessage = trimmed[trimmed.length - 1];
+          if (target.lastMessage === undefined || tail.createTimeMs >= target.lastMsgTimeMs) {
+            target.lastMessage = tail;
+            target.lastMsgTimeMs = tail.createTimeMs;
+          }
+        }
+        changed = true;
+      }
+    }
+    if (changed) { this.notify(); }
+  }
+
+  /** 应用回前台时保活重连并同步增量；未进入过私信或未登录时不做额外建连。 */
+  async syncOnForeground(context: common.UIAbilityContext): Promise<void> {
+    this.appContext = context;
+    if (!authSession.isLoggedIn()) {
+      if (this.owner.length > 0) { this.reset(); }
+      return;
+    }
+    const owner: string = loggedInSessionKey();
+    if (owner.length === 0 || this.owner !== owner) { return; }
+    if (!imSocket.isReady()) {
+      await this.syncAll(context);
+    }
+  }
+
+  private async reconnectOnDrop(): Promise<void> {
+    if (this.reconnecting) { return; }
+    const ctx: common.UIAbilityContext | undefined = this.appContext;
+    if (ctx === undefined || !authSession.isLoggedIn()) { return; }
+    const owner: string = loggedInSessionKey();
+    if (owner.length === 0 || owner !== this.owner) { return; }
+    this.reconnecting = true;
+    try {
+      await this.syncAll(ctx);
+    } finally {
+      this.reconnecting = false;
+    }
   }
 
   /** 保证连接与握手就绪。返回空串表示成功，否则是可直接展示给用户的失败原因。 */
@@ -188,6 +303,8 @@ export class ChatStore {
       this.reset();
       this.owner = owner;
     }
+    await this.hydrateFromDisk(context, owner);
+    if (this.owner !== owner) { return ''; }
     if (this.loginTask !== undefined) { return this.loginTask; }
     const task: Promise<string> = this.doLogin(owner, context);
     this.loginTask = task;
@@ -241,6 +358,9 @@ export class ChatStore {
   private bindPush(): void {
     if (this.pushBound) { return; }
     this.pushBound = true;
+    imSocket.onReconnectNeeded((): void => {
+      void this.reconnectOnDrop();
+    });
     imSocket.onPush(ImCmd.PUSH_NOTIFY, (body: Uint8Array): void => {
       const notify: ImPushNotify | undefined = parseImPushNotify(body);
       if (notify === undefined) {
@@ -663,6 +783,7 @@ export class ChatStore {
       if (result.code !== 0) { return result.message.length > 0 ? result.message : '私信同步失败'; }
       await this.applySync(result);
       this.notify();
+      this.schedulePersist();
       return '';
     } catch (err) {
       const message: string = err instanceof Error ? (err as Error).message : '私信同步失败';
@@ -794,6 +915,19 @@ export class ChatStore {
     onEnqueued?: () => void): Promise<string> {
     const content: string = text.trim();
     if (content.length === 0) { return ''; }
+    return this.sendPayload(context, groupIdText, content, ImSendParams.MSG_TYPE_TEXT, onEnqueued);
+  }
+
+  /** 发送图片私信（msgType=2，官方 PicMessageData JSON 数组）。 */
+  async sendImage(context: common.UIAbilityContext, groupIdText: string, imageUrl: string,
+    width: number, height: number, onEnqueued?: () => void, bigUrl: string = ''): Promise<string> {
+    const payload: string = encodeChatImageContent(imageUrl, width, height, bigUrl);
+    if (payload.length === 0) { return '图片地址无效'; }
+    return this.sendPayload(context, groupIdText, payload, ImSendParams.MSG_TYPE_IMAGE, onEnqueued);
+  }
+
+  private async sendPayload(context: common.UIAbilityContext, groupIdText: string, content: string,
+    msgType: number, onEnqueued?: () => void): Promise<string> {
     const failure: string = await this.ensure(context);
     if (failure.length > 0) { return failure; }
     const group: ChatGroup | undefined = this.groups.get(groupIdText);
@@ -822,7 +956,7 @@ export class ChatStore {
     local.recordIdText = recordId.toString();
     local.peer = group.peer;
     local.content = content;
-    local.msgType = 1;
+    local.msgType = msgType;
     local.fromSelf = true;
     local.createTimeMs = Date.now();
     local.sendState = 'sending';
@@ -830,7 +964,7 @@ export class ChatStore {
     this.notify();
     if (onEnqueued !== undefined) { onEnqueued(); }
     try {
-      const req: ImRequest = ImSendParams.build(peerUid, content, recordId, ImSendParams.MSG_TYPE_TEXT,
+      const req: ImRequest = ImSendParams.build(peerUid, content, recordId, msgType,
         group.groupId);
       const body: Uint8Array = await imSocket.request(req);
       if (this.owner !== owner) { return ''; }
@@ -843,6 +977,7 @@ export class ChatStore {
       }
       this.applySendAck(groupIdText, local, ack);
       this.notify();
+      this.schedulePersist();
       return '';
     } catch (err) {
       this.markSendState(groupIdText, recordId, 'failed');
@@ -921,10 +1056,11 @@ export class ChatStore {
     }
     if (index < 0) { return '这条消息已不在本地，无法重试'; }
     const content: string = list[index].content;
+    const msgType: number = list[index].msgType > 0 ? list[index].msgType : ImSendParams.MSG_TYPE_TEXT;
     list.splice(index, 1);
     this.messages.set(groupIdText, list);
     this.notify();
-    return this.send(context, groupIdText, content);
+    return this.sendPayload(context, groupIdText, content, msgType);
   }
 
   /** 把对端发来的最后一条私信上报已读；失败只记日志，不影响页面。 */
@@ -935,6 +1071,7 @@ export class ChatStore {
     if (group.unread !== 0) {
       group.unread = 0;
       this.notify();
+      this.schedulePersist();
     }
     if (group.groupId <= BigInt(0)) { return; }
     // 对端 uid 没识别出来时不要上报，否则 205006 的 toUid 会填 0/自己

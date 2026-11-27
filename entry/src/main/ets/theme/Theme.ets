@@ -369,4 +369,8 @@ export class DetailTheme {
   static get EMOJI_PANEL_SUB_TEXT(): Resource {
     return themeResource($r('app.color.app_emoji_panel_sub_text'), $r('app.color.paper_app_emoji_panel_sub_text'), ThemeColorRole.TEXT_SUB);
   }
+  /** 详情页悬浮底栏普通动作前景：纸境深色单独收敛至暖白，不改全局 TEXT_SUB 与 HDS 材质参数。 */
+  static get FLOAT_BAR_FG(): Resource {
+    return themeResource($r('app.color.detail_float_bar_fg'), $r('app.color.paper_detail_float_bar_fg'), ThemeColorRole.TEXT_SUB);
+  }
 }

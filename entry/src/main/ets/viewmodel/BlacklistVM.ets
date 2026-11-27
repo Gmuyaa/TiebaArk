@@ -7,7 +7,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TiebaApi } from '../api/TiebaApi';
 import { authSession } from '../auth/AuthSession';
 import {
-  ImBlacklistResult, ImBlacklistUser, ImMaskUpdateResult, parseImBlacklist, parseImMaskUpdate
+  AuthorBlockScope, ImBlacklistResult, ImBlacklistUser, ImMaskUpdateResult, parseImBlacklist, parseImMaskUpdate
 } from '../model/AuthorBlock';
 import { BlockedUser } from '../model/ThreadBlock';
 import {
@@ -17,13 +17,19 @@ import { TiebaDevice } from '../net/TiebaParams';
 import { imSocket } from '../net/ImSocket';
 import { DeviceIdentity } from '../utils/DeviceIdentity';
 import { threadBlockStore } from '../utils/ThreadBlockStore';
-import { authorBlockAction, markAuthorBlocked, syncAuthorBlockCache } from './AuthorBlockVM';
+import { authorBlockAction, markAuthorBlocked, syncAuthorBlockCache, syncAuthorBlockScope } from './AuthorBlockVM';
 import { loggedInSessionKey } from './SessionOwner';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'BlacklistVM';
 /** 进程内主站最新昵称缓存（按 uid），避免重复请求同一用户的公开资料。 */
 const resolvedNames: Map<number, string> = new Map<number, string>();
+/** 按账号隔离的进程内拉黑范围缓存（key 为 `${account}:${uid}`），避免换号串用。 */
+const resolvedScopes: Map<string, AuthorBlockScope> = new Map<string, AuthorBlockScope>();
+
+function scopeCacheKey(account: string, uid: number): string {
+  return `${account}:${uid}`;
+}
 
 /** 通过 IM 通道（cmd 104102, maskType=10）写入单个用户的黑名单状态；返回空串表示服务端已确认。 */
 export async function syncImBlacklistMask(context: common.UIAbilityContext, uidText: string,
@@ -153,6 +159,8 @@ export class BlacklistVM {
         if (u.uid > 0) {
           const best: string = resolvedNames.get(u.uid) ?? localNames.get(u.uid) ?? '';
           if (best.length > 0) { u.nameShow = best; }
+          const cachedScope: AuthorBlockScope | undefined = resolvedScopes.get(scopeCacheKey(currentAccount, u.uid));
+          if (cachedScope !== undefined) { u.applyScope(cachedScope); }
         }
       }
       const sorted: ImBlacklistUser[] = parsed.users.slice().sort((a: ImBlacklistUser, b: ImBlacklistUser): number => {
@@ -181,6 +189,7 @@ export class BlacklistVM {
       syncAuthorBlockCache(uids);
       await threadBlockStore.replaceBlockedUsers(context, mirror);
       void this.backfillProfileNames(context, device, mine, knownTimes);
+      void this.backfillBlockScopes(device, currentAccount, mine);
     } catch (err) {
       if (this.current(mine)) {
         const msg: string = err instanceof Error ? (err as Error).message : String(err);
@@ -262,6 +271,144 @@ export class BlacklistVM {
       mirror.push(row);
     }
     await threadBlockStore.replaceBlockedUsers(context, mirror);
+  }
+
+  /**
+   * 后台低并发（3 路）调用 HTTP 309698 补齐每位用户的三项拉黑范围（关注/互动/私信）。
+   * IM 104103 不返回 perm_list；离页、换号或有写操作时停止刷新。
+   */
+  private async backfillBlockScopes(device: TiebaDevice, owner: string, mine: number): Promise<void> {
+    const queue: ImBlacklistUser[] = this.items.filter((u: ImBlacklistUser): boolean => u.uid > 0);
+    if (queue.length === 0) { return; }
+    const session = authSession.session();
+    let cursor: number = 0;
+    let changed: boolean = false;
+    let lastPublish: number = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < queue.length) {
+        if (!this.current(mine)) { return; }
+        const target: ImBlacklistUser = queue[cursor++];
+        try {
+          const resp = await this.api.authorBlock(device, session, target.uid);
+          if (!this.current(mine)) { return; }
+          if (!resp.ok) { continue; }
+          const fresh: AuthorBlockScope = resp.result.scope();
+          resolvedScopes.set(scopeCacheKey(owner, target.uid), fresh.clone());
+          syncAuthorBlockScope(target.uid, fresh);
+          if (!target.scopeKnown || !target.scope().equals(fresh)) {
+            target.applyScope(fresh);
+            changed = true;
+            const now: number = Date.now();
+            if (now - lastPublish >= 300) {
+              lastPublish = now;
+              this.items = this.items.slice();
+            }
+          }
+        } catch (err) { /* 单条读取失败保留原状态，不影响列表 */ }
+      }
+    };
+    const concurrency: number = Math.min(3, queue.length);
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < concurrency; i++) { workers.push(worker()); }
+    await Promise.all(workers);
+    if (!changed || !this.current(mine)) { return; }
+    this.items = this.items.slice();
+  }
+
+  /** 读取单个用户的真实三项拉黑范围（打开编辑面板前若尚未补齐则主动读一次）。 */
+  async fetchUserScope(context: common.UIAbilityContext, user: ImBlacklistUser): Promise<string> {
+    if (this.disposed || !this.ownsCurrentAccount() || user.uid <= 0) { return '用户身份无效'; }
+    const owner: string = this.account;
+    const mine: number = this.epoch;
+    try {
+      const device = await DeviceIdentity.ensure(context);
+      if (!this.current(mine)) { return '账号已变化，请重新读取'; }
+      const resp = await this.api.authorBlock(device, authSession.session(), user.uid);
+      if (!this.current(mine)) { return '账号已变化，请重新读取'; }
+      if (!resp.ok) { return resp.describeFailure(); }
+      const fresh: AuthorBlockScope = resp.result.scope();
+      resolvedScopes.set(scopeCacheKey(owner, user.uid), fresh.clone());
+      syncAuthorBlockScope(user.uid, fresh);
+      user.applyScope(fresh);
+      this.items = this.items.slice();
+      return '';
+    } catch (err) {
+      return '读取拉黑范围失败，请重试';
+    }
+  }
+
+  /**
+   * 修改单个黑名单用户的三项拉黑范围：三项全取消时走完整双写解除（309697 清零 + IM 104102 移除）；
+   * 保留任一项时仅写 309697 并回读 309698 校准，不从 IM 列表中误删该用户。
+   */
+  async updateUserScope(context: common.UIAbilityContext, user: ImBlacklistUser,
+    nextScope: AuthorBlockScope): Promise<string> {
+    if (this.disposed || this.actionBusy || this.loading || !this.ownsCurrentAccount()) {
+      return '当前正在操作，请稍候';
+    }
+    if (user.uid <= 0) { return '用户身份无效'; }
+    const owner: string = this.account;
+    this.actionBusy = true;
+    this.actionMessage = '';
+    try {
+      if (!nextScope.any()) {
+        const unblockErr: string = await this.unblockServerOne(context, user, owner);
+        if (owner !== loggedInSessionKey()) { return '账号已变化，请在原账号确认结果'; }
+        if (unblockErr.length > 0) { return unblockErr; }
+        resolvedScopes.delete(scopeCacheKey(owner, user.uid));
+        syncAuthorBlockScope(user.uid, AuthorBlockScope.none());
+        if (!this.disposed) {
+          this.items = this.items.filter((item: ImBlacklistUser): boolean => item.uidText !== user.uidText);
+          this.selectedIds = this.selectedIds.filter((id: string): boolean => id !== user.uidText);
+        }
+        await this.persistMirror(context);
+        return '';
+      }
+      const vm = authorBlockAction(user.uid);
+      const writeErr: string = await vm.setScope(context, nextScope);
+      if (owner !== loggedInSessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      if (writeErr.length > 0) { return writeErr; }
+      const device = await DeviceIdentity.ensure(context);
+      if (owner !== loggedInSessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      const read = await this.api.authorBlock(device, authSession.session(), user.uid);
+      if (owner !== loggedInSessionKey()) { return '账号已变化，请在原账号确认结果'; }
+      if (!read.ok) { return '已提交但回读范围失败，请重新读取'; }
+      const confirmed: AuthorBlockScope = read.result.scope();
+      resolvedScopes.set(scopeCacheKey(owner, user.uid), confirmed.clone());
+      syncAuthorBlockScope(user.uid, confirmed);
+      if (!this.disposed) {
+        user.applyScope(confirmed);
+        this.items = this.items.slice();
+      }
+      if (!confirmed.equals(nextScope)) {
+        return '设置后回读范围不一致，已刷新为当前状态';
+      }
+      return '';
+    } catch (err) {
+      return '修改拉黑范围失败，请重试';
+    } finally {
+      this.actionBusy = false;
+    }
+  }
+
+  private async persistMirror(context: common.UIAbilityContext): Promise<void> {
+    const knownTimes: Map<number, number> = new Map<number, number>();
+    for (const local of threadBlockStore.blockedUsers) {
+      if (local.uid > 0 && local.timeMs > 0) { knownTimes.set(local.uid, local.timeMs); }
+    }
+    const remainingMirror: BlockedUser[] = [];
+    for (const item of this.items) {
+      if (item.uid <= 0) { continue; }
+      const row: BlockedUser = new BlockedUser();
+      row.uid = item.uid;
+      row.name = item.nameShow.length > 0 ? item.nameShow : item.name;
+      row.portrait = item.portrait;
+      row.timeMs = knownTimes.get(item.uid) ?? 0;
+      remainingMirror.push(row);
+    }
+    try {
+      await threadBlockStore.replaceBlockedUsers(context, remainingMirror);
+    } catch (err) { /* 保留 threadBlockStore 内部错误提示 */ }
   }
 
   toggleSelection(): void {
@@ -408,7 +555,10 @@ export class BlacklistVM {
         }
         if (removed.length > 0) {
           for (const item of removed) {
-            if (item.uid > 0) { markAuthorBlocked(item.uid, false); }
+            if (item.uid > 0) {
+              resolvedScopes.delete(scopeCacheKey(operationOwner, item.uid));
+              markAuthorBlocked(item.uid, false);
+            }
           }
           const knownTimes: Map<number, number> = new Map<number, number>();
           for (const local of threadBlockStore.blockedUsers) {

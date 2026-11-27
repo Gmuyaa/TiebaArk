@@ -24,7 +24,7 @@ export async function createReplyImagePreview(input: ImageUploadInput, current: 
       info.size.width <= 0 || info.size.height <= 0 ||
       info.size.width > 160 || info.size.height > 112) { return ''; }
     packer = image.createImagePacker();
-    const bytes = await packer.packing(pixels, { format: 'image/png', quality: 90 });
+    const bytes = await packer.packToData(pixels, { format: 'image/png', quality: 90 });
     if (current() && bytes.byteLength > 0 && bytes.byteLength <= 128 * 1024) {
       preview = `data:image/png;base64,${new util.Base64Helper().encodeToStringSync(new Uint8Array(bytes))}`;
     }
@@ -111,7 +111,7 @@ export async function prepareUploadImage(uri: string, forumName: string, current
         result.message = '图片解码尺寸未满足本机上限'; return result;
       }
       packer = image.createImagePacker();
-      const packed: ArrayBuffer = await packer.packing(pixels,
+      const packed: ArrayBuffer = await packer.packToData(pixels,
         { format: info.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png', quality: 90 });
       if (!current()) { result.cancelled = true; return result; }
       if (packed.byteLength === 0 || packed.byteLength > IMAGE_UPLOAD_BYTES) { result.message = '处理后的图片超过本机8MB上限或为空'; return result; }

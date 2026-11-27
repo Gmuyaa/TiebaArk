@@ -11,12 +11,15 @@ import { SearchPostItem, searchEmptyHint, searchNoResultText, searchPlaceholder,
   searchScopeLabel } from '../model/SearchPost';
 import { ForumSearchItem } from '../model/ForumSearch';
 import { UserSearchItem } from '../model/UserSearch';
+import { ListDataSource } from '../model/ListDataSource';
+import { SearchPostMetrics } from '../viewmodel/SearchPostAvatarsVM';
 import { SearchResultVM } from '../viewmodel/SearchResultVM';
 import { AvatarComponent } from '../components/AvatarComponent';
 import { TopLabelItem } from '../components/TopLabelItem';
 import { openUserByIdentity } from '../navigation/UserNavigation';
 import { formatTimeText } from '../model/TimeText';
 import { AppTheme } from '../theme/Theme';
+import { windowBreakpoint } from '../common/appearance/WindowBreakpointStore';
 import { SearchPageHeader } from '../components/SearchPageHeader';
 import { ForumAvatarImage, forumAvatarRadius } from '../components/ForumAvatarImage';
 import { ThreadPreviewCard } from '../components/ThreadPreviewCard';
@@ -35,6 +38,24 @@ export struct SearchResultPage {
   /** PageMap 注入的路由参数，唯一定义见 navigation/AppNavigation.ets 的 SearchResultParams */
   @Param routeParams: SearchResultParams | undefined = undefined;
   @Local vm: SearchResultVM = new SearchResultVM();
+  @Local forumSource: ListDataSource<ForumSearchItem> = new ListDataSource<ForumSearchItem>();
+  @Local userSource: ListDataSource<UserSearchItem> = new ListDataSource<UserSearchItem>();
+  @Local postSource: ListDataSource<SearchPostItem> = new ListDataSource<SearchPostItem>();
+
+  @Monitor('vm.forumItems')
+  syncForumSource(): void {
+    this.forumSource.sync(this.vm.forumItems, (item: ForumSearchItem): string => `${item.forumId}-${item.forumName}`);
+  }
+
+  @Monitor('vm.users.items')
+  syncUserSource(): void {
+    this.userSource.sync(this.vm.users.items, (item: UserSearchItem): string => item.key());
+  }
+
+  @Monitor('vm.items')
+  syncPostSource(): void {
+    this.postSource.sync(this.vm.items, (item: SearchPostItem): string => `${item.tid}-${item.pid}`);
+  }
   /** 状态栏高度（vp），见 SafeArea.ets */
   @Local statusBarH: number = STATUS_BAR_FALLBACK_VP;
   @Local headerHeight: number = STATUS_BAR_FALLBACK_VP + 96;
@@ -107,6 +128,13 @@ export struct SearchResultPage {
       return;
     }
     NavigationService.openForum({ forumName: target });
+  }
+
+  private postMetric(item: SearchPostItem, field: number): number {
+    const info: SearchPostMetrics | undefined = this.vm.postAvatars.metrics.get(item.tid);
+    if (info === undefined) { return -1; }
+    if (field === 0) { return info.agreeCount; }
+    return field === 1 ? info.replyCount : info.shareCount;
   }
 
   private openThread(item: SearchPostItem): void {
@@ -223,7 +251,7 @@ export struct SearchResultPage {
   ResultTabs() {
     Row({ space: 0 }) {
       this.ResultTabItem('搜吧', TAB_FORUM)
-      this.ResultTabItem('搜帖子', TAB_POST)
+      this.ResultTabItem('搜贴', TAB_POST)
       this.ResultTabItem('搜人', TAB_USER)
     }
     .width('100%')
@@ -245,7 +273,7 @@ export struct SearchResultPage {
     List({ space: 10 }) {
       // List 自带10vp项间距；其余占位保证材质下沿之外还有统一内容间距。
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
-      ForEach(this.vm.forumItems, (item: ForumSearchItem) => {
+      LazyForEach(this.forumSource, (item: ForumSearchItem) => {
         ListItem() {
           Row({ space: 12 }) {
 
@@ -306,8 +334,11 @@ export struct SearchResultPage {
 
     }
     .width('100%')
+    .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+    .alignSelf(ItemAlign.Center)
     // 占满容器可滚到底；不加底部手势区留白。
     .layoutWeight(1)
+    .cachedCount(3)
     .scrollBar(BarState.Off)
   }
 
@@ -344,7 +375,7 @@ export struct SearchResultPage {
   UserListTab() {
     List({ space: 10 }) {
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - 10)) }
-      ForEach(this.vm.users.items, (item: UserSearchItem) => {
+      LazyForEach(this.userSource, (item: UserSearchItem) => {
         ListItem() {
           Row({ space: 12 }) {
             AvatarComponent({ url: item.avatar, avatarSize: 44, fallbackName: item.name })
@@ -369,16 +400,69 @@ export struct SearchResultPage {
           hasMore: this.vm.users.hasMore, onRetry: (): void => { void this.vm.users.loadMore(true); } })
       }
     }
-    .width('100%').layoutWeight(1).scrollBar(BarState.Off)
+    .width('100%').constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() }).alignSelf(ItemAlign.Center)
+    .layoutWeight(1).cachedCount(3).scrollBar(BarState.Off)
     .id('search-user-list')
     .onReachEnd(() => { void this.vm.users.loadMore(); })
+  }
+
+  @Builder
+  PostFilterBar() {
+    Row({ space: 8 }) {
+      Row({ space: 4 }) {
+        Text('相关')
+          .fontSize(12)
+          .fontWeight(this.vm.sortMode === 0 ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.vm.sortMode === 0 ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .borderRadius(12)
+          .backgroundColor(this.vm.sortMode === 0 ? AppTheme.ACCENT_LIGHT : Color.Transparent)
+          .onClick((): void => { void this.vm.applyPostFilter(this.hostContext(), 0, this.vm.onlyThread); })
+        Text('最新')
+          .fontSize(12)
+          .fontWeight(this.vm.sortMode === 1 ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.vm.sortMode === 1 ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .borderRadius(12)
+          .backgroundColor(this.vm.sortMode === 1 ? AppTheme.ACCENT_LIGHT : Color.Transparent)
+          .onClick((): void => { void this.vm.applyPostFilter(this.hostContext(), 1, this.vm.onlyThread); })
+      }
+      .padding(2)
+      .borderRadius(14)
+      .backgroundColor(AppTheme.SURFACE_MUTED)
+
+      Blank()
+
+      Row({ space: 4 }) {
+        SymbolGlyph(this.vm.onlyThread ? $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
+          .fontSize(14)
+          .maxFontScale(1)
+          .fontColor([this.vm.onlyThread ? AppTheme.ACCENT : AppTheme.TEXT_MUTED])
+        Text('只看主题帖')
+          .fontSize(12)
+          .fontWeight(this.vm.onlyThread ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.vm.onlyThread ? AppTheme.ACCENT_DARK : AppTheme.TEXT_SUB)
+      }
+      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+      .borderRadius(14)
+      .backgroundColor(this.vm.onlyThread ? AppTheme.ACCENT_LIGHT : AppTheme.SURFACE_MUTED)
+      .accessibilityGroup(true)
+      .accessibilityText('只看主题帖')
+      .accessibilitySelected(this.vm.onlyThread)
+      .onClick((): void => { void this.vm.applyPostFilter(this.hostContext(), this.vm.sortMode, !this.vm.onlyThread); })
+    }
+    .width('100%')
+    .padding({ top: 2, bottom: 4 })
+    .alignItems(VerticalAlign.Center)
+    .id('search-post-filter-bar')
   }
 
   @Builder
   ResultList() {
     List({ space: ThreadCardLayout.LIST_GAP }) {
       ListItem() { Row().width('100%').height(Math.max(0, this.headerHeight + UiLayout.SEARCH_CONTENT_GAP - ThreadCardLayout.LIST_GAP)) }
-      ForEach(this.vm.items, (item: SearchPostItem) => {
+      ListItem() { this.PostFilterBar() }
+      LazyForEach(this.postSource, (item: SearchPostItem) => {
         ListItem() {
           ThreadPreviewCard({
             authorName: item.authorName,
@@ -389,6 +473,9 @@ export struct SearchResultPage {
             title: item.displayTitle(),
             summary: item.snippet === item.displayTitle() ? '' : item.snippet,
             images: [],
+            agreeCount: this.postMetric(item, 0),
+            replyCount: this.postMetric(item, 1),
+            shareCount: this.postMetric(item, 2),
             menu: [],
             canOpenForum: item.forumName.length > 0,
             onOpenForum: (): void => { this.openForumPage(item.forumName); },
@@ -399,7 +486,13 @@ export struct SearchResultPage {
                   if (reason.length > 0) { this.getUIContext().getPromptAction().showToast({ message: reason }); }
                 });
             },
-            onOpenComments: (): void => { NavigationService.openThreadDetail({ tid: item.tid, forumName: item.forumName, openComments: true }); },
+            onOpenComments: (): void => {
+              const replies: number = this.postMetric(item, 1);
+              NavigationService.openThreadDetail({
+                tid: item.tid, forumName: item.forumName,
+                replyCount: replies >= 0 ? replies : undefined, openComments: true
+              });
+            },
             onShare: (): void => {
               void this.cardActions.share(this.getUIContext().getHostContext() as common.UIAbilityContext,
                 item.tid, item.title).then((reason: string): void => {
@@ -419,7 +512,10 @@ export struct SearchResultPage {
       }
     }
     .width('100%')
+    .constraintSize({ maxWidth: windowBreakpoint.readingMaxWidth() })
+    .alignSelf(ItemAlign.Center)
     .layoutWeight(1)
+    .cachedCount(3)
     .scrollBar(BarState.Off)
     .onReachEnd(() => {
       void this.vm.loadMore(this.hostContext());

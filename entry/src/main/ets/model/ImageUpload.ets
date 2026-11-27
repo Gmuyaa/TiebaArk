@@ -2,7 +2,11 @@
  * 分片响应即使 error_code=0 也不代表完整图片；不复用头像或表情上传协议。
  */
 interface RawImageDimensions { width?: number | string; height?: number | string; picUrl?: string; }
-interface RawImageVariants { originPic?: RawImageDimensions; }
+interface RawImageVariants {
+  originPic?: RawImageDimensions;
+  bigPic?: RawImageDimensions;
+  smallPic?: RawImageDimensions;
+}
 interface RawImageUpload {
   error_code?: number | string;
   error_msg?: string;
@@ -16,6 +20,11 @@ export class UploadedPostImage {
   height: number = 0;
   /** 上传响应的可选预览地址，不参与正文token或完成判定。 */
   previewUrl: string = '';
+  /** 服务端生成的大图/缩略图地址与缩略图尺寸（IM 图片消息使用）。 */
+  bigUrl: string = '';
+  smallUrl: string = '';
+  smallWidth: number = 0;
+  smallHeight: number = 0;
   /** 仅编辑器内存中的小尺寸PNG，不发送到服务端、不持久化。 */
   localPreview: string = '';
 }
@@ -68,6 +77,16 @@ export function parseImageUpload(text: string): ImageUploadResult {
     const image: UploadedPostImage = new UploadedPostImage();
     image.id = raw.picId as string; image.width = positiveDimension(origin.width); image.height = positiveDimension(origin.height);
     image.previewUrl = uploadedImagePreviewUrl(origin.picUrl);
+    const big: RawImageDimensions | undefined = raw.picInfo?.bigPic;
+    if (big !== undefined && big !== null) {
+      image.bigUrl = uploadedImagePreviewUrl(big.picUrl);
+    }
+    const small: RawImageDimensions | undefined = raw.picInfo?.smallPic;
+    if (small !== undefined && small !== null) {
+      image.smallUrl = uploadedImagePreviewUrl(small.picUrl);
+      image.smallWidth = positiveDimension(small.width);
+      image.smallHeight = positiveDimension(small.height);
+    }
     if (uploadedImageToken(image).length === 0) { result.message = '图片上传响应缺少有效原图尺寸'; return result; }
     result.image = image;
   } catch (err) { result.code = -1; result.image = undefined; result.message = '图片上传响应格式无效'; }
@@ -83,6 +102,9 @@ export class ImageUploadChunk {
   chunkNo: number = 1;
   width: number = 0;
   height: number = 0;
+  smallWidth: number = 0;
+  smallHeight: number = 0;
+  groupId: string = '1';
   watermarkType: number = -1;
   userName: string = '';
   forumName: string = '';
@@ -111,6 +133,9 @@ export class ImageUploadInput {
   bytes: Uint8Array = new Uint8Array(0);
   width: number = 0;
   height: number = 0;
+  smallWidth: number = 0;
+  smallHeight: number = 0;
+  groupId: string = '1';
   forumName: string = '';
 }
 export function imageUploadInputError(input: ImageUploadInput): string {
